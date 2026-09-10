@@ -2,7 +2,7 @@ import { ReactNode, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
-  CheckSquare,
+  FileSpreadsheet,
   Settings as SettingsIcon,
   Check,
   Database,
@@ -28,8 +28,8 @@ const navItems = [
   },
   {
     path: '/tarefas',
-    label: 'Tarefas',
-    icon: CheckSquare,
+    label: 'Controles',
+    icon: FileSpreadsheet,
   },
   {
     path: '/configuracoes',
@@ -148,7 +148,7 @@ export default function Layout({ children }: LayoutProps) {
                   className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 truncate"
                   title={userEmail}
                 >
-                  {userEmail ? 'Autenticado' : 'v1.0 — Local'}
+                  {userEmail ? 'Supabase Auth' : 'Ricci Task'}
                 </span>
               </div>
             </div>

@@ -1,140 +1,79 @@
-import { TaskCategory, TaskPriority, TaskStatus } from '@/types/task'
-
-export const CATEGORY_LABELS: Record<TaskCategory, string> = {
-  trabalho: 'Trabalho',
-  pessoal: 'Pessoal',
-  estudos: 'Estudos',
-  outros: 'Outros',
-}
-
-export const CATEGORY_COLORS: Record<
-  TaskCategory,
-  { bg: string; text: string; border: string; rawHex: string }
-> = {
-  trabalho: {
-    bg: 'bg-[#5B5BD6]/10 dark:bg-[#5B5BD6]/20',
-    text: 'text-[#5B5BD6] dark:text-[#7C7CF8]',
-    border: 'border-[#5B5BD6]/30',
-    rawHex: '#5B5BD6',
-  },
-  pessoal: {
-    bg: 'bg-[#EC4899]/10 dark:bg-[#EC4899]/20',
-    text: 'text-[#EC4899] dark:text-[#F472B6]',
-    border: 'border-[#EC4899]/30',
-    rawHex: '#EC4899',
-  },
-  estudos: {
-    bg: 'bg-[#06B6D4]/10 dark:bg-[#06B6D4]/20',
-    text: 'text-[#06B6D4] dark:text-[#22D3EE]',
-    border: 'border-[#06B6D4]/30',
-    rawHex: '#06B6D4',
-  },
-  outros: {
-    bg: 'bg-[#8B5CF6]/10 dark:bg-[#8B5CF6]/20',
-    text: 'text-[#8B5CF6] dark:text-[#A78BFA]',
-    border: 'border-[#8B5CF6]/30',
-    rawHex: '#8B5CF6',
-  },
-}
-
-export const PRIORITY_LABELS: Record<TaskPriority, string> = {
-  baixa: 'Baixa',
-  media: 'Média',
-  alta: 'Alta',
-}
-
-export const PRIORITY_COLORS: Record<
-  TaskPriority,
-  { bg: string; text: string; dot: string; rawHex: string }
-> = {
-  alta: {
-    bg: 'bg-[#EF4444]/10 dark:bg-[#EF4444]/20',
-    text: 'text-[#EF4444] dark:text-[#F87171]',
-    dot: 'bg-[#EF4444]',
-    rawHex: '#EF4444',
-  },
-  media: {
-    bg: 'bg-[#F59E0B]/10 dark:bg-[#F59E0B]/20',
-    text: 'text-[#D97706] dark:text-[#FBBF24]',
-    dot: 'bg-[#F59E0B]',
-    rawHex: '#F59E0B',
-  },
-  baixa: {
-    bg: 'bg-[#10B981]/10 dark:bg-[#10B981]/20',
-    text: 'text-[#10B981] dark:text-[#34D399]',
-    dot: 'bg-[#10B981]',
-    rawHex: '#10B981',
-  },
-}
-
-export const STATUS_LABELS: Record<TaskStatus, string> = {
-  pendente: 'Pendente',
-  em_andamento: 'Em Andamento',
-  concluida: 'Concluída',
-}
-
-export const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
-  pendente: {
-    bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-    text: 'text-amber-600 dark:text-amber-400',
-    border: 'border-amber-500/20',
-  },
-  em_andamento: {
-    bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-    text: 'text-blue-600 dark:text-blue-400',
-    border: 'border-blue-500/20',
-  },
-  concluida: {
-    bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    border: 'border-emerald-500/20',
-  },
-}
+import { TaskControleRecord, TaskStatusRecord } from '@/types/task'
 
 /**
- * Formata data ISO para dd/mm/aaaa
+ * Formata data ISO (YYYY-MM-DD ou ISO full) para dd/mm/aaaa
  */
-export function formatDateBR(isoString: string): string {
-  if (!isoString) return ''
+export function formatDateBR(dateString?: string | null): string {
+  if (!dateString) return '—'
   try {
-    const cleanDate = isoString.split('T')[0]
-    const [year, month, day] = cleanDate.split('-')
-    if (year && month && day) {
+    const clean = dateString.split('T')[0]
+    const parts = clean.split('-')
+    if (parts.length === 3) {
+      const [year, month, day] = parts
       return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`
     }
-    const d = new Date(isoString)
+    const d = new Date(dateString)
     return d.toLocaleDateString('pt-BR')
   } catch {
-    return isoString
+    return dateString
   }
 }
 
 /**
- * Verifica se a data de vencimento já passou (ontem ou antes) e a tarefa não está concluída
+ * Formata data e hora para dd/mm/aaaa HH:mm
  */
-export function isTaskOverdue(dueDateIso: string, status: TaskStatus): boolean {
-  if (status === 'concluida' || !dueDateIso) return false
+export function formatDateTimeBR(dateString?: string | null): string {
+  if (!dateString) return '—'
   try {
-    const cleanDate = dueDateIso.split('T')[0]
-    const today = new Date().toISOString().split('T')[0]
-    return cleanDate < today
+    const d = new Date(dateString)
+    if (isNaN(d.getTime())) return dateString
+    return d.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   } catch {
-    return false
+    return dateString
   }
 }
 
 /**
- * Retorna se a data é hoje
+ * Retorna se uma data YYYY-MM-DD está vencida (estritamente menor que hoje).
+ * Regra do spec: "Não considere vencido um controle cujo status tenha finaliza = true."
  */
-export function isToday(isoString: string): boolean {
-  if (!isoString) return false
-  const cleanDate = isoString.split('T')[0]
+export function isPrazoOverdue(dateIso?: string | null, status?: TaskStatusRecord | null): boolean {
+  if (!dateIso || !status) return false
+  if (status.finaliza) return false
+  const cleanDate = dateIso.split('T')[0]
+  const today = new Date().toISOString().split('T')[0]
+  return cleanDate < today
+}
+
+/**
+ * Retorna se um follow-up está vencido (estritamente menor que hoje).
+ * Regra do spec: Não considera vencido se finaliza = true.
+ */
+export function isFollowUpOverdue(
+  dateIso?: string | null,
+  status?: TaskStatusRecord | null,
+): boolean {
+  return isPrazoOverdue(dateIso, status)
+}
+
+/**
+ * Retorna se uma data é exatamente hoje
+ */
+export function isToday(dateIso?: string | null): boolean {
+  if (!dateIso) return false
+  const cleanDate = dateIso.split('T')[0]
   const today = new Date().toISOString().split('T')[0]
   return cleanDate === today
 }
 
 /**
- * Retorna a saudação do dia baseada na hora local
+ * Saudação contextual por horário
  */
 export function getTimeOfDayGreeting(): string {
   const hour = new Date().getHours()
@@ -148,7 +87,7 @@ export function getTimeOfDayGreeting(): string {
 }
 
 /**
- * Retorna a data completa formatada em português brasileiro: "Segunda-feira, 24 de junho de 2025"
+ * Data por extenso em português
  */
 export function getFullDateFormattedBR(): string {
   const now = new Date()
@@ -159,6 +98,74 @@ export function getFullDateFormattedBR(): string {
     year: 'numeric',
   }
   const formatted = now.toLocaleDateString('pt-BR', options)
-  // Capitaliza o primeiro caractere
   return formatted.charAt(0).toUpperCase() + formatted.slice(1)
+}
+
+/**
+ * Cores discretas para status da tabela e badges (conforme spec: "Etiquetas de status de cor discreta")
+ */
+export function getStatusBadgeStyle(
+  codigo?: string,
+  finaliza?: boolean,
+): {
+  bg: string
+  text: string
+  border: string
+  dot: string
+} {
+  if (finaliza) {
+    return {
+      bg: 'bg-emerald-50 dark:bg-emerald-950/40',
+      text: 'text-emerald-700 dark:text-emerald-300',
+      border: 'border-emerald-200 dark:border-emerald-800/60',
+      dot: 'bg-emerald-500',
+    }
+  }
+
+  switch (codigo) {
+    case 'em_andamento':
+      return {
+        bg: 'bg-blue-50 dark:bg-blue-950/40',
+        text: 'text-blue-700 dark:text-blue-300',
+        border: 'border-blue-200 dark:border-blue-800/60',
+        dot: 'bg-blue-500',
+      }
+    case 'aguardando_autorizacao':
+      return {
+        bg: 'bg-violet-50 dark:bg-violet-950/40',
+        text: 'text-violet-700 dark:text-violet-300',
+        border: 'border-violet-200 dark:border-violet-800/60',
+        dot: 'bg-violet-500',
+      }
+    case 'aguardando_cliente':
+    case 'aguardando_terceiro':
+      return {
+        bg: 'bg-amber-50 dark:bg-amber-950/40',
+        text: 'text-amber-700 dark:text-amber-300',
+        border: 'border-amber-200 dark:border-amber-800/60',
+        dot: 'bg-amber-500',
+      }
+    case 'urgente':
+      return {
+        bg: 'bg-red-50 dark:bg-red-950/40',
+        text: 'text-red-700 dark:text-red-300',
+        border: 'border-red-200 dark:border-red-800/60',
+        dot: 'bg-red-500',
+      }
+    case 'suspenso':
+      return {
+        bg: 'bg-slate-100 dark:bg-slate-800/60',
+        text: 'text-slate-700 dark:text-slate-300',
+        border: 'border-slate-300 dark:border-slate-700',
+        dot: 'bg-slate-400',
+      }
+    case 'acompanhamento':
+    default:
+      return {
+        bg: 'bg-sky-50 dark:bg-sky-950/40',
+        text: 'text-sky-700 dark:text-sky-300',
+        border: 'border-sky-200 dark:border-sky-800/60',
+        dot: 'bg-sky-500',
+      }
+  }
 }

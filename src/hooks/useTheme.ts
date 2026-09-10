@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { ThemeMode } from '@/types/task'
-import { taskService } from '@/services/taskService'
+import { controleService } from '@/services/controleService'
 
 export function useTheme() {
   const [theme, setThemeState] = useState<ThemeMode>(() => {
-    return taskService.getSettings().theme || 'claro'
+    return controleService.getSettings().theme || 'claro'
   })
 
   useEffect(() => {
@@ -16,16 +16,8 @@ export function useTheme() {
     }
   }, [theme])
 
-  useEffect(() => {
-    const unsubscribe = taskService.subscribe(() => {
-      const current = taskService.getSettings().theme
-      setThemeState(current)
-    })
-    return () => unsubscribe()
-  }, [])
-
   const setTheme = (newTheme: ThemeMode) => {
-    taskService.saveSettings({ theme: newTheme })
+    controleService.saveSettings({ theme: newTheme })
     setThemeState(newTheme)
   }
 
