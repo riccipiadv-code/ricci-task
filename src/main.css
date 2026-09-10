@@ -1,0 +1,321 @@
+/* Global styles - Theme, font, utilities, animations and global components */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Ricci Task - Design System Theme */
+    /* Primary #5B5BD6 -> hsl(240, 60%, 60%) */
+    --primary: 240 60% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Light bg #F7F7FE -> hsl(240, 60%, 98.4%) */
+    --background: 240 60% 98.5%;
+    --foreground: 240 28% 14%; /* #1A1A2E */
+
+    /* Cards #FFFFFF */
+    --card: 0 0% 100%;
+    --card-foreground: 240 28% 14%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 28% 14%;
+
+    /* Secondary / Amber #F59E0B -> hsl(38, 92%, 50%) */
+    --secondary: 240 25% 95%;
+    --secondary-foreground: 240 28% 14%;
+
+    --muted: 240 20% 94%;
+    --muted-foreground: 240 8% 45%; /* #6B6B7D */
+
+    --accent: 240 50% 96%;
+    --accent-foreground: 240 60% 60%;
+
+    --destructive: 0 84% 60%; /* #EF4444 */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 25% 92%; /* #E5E5F0 */
+    --input: 240 25% 90%;
+    --ring: 240 60% 60%;
+
+    --radius: 1rem; /* 16px */
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 240 28% 14%;
+    --sidebar-primary: 240 60% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 50% 96%;
+    --sidebar-accent-foreground: 240 60% 60%;
+    --sidebar-border: 240 25% 92%;
+    --sidebar-ring: 240 60% 60%;
+  }
+
+  .dark {
+    /* Dark bg #14141F -> hsl(240, 22%, 10%) */
+    --background: 240 22% 10%;
+    --foreground: 240 25% 96%; /* #F1F1F8 */
+
+    /* Dark cards #1E1E2D -> hsl(240, 20%, 15%) */
+    --card: 240 20% 15%;
+    --card-foreground: 240 25% 96%;
+
+    --popover: 240 20% 15%;
+    --popover-foreground: 240 25% 96%;
+
+    --primary: 240 60% 64%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 18% 20%;
+    --secondary-foreground: 240 25% 96%;
+
+    --muted: 240 18% 20%;
+    --muted-foreground: 240 10% 66%; /* #A0A0B3 */
+
+    --accent: 240 20% 22%;
+    --accent-foreground: 240 60% 64%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 19% 21%; /* #2C2C40 */
+    --input: 240 19% 24%;
+    --ring: 240 60% 64%;
+
+    --sidebar-background: 240 21% 13%;
+    --sidebar-foreground: 240 25% 96%;
+    --sidebar-primary: 240 60% 64%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 20% 20%;
+    --sidebar-accent-foreground: 240 60% 64%;
+    --sidebar-border: 240 19% 21%;
+    --sidebar-ring: 240 60% 64%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    transition:
+      background-color 300ms ease,
+      color 300ms ease;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* NEVER REMOVE THIS */
+  section[aria-label='Notifications alt+T'] {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}
+
+@layer utilities {
+  /* KEEP ALL THE ANIMATIONS CLASSES THAT ARE USED BELOW */
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes fade-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+
+  @keyframes fade-in-up {
+    from {
+      transform: translateY(10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes fade-in-down {
+    from {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes fade-out-up {
+    from {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+  }
+
+  @keyframes fade-out-down {
+    from {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateY(10px);
+      opacity: 0;
+    }
+  }
+
+  @keyframes slide-up {
+    from {
+      transform: translateY(10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes slide-down {
+    from {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes spotlight {
+    from {
+      opacity: 0;
+      transform: translate(-72%, -62%) scale(0.5);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -40%) scale(1);
+    }
+  }
+
+  .animate-accordion-down {
+    animation: accordion-down 0.2s ease-out;
+  }
+
+  .animate-accordion-up {
+    animation: accordion-up 0.2s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out;
+  }
+
+  .animate-fade-out {
+    animation: fade-out 0.5s ease-out;
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.6s ease-out;
+  }
+
+  .animate-fade-in-down {
+    animation: fade-in-down 0.6s ease-out;
+  }
+
+  .animate-fade-out-up {
+    animation: fade-out-up 0.6s ease-out;
+  }
+
+  .animate-fade-out-down {
+    animation: fade-out-down 0.6s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slide-up 0.6s ease-out;
+  }
+
+  .animate-slide-down {
+    animation: slide-down 0.6s ease-out;
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-spotlight {
+    animation: spotlight 2s ease forwards;
+  }
+
+  @keyframes modal-scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .animate-modal-in {
+    animation: modal-scale-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .shadow-card {
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  }
+
+  .dark .shadow-card {
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.35);
+  }
+
+  .shadow-card-hover {
+    box-shadow: 0 8px 24px rgba(91, 91, 214, 0.12);
+  }
+
+  .dark .shadow-card-hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+}
