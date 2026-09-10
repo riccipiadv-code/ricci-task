@@ -1,7 +1,15 @@
 import { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, CheckSquare, Settings as SettingsIcon, Check } from 'lucide-react'
+import {
+  LayoutDashboard,
+  CheckSquare,
+  Settings as SettingsIcon,
+  Check,
+  Database,
+  Loader2,
+} from 'lucide-react'
 import { useTheme } from '@/hooks/useTheme'
+import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
 import { cn } from '@/lib/utils'
 
 interface LayoutProps {
@@ -30,6 +38,7 @@ export default function Layout({ children }: LayoutProps) {
   // Inicializa o tema para assegurar que a classe .dark é aplicada ao html
   useTheme()
   const location = useLocation()
+  const supabaseConn = useSupabaseConnection()
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row antialiased selection:bg-primary/20 selection:text-primary transition-colors duration-300">
@@ -85,7 +94,7 @@ export default function Layout({ children }: LayoutProps) {
         </nav>
 
         {/* Sidebar Footer */}
-        <div className="p-3 lg:p-4 border-t border-border mt-auto">
+        <div className="p-3 lg:p-4 border-t border-border mt-auto space-y-2">
           <div className="flex items-center gap-3 p-2 lg:p-2.5 rounded-xl bg-muted/40 border border-border/50">
             <div className="h-9 w-9 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center text-sm shrink-0 border border-primary/30">
               R
@@ -100,6 +109,41 @@ export default function Layout({ children }: LayoutProps) {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Indicador discreto da conexão com Supabase */}
+          <div
+            className="hidden lg:flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-background/50 border border-border/60 text-[11px]"
+            title={
+              supabaseConn.status === 'connected'
+                ? `Supabase conectado (${supabaseConn.latencyMs}ms)`
+                : supabaseConn.status === 'checking'
+                  ? 'Verificando conexão com Supabase...'
+                  : `Supabase indisponível: ${supabaseConn.errorMessage || 'Falha de rede'}`
+            }
+          >
+            <div className="flex items-center gap-1.5 min-w-0 text-muted-foreground">
+              <Database className="w-3 h-3 shrink-0 text-primary" />
+              <span className="truncate">Supabase</span>
+            </div>
+            {supabaseConn.status === 'checking' && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground font-medium">
+                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                <span>Checando</span>
+              </span>
+            )}
+            {supabaseConn.status === 'connected' && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Conectado</span>
+              </span>
+            )}
+            {supabaseConn.status === 'disconnected' && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>Offline</span>
+              </span>
+            )}
           </div>
         </div>
       </aside>

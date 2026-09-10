@@ -9,10 +9,15 @@ import {
   Info,
   Database,
   CheckCircle2,
+  RefreshCw,
+  Server,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { useTasks } from '@/hooks/useTasks'
 import { useTheme } from '@/hooks/useTheme'
+import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
 import { taskService } from '@/services/taskService'
 import { DefaultViewFilter } from '@/types/task'
 import { Button } from '@/components/ui/button'
@@ -33,8 +38,20 @@ export default function ConfiguracoesPage() {
   const { settings, updateSettings, resetAllData } = useTasks()
   const { theme, setTheme } = useTheme()
   const { toast } = useToast()
+  const supabaseConn = useSupabaseConnection()
+  const [testingConnection, setTestingConnection] = useState(false)
 
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true)
+    await supabaseConn.refresh()
+    setTestingConnection(false)
+    toast({
+      title: 'Verificação concluída',
+      description: 'O status da conexão com o Supabase foi atualizado.',
+    })
+  }
 
   const handleThemeChange = (newTheme: 'claro' | 'escuro') => {
     setTheme(newTheme)
@@ -247,7 +264,91 @@ export default function ConfiguracoesPage() {
           </div>
         </section>
 
-        {/* Card 4: Sobre */}
+        {/* Card 4: Conexão Backend Supabase */}
+        <section className="bg-card border border-border rounded-2xl p-6 shadow-card space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                <Server className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-foreground">Conexão Supabase</h2>
+                <p className="text-xs text-muted-foreground">
+                  Backend em nuvem já vinculado ao projeto
+                </p>
+              </div>
+            </div>
+
+            {supabaseConn.status === 'connected' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Conectado ({supabaseConn.latencyMs}ms)
+              </span>
+            )}
+            {supabaseConn.status === 'checking' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-muted text-muted-foreground border border-border">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Testando conexão...
+              </span>
+            )}
+            {supabaseConn.status === 'disconnected' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                <AlertCircle className="w-3.5 h-3.5" />
+                Não conectado
+              </span>
+            )}
+          </div>
+
+          <div className="rounded-xl p-3.5 bg-muted/40 border border-border/60 space-y-2 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
+              <span className="font-medium text-foreground">Status atual:</span>
+              <span className="font-mono text-[11px]">
+                {supabaseConn.status === 'connected'
+                  ? 'Comunicação ativa com o cliente Supabase'
+                  : supabaseConn.status === 'checking'
+                    ? 'Checando disponibilidade...'
+                    : 'Aguardando sincronização / Falha de rede'}
+              </span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
+              <span className="font-medium text-foreground">Tabelas Ricci Task:</span>
+              <span className="font-semibold text-amber-600 dark:text-amber-400">
+                Pendente de revisão lógica (isolamento futuro)
+              </span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
+              <span className="font-medium text-foreground">Persistência ativa:</span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                Navegador (localStorage — ricci_task_data)
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
+            <p className="text-xs text-muted-foreground max-w-md">
+              A conexão está estabelecida e validada sem tocar nas tabelas compartilhadas do banco
+              de dados. Na próxima etapa as tabelas dedicadas serão criadas.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={testingConnection || supabaseConn.status === 'checking'}
+              onClick={handleTestConnection}
+              className="h-9 rounded-xl border-border flex items-center gap-2 hover:bg-muted font-medium text-xs text-foreground shrink-0"
+            >
+              <RefreshCw
+                className={cn(
+                  'w-3.5 h-3.5',
+                  (testingConnection || supabaseConn.status === 'checking') && 'animate-spin',
+                )}
+              />
+              <span>Testar Conexão</span>
+            </Button>
+          </div>
+        </section>
+
+        {/* Card 5: Sobre */}
         <section className="bg-card border border-border rounded-2xl p-6 shadow-card space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2.5">
@@ -269,8 +370,9 @@ export default function ConfiguracoesPage() {
           </div>
 
           <div className="pt-2 text-xs text-muted-foreground leading-relaxed border-t border-border/60">
-            Sistema de gestão de tarefas com armazenamento local. Preparado para integração futura
-            com banco de dados (Neon / Supabase) através da camada de serviço desacoplada.
+            Sistema de gestão de tarefas com armazenamento local mantido intacto. Conexão com o
+            Supabase já configurada e inicializada, pronta para a posterior migração com tabelas
+            isoladas.
           </div>
         </section>
       </div>
