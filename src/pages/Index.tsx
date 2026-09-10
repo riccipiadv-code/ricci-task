@@ -334,11 +334,12 @@ export default function Index() {
                           </span>
                         )}
                         <span className="text-xs font-bold text-foreground truncate">
-                          {c.identificacao_caso}
+                          {c.nome_controle || c.identificacao_caso}
                         </span>
                       </div>
                       <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                        Resp: {c.responsavel_nome} • {c.status?.nome}
+                        {c.nome_controle ? `Caso: ${c.identificacao_caso} • ` : ''}Resp:{' '}
+                        {c.responsavel_nome} • {c.status?.nome}
                       </p>
                     </div>
 
@@ -432,15 +433,21 @@ export default function Index() {
                         </span>
                       )}
                       <span className="text-sm font-bold text-foreground group-hover:text-primary transition-colors">
-                        {c.identificacao_caso}
+                        {c.nome_controle || c.identificacao_caso}
                       </span>
                     </div>
 
-                    {c.proximas_providencias && (
-                      <p className="text-xs text-muted-foreground truncate max-w-xl mt-0.5">
-                        {c.proximas_providencias}
-                      </p>
-                    )}
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground truncate max-w-xl mt-0.5">
+                      {c.nome_controle && (
+                        <span className="font-medium text-foreground/80 truncate">
+                          Caso: {c.identificacao_caso}
+                        </span>
+                      )}
+                      {c.nome_controle && c.proximas_providencias && <span>•</span>}
+                      {c.proximas_providencias && (
+                        <span className="truncate">{c.proximas_providencias}</span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap shrink-0">

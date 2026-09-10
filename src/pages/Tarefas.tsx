@@ -88,14 +88,15 @@ export default function TarefasPage() {
   const filteredControles = useMemo(() => {
     let result = [...controles]
 
-    // 1. Busca textual por Controle Cliente, Controle Ricci e Identificação do Caso
+    // 1. Busca textual por Nome do Controle, Controle Cliente, Controle Ricci e Identificação do Caso
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim()
       result = result.filter((c) => {
+        const nomeMatch = c.nome_controle?.toLowerCase().includes(q)
         const clienteMatch = c.controle_cliente?.toLowerCase().includes(q)
         const ricciMatch = c.controle_ricci?.toLowerCase().includes(q)
         const casoMatch = c.identificacao_caso.toLowerCase().includes(q)
-        return clienteMatch || ricciMatch || casoMatch
+        return nomeMatch || clienteMatch || ricciMatch || casoMatch
       })
     }
 
@@ -244,7 +245,7 @@ export default function TarefasPage() {
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input
             type="text"
-            placeholder="Buscar por Controle Cliente, Controle Ricci ou Identificação do Caso..."
+            placeholder="Buscar por Nome do Controle, Controle Cliente, Controle Ricci ou Identificação do Caso..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9 h-11 rounded-xl bg-background"
@@ -372,29 +373,31 @@ export default function TarefasPage() {
       {/* Tabela de Controles (Inspirada em planilha, responsiva, com ordem rígida de colunas) */}
       <div className="bg-card border border-border rounded-2xl shadow-card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[1000px]">
+          <table className="w-full text-left border-collapse min-w-[1100px]">
             <thead>
               <tr className="border-b border-border bg-muted/40 text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
                 <th className="py-3 px-3 w-8 text-center" aria-label="Expandir"></th>
-                {/* 1. Controle Cliente */}
+                {/* 1. Nome do Controle */}
+                <th className="py-3 px-3 min-w-[220px] max-w-[320px]">Nome do Controle</th>
+                {/* 2. Controle Cliente */}
                 <th className="py-3 px-3 w-32">Controle Cliente</th>
-                {/* 2. Controle Ricci */}
+                {/* 3. Controle Ricci */}
                 <th className="py-3 px-3 w-32">Controle Ricci</th>
-                {/* 3. Identificação do Caso */}
-                <th className="py-3 px-3 min-w-[220px]">Identificação do Caso</th>
-                {/* 4. Próxima Providência */}
+                {/* 4. Identificação do Caso */}
+                <th className="py-3 px-3 min-w-[200px]">Identificação do Caso</th>
+                {/* 5. Próxima Providência */}
                 <th className="py-3 px-3 min-w-[180px]">Próxima Providência</th>
-                {/* 5. Próximo Prazo */}
+                {/* 6. Próximo Prazo */}
                 <th className="py-3 px-3 w-36">Próximo Prazo</th>
-                {/* 6. Status */}
+                {/* 7. Status */}
                 <th className="py-3 px-3 w-36">Status</th>
-                {/* 7. Responsável */}
+                {/* 8. Responsável */}
                 <th className="py-3 px-3 w-40">Responsável</th>
-                {/* 8. Follow-up */}
+                {/* 9. Follow-up */}
                 <th className="py-3 px-3 w-28">Follow-up</th>
-                {/* 9. Última atualização */}
+                {/* 10. Última atualização */}
                 <th className="py-3 px-3 w-32">Última Atualização</th>
-                {/* Ações */}
+                {/* 11. Ações */}
                 <th className="py-3 px-3 w-20 text-right">Ações</th>
               </tr>
             </thead>
@@ -402,7 +405,7 @@ export default function TarefasPage() {
             <tbody className="divide-y divide-border text-xs">
               {filteredControles.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-muted-foreground">
+                  <td colSpan={12} className="py-12 text-center text-muted-foreground">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <FileSpreadsheet className="w-8 h-8 stroke-[1.5] text-muted-foreground/60" />
                       <p className="text-sm font-semibold text-foreground">
@@ -474,7 +477,22 @@ export default function TarefasPage() {
                           </button>
                         </td>
 
-                        {/* 1. Controle Cliente */}
+                        {/* 1. Nome do Controle */}
+                        <td className="py-2.5 px-3">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="font-semibold text-foreground group-hover:text-primary transition-colors max-w-[280px] truncate">
+                                {c.nome_controle || '—'}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-md p-3 text-xs leading-relaxed">
+                              <p className="font-bold mb-1">Nome do Controle:</p>
+                              <p className="whitespace-pre-wrap">{c.nome_controle || '—'}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </td>
+
+                        {/* 2. Controle Cliente */}
                         <td className="py-2.5 px-3 font-mono font-medium text-foreground">
                           {c.controle_cliente ? (
                             <span
@@ -488,7 +506,7 @@ export default function TarefasPage() {
                           )}
                         </td>
 
-                        {/* 2. Controle Ricci */}
+                        {/* 3. Controle Ricci */}
                         <td className="py-2.5 px-3 font-mono font-medium text-foreground">
                           {c.controle_ricci ? (
                             <span className="truncate block max-w-[120px]" title={c.controle_ricci}>
@@ -499,11 +517,11 @@ export default function TarefasPage() {
                           )}
                         </td>
 
-                        {/* 3. Identificação do Caso (com tooltip se longo) */}
+                        {/* 4. Identificação do Caso (com tooltip se longo) */}
                         <td className="py-2.5 px-3">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <div className="font-semibold text-foreground group-hover:text-primary transition-colors max-w-[260px] truncate">
+                              <div className="font-medium text-foreground max-w-[240px] truncate">
                                 {c.identificacao_caso}
                               </div>
                             </TooltipTrigger>
@@ -661,11 +679,20 @@ export default function TarefasPage() {
                       {/* Linha expansível para leitura rápida sem perder os textos longos */}
                       {isExpanded && (
                         <tr className="bg-muted/20 border-b border-border">
-                          <td colSpan={11} className="py-4 px-6">
+                          <td colSpan={12} className="py-4 px-6">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                              {/* Coluna 1: Providências e Detalhe do Status */}
+                              {/* Coluna 1: Nome do Controle, Providências e Detalhe do Status */}
                               <div className="space-y-3 bg-card border border-border/80 rounded-xl p-3.5">
                                 <div>
+                                  <span className="font-bold text-foreground block mb-0.5">
+                                    Nome do Controle:
+                                  </span>
+                                  <p className="text-foreground font-semibold leading-relaxed">
+                                    {c.nome_controle || '—'}
+                                  </p>
+                                </div>
+
+                                <div className="border-t border-border/50 pt-2">
                                   <span className="font-bold text-foreground block mb-1">
                                     Próximas Providências:
                                   </span>

@@ -80,6 +80,7 @@ export interface TaskAndamentoRecord {
 
 export interface TaskControleRecord {
   id: string
+  nome_controle: string
   controle_cliente: string | null
   controle_ricci: string | null
   identificacao_caso: string
@@ -112,6 +113,7 @@ export interface TaskControleRecord {
 
 export interface SaveControleInput {
   id?: string
+  nome_controle: string
   controle_cliente?: string | null
   controle_ricci?: string | null
   identificacao_caso: string

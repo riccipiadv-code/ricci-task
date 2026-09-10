@@ -1997,6 +1997,7 @@ export type Database = {
           follow_up: string | null
           id: string
           identificacao_caso: string
+          nome_controle: string | null
           proximas_providencias: string | null
           responsavel_id: string | null
           responsavel_legaldesk_id: string | null
@@ -2016,6 +2017,7 @@ export type Database = {
           follow_up?: string | null
           id?: string
           identificacao_caso: string
+          nome_controle?: string | null
           proximas_providencias?: string | null
           responsavel_id?: string | null
           responsavel_legaldesk_id?: string | null
@@ -2035,6 +2037,7 @@ export type Database = {
           follow_up?: string | null
           id?: string
           identificacao_caso?: string
+          nome_controle?: string | null
           proximas_providencias?: string | null
           responsavel_id?: string | null
           responsavel_legaldesk_id?: string | null

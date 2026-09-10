@@ -177,6 +177,7 @@ export const controleService = {
 
       return {
         id: t.id,
+        nome_controle: t.nome_controle || '',
         controle_cliente: t.controle_cliente,
         controle_ricci: t.controle_ricci,
         identificacao_caso: t.identificacao_caso,
@@ -313,6 +314,7 @@ export const controleService = {
 
     return {
       ...t,
+      nome_controle: t.nome_controle || '',
       status: (statusRes.data as TaskStatusRecord) || null,
       responsavel_interno: (respIntRes.data as LegaldeskUsuarioRecord) || null,
       responsavel_catalogo: (respCatRes.data as TaskResponsavelRecord) || null,
@@ -332,6 +334,9 @@ export const controleService = {
     if (!input.responsavel_legaldesk_id && !input.responsavel_id) {
       throw new Error('O campo Responsável é obrigatório.')
     }
+    if (!input.nome_controle || !input.nome_controle.trim()) {
+      throw new Error('Nome do Controle é obrigatório.')
+    }
     if (!input.identificacao_caso.trim()) {
       throw new Error('Identificação do Caso é obrigatória.')
     }
@@ -340,6 +345,7 @@ export const controleService = {
     }
 
     const payload: any = {
+      nome_controle: input.nome_controle.trim(),
       controle_cliente: input.controle_cliente?.trim() || null,
       controle_ricci: input.controle_ricci?.trim() || null,
       identificacao_caso: input.identificacao_caso.trim(),

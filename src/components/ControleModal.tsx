@@ -90,6 +90,7 @@ export function ControleModal({
   const [activeTab, setActiveTab] = useState('dados')
 
   // Estado do formulário de dados do caso
+  const [nomeControle, setNomeControle] = useState('')
   const [controleCliente, setControleCliente] = useState('')
   const [controleRicci, setControleRicci] = useState('')
   const [identificacaoCaso, setIdentificacaoCaso] = useState('')
@@ -125,6 +126,7 @@ export function ControleModal({
   const [andamentoDeleteConfirmOpen, setAndamentoDeleteConfirmOpen] = useState(false)
 
   // Erros de validação
+  const [nomeControleError, setNomeControleError] = useState(false)
   const [identificacaoError, setIdentificacaoError] = useState(false)
   const [statusError, setStatusError] = useState(false)
   const [responsavelError, setResponsavelError] = useState(false)
@@ -150,11 +152,13 @@ export function ControleModal({
     if (!open) return
 
     setActiveTab('dados')
+    setNomeControleError(false)
     setIdentificacaoError(false)
     setStatusError(false)
     setResponsavelError(false)
 
     if (controleToEdit) {
+      setNomeControle(controleToEdit.nome_controle || '')
       setControleCliente(controleToEdit.controle_cliente || '')
       setControleRicci(controleToEdit.controle_ricci || '')
       setIdentificacaoCaso(controleToEdit.identificacao_caso || '')
@@ -197,6 +201,7 @@ export function ControleModal({
       }
     } else {
       // Novo controle
+      setNomeControle('')
       setControleCliente('')
       setControleRicci('')
       setIdentificacaoCaso('')
@@ -400,6 +405,10 @@ export function ControleModal({
     if (e) e.preventDefault()
 
     let hasError = false
+    if (!nomeControle.trim()) {
+      setNomeControleError(true)
+      hasError = true
+    }
     if (!identificacaoCaso.trim()) {
       setIdentificacaoError(true)
       hasError = true
@@ -435,6 +444,7 @@ export function ControleModal({
 
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
+      nome_controle: nomeControle.trim(),
       controle_cliente: controleCliente.trim() || null,
       controle_ricci: controleRicci.trim() || null,
       identificacao_caso: identificacaoCaso.trim(),
@@ -561,69 +571,107 @@ export function ControleModal({
                   </div>
                 )}
 
-                {/* Bloco 1: Códigos de Controle e Identificação */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Bloco 1: Nome do Controle, Códigos e Identificação */}
+                <div className="space-y-4">
+                  {/* Nome do Controle (Campo Obrigatório - Título do acompanhamento) */}
                   <div className="space-y-1.5">
-                    <Label htmlFor="ctrl-cliente" className="text-xs font-semibold text-foreground">
-                      Controle Cliente{' '}
-                      {!isAguardandoAutorizacao && (
-                        <span className="text-muted-foreground">(opcional)</span>
-                      )}
-                    </Label>
-                    <Input
-                      id="ctrl-cliente"
-                      placeholder="Ex: CC-2025-081"
-                      value={controleCliente}
-                      onChange={(e) => setControleCliente(e.target.value)}
-                      className="h-10 rounded-xl bg-background"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label htmlFor="ctrl-ricci" className="text-xs font-semibold text-foreground">
-                      Controle Ricci{' '}
-                      {!isAguardandoAutorizacao && (
-                        <span className="text-muted-foreground">(opcional)</span>
-                      )}
-                    </Label>
-                    <Input
-                      id="ctrl-ricci"
-                      placeholder="Ex: RICCI-9941"
-                      value={controleRicci}
-                      onChange={(e) => setControleRicci(e.target.value)}
-                      className="h-10 rounded-xl bg-background"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2 space-y-1.5">
                     <Label
-                      htmlFor="ident-caso"
+                      htmlFor="nome-controle"
                       className="text-xs font-semibold text-foreground flex items-center justify-between"
                     >
                       <span>
-                        Identificação do Caso <span className="text-destructive">*</span>
+                        Nome do Controle <span className="text-destructive">*</span>
                       </span>
-                      <span className="text-[11px] text-muted-foreground">Obrigatório</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        Título do acompanhamento
+                      </span>
                     </Label>
                     <Input
-                      id="ident-caso"
-                      placeholder="Ex: Ação Anulatória de Marca X - 1ª Vara Empresarial"
-                      value={identificacaoCaso}
+                      id="nome-controle"
+                      placeholder="Ex: Ricci Advogados PI e Natura (Contencioso) - Controle Ações Estratégicas e Status de Medidas Definidas"
+                      value={nomeControle}
                       onChange={(e) => {
-                        setIdentificacaoCaso(e.target.value)
-                        if (identificacaoError && e.target.value.trim())
-                          setIdentificacaoError(false)
+                        setNomeControle(e.target.value)
+                        if (nomeControleError && e.target.value.trim()) setNomeControleError(false)
                       }}
                       className={cn(
                         'h-10 rounded-xl bg-background font-medium',
-                        identificacaoError && 'border-destructive focus-visible:ring-destructive',
+                        nomeControleError && 'border-destructive focus-visible:ring-destructive',
                       )}
                     />
-                    {identificacaoError && (
+                    {nomeControleError && (
                       <p className="text-xs text-destructive font-medium">
-                        A Identificação do Caso é obrigatória.
+                        O Nome do Controle é obrigatório.
                       </p>
                     )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="ctrl-cliente"
+                        className="text-xs font-semibold text-foreground"
+                      >
+                        Controle Cliente{' '}
+                        {!isAguardandoAutorizacao && (
+                          <span className="text-muted-foreground">(opcional)</span>
+                        )}
+                      </Label>
+                      <Input
+                        id="ctrl-cliente"
+                        placeholder="Ex: CC-2025-081"
+                        value={controleCliente}
+                        onChange={(e) => setControleCliente(e.target.value)}
+                        className="h-10 rounded-xl bg-background"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ctrl-ricci" className="text-xs font-semibold text-foreground">
+                        Controle Ricci{' '}
+                        {!isAguardandoAutorizacao && (
+                          <span className="text-muted-foreground">(opcional)</span>
+                        )}
+                      </Label>
+                      <Input
+                        id="ctrl-ricci"
+                        placeholder="Ex: RICCI-9941"
+                        value={controleRicci}
+                        onChange={(e) => setControleRicci(e.target.value)}
+                        className="h-10 rounded-xl bg-background"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2 space-y-1.5">
+                      <Label
+                        htmlFor="ident-caso"
+                        className="text-xs font-semibold text-foreground flex items-center justify-between"
+                      >
+                        <span>
+                          Identificação do Caso <span className="text-destructive">*</span>
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">Obrigatório</span>
+                      </Label>
+                      <Input
+                        id="ident-caso"
+                        placeholder="Ex: Ação Anulatória de Marca X - 1ª Vara Empresarial"
+                        value={identificacaoCaso}
+                        onChange={(e) => {
+                          setIdentificacaoCaso(e.target.value)
+                          if (identificacaoError && e.target.value.trim())
+                            setIdentificacaoError(false)
+                        }}
+                        className={cn(
+                          'h-10 rounded-xl bg-background font-medium',
+                          identificacaoError && 'border-destructive focus-visible:ring-destructive',
+                        )}
+                      />
+                      {identificacaoError && (
+                        <p className="text-xs text-destructive font-medium">
+                          A Identificação do Caso é obrigatória.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
 
