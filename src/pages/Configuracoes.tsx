@@ -428,9 +428,6 @@ export default function ConfiguracoesPage() {
               </div>
               <div>
                 <h3 className="text-sm font-bold text-foreground">Ricci Task v1.0</h3>
-                <p className="text-xs text-muted-foreground">
-                  Sistema de Gestão de Produtividade Pessoal
-                </p>
               </div>
             </div>
 

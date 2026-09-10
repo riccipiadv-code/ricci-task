@@ -92,9 +92,6 @@ export default function Layout({ children }: LayoutProps) {
             <span className="font-bold text-lg tracking-tight text-foreground leading-tight">
               Ricci Task
             </span>
-            <span className="text-xs text-muted-foreground font-medium">
-              Gestão de Produtividade
-            </span>
           </div>
         </div>
 
