@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Sun,
   Moon,
@@ -6,17 +7,20 @@ import {
   Bell,
   Trash2,
   Download,
-  Info,
   Database,
   CheckCircle2,
   RefreshCw,
   Server,
   AlertCircle,
   Loader2,
+  User,
+  LogOut,
+  ShieldCheck,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { useTasks } from '@/hooks/useTasks'
 import { useTheme } from '@/hooks/useTheme'
+import { useAuth } from '@/hooks/use-auth'
 import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
 import { taskService } from '@/services/taskService'
 import { DefaultViewFilter } from '@/types/task'
@@ -38,8 +42,11 @@ export default function ConfiguracoesPage() {
   const { settings, updateSettings, resetAllData } = useTasks()
   const { theme, setTheme } = useTheme()
   const { toast } = useToast()
+  const { user, signOut } = useAuth()
+  const navigate = useNavigate()
   const supabaseConn = useSupabaseConnection()
   const [testingConnection, setTestingConnection] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
 
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
 
@@ -113,10 +120,74 @@ export default function ConfiguracoesPage() {
     })
   }
 
+  const handleSignOut = async () => {
+    setLoggingOut(true)
+    try {
+      await signOut()
+      toast({
+        title: 'Sessão encerrada',
+        description: 'Você saiu da sua conta com sucesso.',
+      })
+      navigate('/login', { replace: true })
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao sair',
+        description: 'Não foi possível desconectar com segurança.',
+      })
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
   return (
     <div className="space-y-6 animate-fade-in max-w-4xl">
       {/* Header */}
       <PageHeader title="Configurações" subtitle="Personalize sua experiência no Ricci Task" />
+
+      {/* Card 0: Conta de Usuário Conectada */}
+      <section className="bg-card border border-border rounded-2xl p-6 shadow-card space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+              <User className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-foreground">Conta Autenticada</h2>
+              <p className="text-xs text-muted-foreground">Sessão ativa via Supabase Auth</p>
+            </div>
+          </div>
+
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            Sessão Ativa
+          </span>
+        </div>
+
+        <div className="rounded-xl p-3.5 bg-muted/40 border border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="space-y-0.5">
+            <span className="text-muted-foreground block text-[11px]">E-mail do usuário</span>
+            <span className="font-semibold text-foreground text-sm">
+              {user?.email || 'Usuário autenticado'}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loggingOut}
+            onClick={handleSignOut}
+            className="h-9 rounded-xl border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive font-semibold flex items-center gap-2 self-start sm:self-auto"
+          >
+            {loggingOut ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <LogOut className="w-3.5 h-3.5" />
+            )}
+            <span>Desconectar da conta</span>
+          </Button>
+        </div>
+      </section>
 
       <div className="space-y-6">
         {/* Card 1: Aparência */}

@@ -1,5 +1,5 @@
-import { ReactNode } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { ReactNode, useState } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   CheckSquare,
@@ -7,9 +7,13 @@ import {
   Check,
   Database,
   Loader2,
+  LogOut,
 } from 'lucide-react'
 import { useTheme } from '@/hooks/useTheme'
 import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
+import { useAuth } from '@/hooks/use-auth'
+import { useToast } from '@/hooks/use-toast'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 interface LayoutProps {
@@ -38,7 +42,42 @@ export default function Layout({ children }: LayoutProps) {
   // Inicializa o tema para assegurar que a classe .dark é aplicada ao html
   useTheme()
   const location = useLocation()
+  const navigate = useNavigate()
+  const { user, signOut } = useAuth()
+  const { toast } = useToast()
   const supabaseConn = useSupabaseConnection()
+  const [loggingOut, setLoggingOut] = useState(false)
+
+  // Deriva dados visuais do usuário logado diretamente do e-mail do auth (sem depender de RLS de perfis)
+  const userEmail = user?.email || ''
+  const emailPrefix = userEmail ? userEmail.split('@')[0] : 'Ricci'
+  const displayName = emailPrefix.includes('.')
+    ? emailPrefix
+        .split('.')
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
+    : emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1)
+  const userInitial = (emailPrefix.charAt(0) || 'R').toUpperCase()
+
+  const handleSignOut = async () => {
+    setLoggingOut(true)
+    try {
+      await signOut()
+      toast({
+        title: 'Sessão encerrada',
+        description: 'Você saiu da sua conta com sucesso.',
+      })
+      navigate('/login', { replace: true })
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao sair',
+        description: 'Não foi possível desconectar com segurança.',
+      })
+    } finally {
+      setLoggingOut(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row antialiased selection:bg-primary/20 selection:text-primary transition-colors duration-300">
@@ -95,21 +134,46 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Sidebar Footer */}
         <div className="p-3 lg:p-4 border-t border-border mt-auto space-y-2">
+          {/* Card do Usuário */}
           <div className="flex items-center gap-3 p-2 lg:p-2.5 rounded-xl bg-muted/40 border border-border/50">
             <div className="h-9 w-9 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center text-sm shrink-0 border border-primary/30">
-              R
+              {userInitial}
             </div>
             <div className="hidden lg:flex flex-col min-w-0 flex-1">
-              <span className="text-sm font-semibold text-foreground truncate leading-tight">
-                Ricci
+              <span
+                className="text-sm font-semibold text-foreground truncate leading-tight"
+                title={userEmail || displayName}
+              >
+                {displayName}
               </span>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  v1.0 — Local
+                <span
+                  className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 truncate"
+                  title={userEmail}
+                >
+                  {userEmail ? 'Autenticado' : 'v1.0 — Local'}
                 </span>
               </div>
             </div>
           </div>
+
+          {/* Botão de Logout / Sair */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={loggingOut}
+            onClick={handleSignOut}
+            className="w-full justify-center lg:justify-start h-9 px-2.5 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors text-xs font-medium"
+            title="Sair do Ricci Task"
+          >
+            {loggingOut ? (
+              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+            ) : (
+              <LogOut className="w-4 h-4 shrink-0" />
+            )}
+            <span className="hidden lg:inline-block ml-2 truncate">Sair da conta</span>
+          </Button>
 
           {/* Indicador discreto da conexão com Supabase */}
           <div
@@ -176,6 +240,22 @@ export default function Layout({ children }: LayoutProps) {
             </NavLink>
           )
         })}
+
+        {/* Botão Sair no Mobile */}
+        <button
+          type="button"
+          onClick={handleSignOut}
+          disabled={loggingOut}
+          className="flex flex-col items-center justify-center py-1.5 px-3 rounded-lg text-xs font-medium text-muted-foreground hover:text-destructive transition-colors"
+          title="Sair do aplicativo"
+        >
+          {loggingOut ? (
+            <Loader2 className="w-5 h-5 mb-1 animate-spin text-destructive" />
+          ) : (
+            <LogOut className="w-5 h-5 mb-1 stroke-[1.8]" />
+          )}
+          <span>Sair</span>
+        </button>
       </nav>
     </div>
   )
