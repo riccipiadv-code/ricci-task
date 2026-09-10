@@ -211,7 +211,7 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0 pb-24 md:pb-10">
-        <div className="w-full max-w-[1100px] mx-auto p-4 sm:p-6 lg:p-8 flex-1">{children}</div>
+        <div className="w-full max-w-none p-4 sm:p-5 lg:p-6 flex-1 min-w-0">{children}</div>
       </main>
 
       {/* Mobile Fixed Bottom Navigation Bar */}
