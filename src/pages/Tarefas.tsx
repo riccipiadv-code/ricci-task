@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Plus,
   Search,
@@ -20,9 +20,15 @@ import {
   ListFilter,
   User,
   Info,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  History,
+  RotateCw,
 } from 'lucide-react'
 import { useControles } from '@/hooks/useControles'
-import { TaskControleRecord } from '@/types/task'
+import { TaskControleRecord, TaskAndamentoRecord } from '@/types/task'
+import { controleService } from '@/services/controleService'
 import { PageHeader } from '@/components/PageHeader'
 import { ControleModal } from '@/components/ControleModal'
 import { DeleteConfirmDialog } from '@/components/DeleteConfirmDialog'
@@ -76,13 +82,18 @@ type FollowUpSituacaoFilter =
   | 'com_follow_up'
   | 'sem_follow_up'
 
-type OrdenacaoOption =
-  | 'urgentes'
-  | 'prazo_proximo'
-  | 'follow_up_proximo'
-  | 'atualizados_recentemente'
+export type SortField =
   | 'controle_cliente'
   | 'controle_ricci'
+  | 'identificacao_caso'
+  | 'proximas_providencias'
+  | 'prazo_proximo'
+  | 'status'
+  | 'responsavel'
+  | 'follow_up'
+  | 'updated_at'
+
+export type SortDirection = 'asc' | 'desc'
 
 export default function TarefasPage() {
   const {
@@ -108,7 +119,10 @@ export default function TarefasPage() {
   const [tipoPrazoFilter, setTipoPrazoFilter] = useState<string>('todos')
   const [prazoSituacao, setPrazoSituacao] = useState<PrazoSituacaoFilter>('todos')
   const [followUpSituacao, setFollowUpSituacao] = useState<FollowUpSituacaoFilter>('todos')
-  const [ordenacao, setOrdenacao] = useState<OrdenacaoOption>('urgentes')
+
+  // Ordenação ativa dos cabeçalhos (padrão obrigatório: Próximo Prazo crescente)
+  const [sortField, setSortField] = useState<SortField>('prazo_proximo')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   // Controle de abertura do popover de mais filtros (desktop) e sheet (mobile)
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
@@ -119,6 +133,18 @@ export default function TarefasPage() {
 
   // Linhas expandidas (detalhes rápidos do caso)
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({})
+
+  // Cache de andamentos por controle.id: Record<controleId, { andamentos: TaskAndamentoRecord[]; loading: boolean; error: boolean }>
+  const [andamentosCache, setAndamentosCache] = useState<
+    Record<
+      string,
+      {
+        items?: TaskAndamentoRecord[]
+        loading: boolean
+        error: boolean
+      }
+    >
+  >({})
 
   // Modais de edição/criação e arquivamento
   const [modalOpen, setModalOpen] = useState(false)
@@ -165,16 +191,77 @@ export default function TarefasPage() {
     setCollapsedGroups(next)
   }
 
+  // Carregamento sob demanda do histórico de andamentos por controleId
+  const loadHistorico = useCallback(
+    async (controleId: string, force = false) => {
+      // Se já está carregado ou em carregamento (e não for forçado), não repete consulta
+      if (!force) {
+        const cached = andamentosCache[controleId]
+        if (cached && (cached.items !== undefined || cached.loading)) {
+          return
+        }
+      }
+
+      setAndamentosCache((prev) => ({
+        ...prev,
+        [controleId]: { items: prev[controleId]?.items, loading: true, error: false },
+      }))
+
+      try {
+        const data = await controleService.getAndamentos(controleId)
+        // Garante ordenação por data_andamento decrescente, e por created_at decrescente em caso de empate
+        const sorted = [...data].sort((a, b) => {
+          const diffData = b.data_andamento.localeCompare(a.data_andamento)
+          if (diffData !== 0) return diffData
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+        setAndamentosCache((prev) => ({
+          ...prev,
+          [controleId]: { items: sorted, loading: false, error: false },
+        }))
+      } catch (err) {
+        console.error('Erro ao buscar andamentos do controle:', controleId, err)
+        setAndamentosCache((prev) => ({
+          ...prev,
+          [controleId]: { items: prev[controleId]?.items, loading: false, error: true },
+        }))
+      }
+    },
+    [andamentosCache],
+  )
+
   // Alterna linha expandida (detalhe rápido sem disparar formulário)
   const toggleRowExpanded = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
+    const willBeOpen = !expandedRows[id]
     setExpandedRows((prev) => ({
       ...prev,
-      [id]: !prev[id],
+      [id]: willBeOpen,
     }))
+
+    // Se estiver abrindo a linha, dispara o carregamento sob demanda do histórico
+    if (willBeOpen) {
+      loadHistorico(id)
+    }
   }
 
-  // Limpeza de todos os filtros
+  // Alterna ordenação de coluna
+  const handleSortColumn = (field: SortField, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    if (sortField === field) {
+      // Inverte direção: asc -> desc -> asc
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+    } else {
+      // Novo campo ativo: primeiro clique sempre crescente
+      setSortField(field)
+      setSortDirection('asc')
+    }
+  }
+
+  // Limpeza de todos os filtros (restaura ordenação padrão: Próximo Prazo crescente)
   const handleClearFilters = () => {
     setSearchInput('')
     setDebouncedSearch('')
@@ -184,7 +271,8 @@ export default function TarefasPage() {
     setTipoPrazoFilter('todos')
     setPrazoSituacao('todos')
     setFollowUpSituacao('todos')
-    setOrdenacao('urgentes')
+    setSortField('prazo_proximo')
+    setSortDirection('asc')
   }
 
   // Helper de cálculo de datas para filtros
@@ -291,54 +379,148 @@ export default function TarefasPage() {
       list = list.filter((c) => !c.follow_up)
     }
 
-    // 8. Ordenação dentro dos dados
-    list.sort((a, b) => {
-      if (ordenacao === 'urgentes') {
-        // Prazos vencidos primeiro, depois follow-up vencido, depois prazos mais próximos
-        const aPrazoVenc = isPrazoOverdue(a.prazo_destaque?.data_prazo, a.status)
-        const bPrazoVenc = isPrazoOverdue(b.prazo_destaque?.data_prazo, b.status)
-        if (aPrazoVenc !== bPrazoVenc) return aPrazoVenc ? -1 : 1
-
-        const aFollowVenc = isFollowUpOverdue(a.follow_up, a.status)
-        const bFollowVenc = isFollowUpOverdue(b.follow_up, b.status)
-        if (aFollowVenc !== bFollowVenc) return aFollowVenc ? -1 : 1
-
-        const aDate = a.prazo_destaque?.data_prazo || '9999-12-31'
-        const bDate = b.prazo_destaque?.data_prazo || '9999-12-31'
-        if (aDate !== bDate) return aDate.localeCompare(bDate)
-
-        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    // 8. Ordenação dentro dos dados com suporte a asc/desc e valores vazios sempre por último
+    const compareTieBreaker = (a: TaskControleRecord, b: TaskControleRecord): number => {
+      // 1. Follow-up crescente (vazios no final)
+      const aFollow = a.follow_up
+      const bFollow = b.follow_up
+      if (aFollow && !bFollow) return -1
+      if (!aFollow && bFollow) return 1
+      if (aFollow && bFollow && aFollow !== bFollow) {
+        return aFollow.localeCompare(bFollow)
       }
 
-      if (ordenacao === 'prazo_proximo') {
-        const aDate = a.prazo_destaque?.data_prazo || '9999-12-31'
-        const bDate = b.prazo_destaque?.data_prazo || '9999-12-31'
-        return aDate.localeCompare(bDate)
-      }
+      // 2. Última Atualização decrescente
+      const aTime = new Date(a.updated_at).getTime()
+      const bTime = new Date(b.updated_at).getTime()
+      if (aTime !== bTime) return bTime - aTime
 
-      if (ordenacao === 'follow_up_proximo') {
-        const aDate = a.follow_up || '9999-12-31'
-        const bDate = b.follow_up || '9999-12-31'
-        return aDate.localeCompare(bDate)
+      // 3. Controle Cliente crescente (vazios no final)
+      const aCli = a.controle_cliente?.trim()
+      const bCli = b.controle_cliente?.trim()
+      if (aCli && !bCli) return -1
+      if (!aCli && bCli) return 1
+      if (aCli && bCli) {
+        return aCli.localeCompare(bCli, 'pt-BR', { numeric: true, sensitivity: 'base' })
       }
-
-      if (ordenacao === 'atualizados_recentemente') {
-        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      }
-
-      if (ordenacao === 'controle_cliente') {
-        const aCode = a.controle_cliente || 'ZZZZZZ'
-        const bCode = b.controle_cliente || 'ZZZZZZ'
-        return aCode.localeCompare(bCode, 'pt-BR', { numeric: true })
-      }
-
-      if (ordenacao === 'controle_ricci') {
-        const aCode = a.controle_ricci || 'ZZZZZZ'
-        const bCode = b.controle_ricci || 'ZZZZZZ'
-        return aCode.localeCompare(bCode, 'pt-BR', { numeric: true })
-      }
-
       return 0
+    }
+
+    list.sort((a, b) => {
+      let comparison = 0
+
+      // Helper para strings com vazios no final tanto em asc quanto desc
+      const compareStringWithEmptiesLast = (
+        valA: string | null | undefined,
+        valB: string | null | undefined,
+        dir: SortDirection,
+      ): number => {
+        const cleanA = valA?.trim() || ''
+        const cleanB = valB?.trim() || ''
+        if (!cleanA && !cleanB) return 0
+        // Valores vazios vão sempre para o final
+        if (!cleanA) return 1
+        if (!cleanB) return -1
+        const cmp = cleanA.localeCompare(cleanB, 'pt-BR', { numeric: true, sensitivity: 'base' })
+        return dir === 'asc' ? cmp : -cmp
+      }
+
+      // Helper para datas ISO com vazios no final tanto em asc quanto desc
+      const compareDateWithEmptiesLast = (
+        dateA: string | null | undefined,
+        dateB: string | null | undefined,
+        dir: SortDirection,
+      ): number => {
+        const cleanA = dateA ? dateA.split('T')[0] : ''
+        const cleanB = dateB ? dateB.split('T')[0] : ''
+        if (!cleanA && !cleanB) return 0
+        if (!cleanA) return 1
+        if (!cleanB) return -1
+        const cmp = cleanA.localeCompare(cleanB)
+        return dir === 'asc' ? cmp : -cmp
+      }
+
+      switch (sortField) {
+        case 'controle_cliente':
+          comparison = compareStringWithEmptiesLast(
+            a.controle_cliente,
+            b.controle_cliente,
+            sortDirection,
+          )
+          break
+
+        case 'controle_ricci':
+          comparison = compareStringWithEmptiesLast(
+            a.controle_ricci,
+            b.controle_ricci,
+            sortDirection,
+          )
+          break
+
+        case 'identificacao_caso':
+          comparison = compareStringWithEmptiesLast(
+            a.identificacao_caso,
+            b.identificacao_caso,
+            sortDirection,
+          )
+          break
+
+        case 'proximas_providencias':
+          comparison = compareStringWithEmptiesLast(
+            a.proximas_providencias,
+            b.proximas_providencias,
+            sortDirection,
+          )
+          break
+
+        case 'prazo_proximo': {
+          const dtA = a.prazo_destaque?.data_prazo
+          const dtB = b.prazo_destaque?.data_prazo
+          comparison = compareDateWithEmptiesLast(dtA, dtB, sortDirection)
+          break
+        }
+
+        case 'status': {
+          const stA = a.status?.nome
+          const stB = b.status?.nome
+          comparison = compareStringWithEmptiesLast(stA, stB, sortDirection)
+          break
+        }
+
+        case 'responsavel': {
+          const respA = a.responsavel_nome
+          const respB = b.responsavel_nome
+          comparison = compareStringWithEmptiesLast(respA, respB, sortDirection)
+          break
+        }
+
+        case 'follow_up':
+          comparison = compareDateWithEmptiesLast(a.follow_up, b.follow_up, sortDirection)
+          break
+
+        case 'updated_at': {
+          // ISO datetime comparison
+          const dtA = a.updated_at
+          const dtB = b.updated_at
+          if (!dtA && !dtB) comparison = 0
+          else if (!dtA) comparison = 1
+          else if (!dtB) comparison = -1
+          else {
+            const cmp = new Date(dtA).getTime() - new Date(dtB).getTime()
+            comparison = sortDirection === 'asc' ? cmp : -cmp
+          }
+          break
+        }
+
+        default:
+          comparison = 0
+      }
+
+      // Se empatar, aplica a regra de desempate
+      if (comparison === 0) {
+        return compareTieBreaker(a, b)
+      }
+      return comparison
     })
 
     return list
@@ -351,27 +533,34 @@ export default function TarefasPage() {
     tipoPrazoFilter,
     prazoSituacao,
     followUpSituacao,
-    ordenacao,
+    sortField,
+    sortDirection,
     todayStr,
     next7DaysStr,
   ])
 
   // Agrupamento dos controles filtrados por `nome_controle`
+  // Regra 10: Dentro de cada grupo, casos ficam ordenados pelo campo selecionado.
+  // Quando houver vários grupos, ordena também os grupos pela primeira ocorrência resultante;
+  // no padrão de prazo, o grupo com o prazo mais próximo vem primeiro.
   const groupedControles = useMemo(() => {
     const map = new Map<string, TaskControleRecord[]>()
+    // Preserva a ordem de inserção da primeira aparição na lista já ordenada!
+    const groupOrder: string[] = []
 
-    // Ordem previsível: grupos ordenados alfabeticamente
     for (const item of filteredControles) {
       const groupName = item.nome_controle?.trim() || 'Sem Controle Definido'
-      const existing = map.get(groupName) || []
-      existing.push(item)
-      map.set(groupName, existing)
+      const existing = map.get(groupName)
+      if (!existing) {
+        map.set(groupName, [item])
+        groupOrder.push(groupName)
+      } else {
+        existing.push(item)
+      }
     }
 
     const groups: { nome: string; items: TaskControleRecord[] }[] = []
-    // Ordena os nomes dos grupos
-    const sortedGroupNames = Array.from(map.keys()).sort((a, b) => a.localeCompare(b, 'pt-BR'))
-    for (const name of sortedGroupNames) {
+    for (const name of groupOrder) {
       groups.push({
         nome: name,
         items: map.get(name) || [],
@@ -380,7 +569,40 @@ export default function TarefasPage() {
     return groups
   }, [filteredControles])
 
+  // Ordenação sincronizada codificada como string "field:direction"
+  const currentSortKey = `${sortField}:${sortDirection}`
+
+  const handleSelectSort = (val: string) => {
+    const [field, dir] = val.split(':') as [SortField, SortDirection]
+    if (field && dir) {
+      setSortField(field)
+      setSortDirection(dir)
+    }
+  }
+
+  // Nome legível da ordenação
+  const getSortOptionLabel = (field: SortField, dir: SortDirection) => {
+    const fieldNames: Record<SortField, string> = {
+      prazo_proximo: 'Próximo Prazo',
+      follow_up: 'Follow-up',
+      updated_at: 'Última Atualização',
+      controle_cliente: 'Controle Cliente',
+      controle_ricci: 'Controle Ricci',
+      identificacao_caso: 'Identificação do Caso',
+      proximas_providencias: 'Próxima Providência',
+      status: 'Status',
+      responsavel: 'Responsável',
+    }
+    const dirNames: Record<SortDirection, string> = {
+      asc: 'crescente',
+      desc: 'decrescente',
+    }
+    return `${fieldNames[field]} — ${dirNames[dir]}`
+  }
+
   // Flag e contagem de filtros ativos
+  const isDefaultSorting = sortField === 'prazo_proximo' && sortDirection === 'asc'
+
   const hasActiveFilters = useMemo(() => {
     return (
       searchInput.trim() !== '' ||
@@ -390,7 +612,7 @@ export default function TarefasPage() {
       tipoPrazoFilter !== 'todos' ||
       prazoSituacao !== 'todos' ||
       followUpSituacao !== 'todos' ||
-      ordenacao !== 'urgentes'
+      !isDefaultSorting
     )
   }, [
     searchInput,
@@ -400,7 +622,7 @@ export default function TarefasPage() {
     tipoPrazoFilter,
     prazoSituacao,
     followUpSituacao,
-    ordenacao,
+    isDefaultSorting,
   ])
 
   // Quantidade de filtros avançados ativos (para a badge no botão "Mais filtros")
@@ -409,9 +631,9 @@ export default function TarefasPage() {
     if (tipoPrazoFilter !== 'todos') count++
     if (prazoSituacao !== 'todos') count++
     if (followUpSituacao !== 'todos') count++
-    if (ordenacao !== 'urgentes') count++
+    if (!isDefaultSorting) count++
     return count
-  }, [tipoPrazoFilter, prazoSituacao, followUpSituacao, ordenacao])
+  }, [tipoPrazoFilter, prazoSituacao, followUpSituacao, isDefaultSorting])
 
   // Resolução de nomes dos filtros ativos para os chips
   const activeFilterChips = useMemo(() => {
@@ -499,19 +721,14 @@ export default function TarefasPage() {
       })
     }
 
-    if (ordenacao !== 'urgentes') {
-      const labels: Record<OrdenacaoOption, string> = {
-        urgentes: '',
-        prazo_proximo: 'Ordem: Prazo mais próximo',
-        follow_up_proximo: 'Ordem: Follow-up mais próximo',
-        atualizados_recentemente: 'Ordem: Atualizados recentemente',
-        controle_cliente: 'Ordem: Controle Cliente',
-        controle_ricci: 'Ordem: Controle Ricci',
-      }
+    if (!isDefaultSorting) {
       chips.push({
         id: 'ordenacao',
-        label: labels[ordenacao],
-        onRemove: () => setOrdenacao('urgentes'),
+        label: `Ordem: ${getSortOptionLabel(sortField, sortDirection)}`,
+        onRemove: () => {
+          setSortField('prazo_proximo')
+          setSortDirection('asc')
+        },
       })
     }
 
@@ -524,7 +741,9 @@ export default function TarefasPage() {
     tipoPrazoFilter,
     prazoSituacao,
     followUpSituacao,
-    ordenacao,
+    isDefaultSorting,
+    sortField,
+    sortDirection,
     statusList,
     responsaveisOptions,
     tiposPrazoList,
@@ -583,7 +802,10 @@ export default function TarefasPage() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => refreshControles()}
+              onClick={() => {
+                setAndamentosCache({})
+                refreshControles()
+              }}
               disabled={loading}
               className="h-10 rounded-xl px-3 border-border hover:bg-muted"
               title="Sincronizar com o Supabase"
@@ -783,7 +1005,8 @@ export default function TarefasPage() {
                         setTipoPrazoFilter('todos')
                         setPrazoSituacao('todos')
                         setFollowUpSituacao('todos')
-                        setOrdenacao('urgentes')
+                        setSortField('prazo_proximo')
+                        setSortDirection('asc')
                       }}
                       className="text-[11px] text-primary hover:underline font-medium"
                     >
@@ -863,22 +1086,47 @@ export default function TarefasPage() {
                   <label className="text-[11px] font-semibold text-muted-foreground block">
                     Ordenação dos Casos
                   </label>
-                  <Select
-                    value={ordenacao}
-                    onValueChange={(val: OrdenacaoOption) => setOrdenacao(val)}
-                  >
+                  <Select value={currentSortKey} onValueChange={handleSelectSort}>
                     <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
                       <SelectValue placeholder="Ordenação" />
                     </SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                      <SelectItem value="urgentes">Mais urgentes (padrão)</SelectItem>
-                      <SelectItem value="prazo_proximo">Prazo mais próximo</SelectItem>
-                      <SelectItem value="follow_up_proximo">Follow-up mais próximo</SelectItem>
-                      <SelectItem value="atualizados_recentemente">
-                        Atualizados recentemente
+                    <SelectContent className="rounded-xl max-h-64">
+                      <SelectItem value="prazo_proximo:asc">Próximo Prazo — crescente</SelectItem>
+                      <SelectItem value="prazo_proximo:desc">
+                        Próximo Prazo — decrescente
                       </SelectItem>
-                      <SelectItem value="controle_cliente">Controle Cliente</SelectItem>
-                      <SelectItem value="controle_ricci">Controle Ricci</SelectItem>
+                      <SelectItem value="follow_up:asc">Follow-up — crescente</SelectItem>
+                      <SelectItem value="follow_up:desc">Follow-up — decrescente</SelectItem>
+                      <SelectItem value="updated_at:desc">
+                        Última Atualização — decrescente
+                      </SelectItem>
+                      <SelectItem value="updated_at:asc">Última Atualização — crescente</SelectItem>
+                      <SelectItem value="controle_cliente:asc">
+                        Controle Cliente — crescente
+                      </SelectItem>
+                      <SelectItem value="controle_cliente:desc">
+                        Controle Cliente — decrescente
+                      </SelectItem>
+                      <SelectItem value="controle_ricci:asc">Controle Ricci — crescente</SelectItem>
+                      <SelectItem value="controle_ricci:desc">
+                        Controle Ricci — decrescente
+                      </SelectItem>
+                      <SelectItem value="identificacao_caso:asc">
+                        Identificação do Caso — crescente
+                      </SelectItem>
+                      <SelectItem value="identificacao_caso:desc">
+                        Identificação do Caso — decrescente
+                      </SelectItem>
+                      <SelectItem value="proximas_providencias:asc">
+                        Próxima Providência — crescente
+                      </SelectItem>
+                      <SelectItem value="proximas_providencias:desc">
+                        Próxima Providência — decrescente
+                      </SelectItem>
+                      <SelectItem value="status:asc">Status — crescente</SelectItem>
+                      <SelectItem value="status:desc">Status — decrescente</SelectItem>
+                      <SelectItem value="responsavel:asc">Responsável — crescente</SelectItem>
+                      <SelectItem value="responsavel:desc">Responsável — decrescente</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1065,22 +1313,51 @@ export default function TarefasPage() {
                   {/* Ordenação */}
                   <div className="space-y-1.5">
                     <label className="font-semibold text-foreground">Ordenação</label>
-                    <Select
-                      value={ordenacao}
-                      onValueChange={(val: OrdenacaoOption) => setOrdenacao(val)}
-                    >
+                    <Select value={currentSortKey} onValueChange={handleSelectSort}>
                       <SelectTrigger className="h-10 rounded-xl bg-background text-xs">
                         <SelectValue placeholder="Ordenação" />
                       </SelectTrigger>
-                      <SelectContent className="rounded-xl">
-                        <SelectItem value="urgentes">Mais urgentes (padrão)</SelectItem>
-                        <SelectItem value="prazo_proximo">Prazo mais próximo</SelectItem>
-                        <SelectItem value="follow_up_proximo">Follow-up mais próximo</SelectItem>
-                        <SelectItem value="atualizados_recentemente">
-                          Atualizados recentemente
+                      <SelectContent className="rounded-xl max-h-60">
+                        <SelectItem value="prazo_proximo:asc">Próximo Prazo — crescente</SelectItem>
+                        <SelectItem value="prazo_proximo:desc">
+                          Próximo Prazo — decrescente
                         </SelectItem>
-                        <SelectItem value="controle_cliente">Controle Cliente</SelectItem>
-                        <SelectItem value="controle_ricci">Controle Ricci</SelectItem>
+                        <SelectItem value="follow_up:asc">Follow-up — crescente</SelectItem>
+                        <SelectItem value="follow_up:desc">Follow-up — decrescente</SelectItem>
+                        <SelectItem value="updated_at:desc">
+                          Última Atualização — decrescente
+                        </SelectItem>
+                        <SelectItem value="updated_at:asc">
+                          Última Atualização — crescente
+                        </SelectItem>
+                        <SelectItem value="controle_cliente:asc">
+                          Controle Cliente — crescente
+                        </SelectItem>
+                        <SelectItem value="controle_cliente:desc">
+                          Controle Cliente — decrescente
+                        </SelectItem>
+                        <SelectItem value="controle_ricci:asc">
+                          Controle Ricci — crescente
+                        </SelectItem>
+                        <SelectItem value="controle_ricci:desc">
+                          Controle Ricci — decrescente
+                        </SelectItem>
+                        <SelectItem value="identificacao_caso:asc">
+                          Identificação do Caso — crescente
+                        </SelectItem>
+                        <SelectItem value="identificacao_caso:desc">
+                          Identificação do Caso — decrescente
+                        </SelectItem>
+                        <SelectItem value="proximas_providencias:asc">
+                          Próxima Providência — crescente
+                        </SelectItem>
+                        <SelectItem value="proximas_providencias:desc">
+                          Próxima Providência — decrescente
+                        </SelectItem>
+                        <SelectItem value="status:asc">Status — crescente</SelectItem>
+                        <SelectItem value="status:desc">Status — decrescente</SelectItem>
+                        <SelectItem value="responsavel:asc">Responsável — crescente</SelectItem>
+                        <SelectItem value="responsavel:desc">Responsável — decrescente</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1272,34 +1549,231 @@ export default function TarefasPage() {
                     <div className="hidden md:block overflow-x-auto w-full">
                       <table className="w-full text-left border-collapse table-fixed min-w-[1240px]">
                         <thead>
-                          <tr className="border-b border-border/80 bg-muted/20 text-[11px] font-bold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur-md">
+                          <tr className="border-b border-border/80 bg-muted/20 text-[11px] font-bold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur-md select-none">
                             {/* 1. Expandir */}
                             <th
                               className="py-2.5 px-2.5 w-10 text-center"
                               aria-label="Expandir"
                             ></th>
+
                             {/* 2. Controle Cliente */}
-                            <th className="py-2.5 px-3 w-32">Controle Cliente</th>
+                            <th className="py-2.5 px-3 w-32">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('controle_cliente', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'controle_cliente' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Controle Cliente"
+                              >
+                                <span>Controle Cliente</span>
+                                {sortField === 'controle_cliente' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 3. Controle Ricci */}
-                            <th className="py-2.5 px-3 w-32">Controle Ricci</th>
+                            <th className="py-2.5 px-3 w-32">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('controle_ricci', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'controle_ricci' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Controle Ricci"
+                              >
+                                <span>Controle Ricci</span>
+                                {sortField === 'controle_ricci' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 4. Identificação do Caso (maior largura) */}
                             <th className="py-2.5 px-3 w-[260px] lg:w-[320px]">
-                              Identificação do Caso
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('identificacao_caso', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'identificacao_caso' &&
+                                    'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Identificação do Caso"
+                              >
+                                <span>Identificação do Caso</span>
+                                {sortField === 'identificacao_caso' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
                             </th>
+
                             {/* 5. Próxima Providência (maior largura) */}
                             <th className="py-2.5 px-3 w-[240px] lg:w-[300px]">
-                              Próxima Providência
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('proximas_providencias', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'proximas_providencias' &&
+                                    'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Próxima Providência"
+                              >
+                                <span>Próxima Providência</span>
+                                {sortField === 'proximas_providencias' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
                             </th>
+
                             {/* 6. Próximo Prazo */}
-                            <th className="py-2.5 px-3 w-36">Próximo Prazo</th>
+                            <th className="py-2.5 px-3 w-36">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('prazo_proximo', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'prazo_proximo' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Próximo Prazo"
+                              >
+                                <span>Próximo Prazo</span>
+                                {sortField === 'prazo_proximo' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 7. Status */}
-                            <th className="py-2.5 px-3 w-36">Status</th>
+                            <th className="py-2.5 px-3 w-36">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('status', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'status' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Status"
+                              >
+                                <span>Status</span>
+                                {sortField === 'status' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 8. Responsável */}
-                            <th className="py-2.5 px-3 w-40">Responsável</th>
+                            <th className="py-2.5 px-3 w-40">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('responsavel', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'responsavel' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Responsável"
+                              >
+                                <span>Responsável</span>
+                                {sortField === 'responsavel' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 9. Follow-up */}
-                            <th className="py-2.5 px-3 w-32">Follow-up</th>
+                            <th className="py-2.5 px-3 w-32">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('follow_up', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'follow_up' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Follow-up"
+                              >
+                                <span>Follow-up</span>
+                                {sortField === 'follow_up' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 10. Última Atualização */}
-                            <th className="py-2.5 px-3 w-36">Última Atualização</th>
+                            <th className="py-2.5 px-3 w-36">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('updated_at', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'updated_at' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Última Atualização"
+                              >
+                                <span>Última Atualização</span>
+                                {sortField === 'updated_at' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 11. Ações (fixa à direita em rolagem se overflow) */}
                             <th className="py-2.5 px-3 w-24 text-right sticky right-0 bg-muted/30 backdrop-blur-md z-20">
                               Ações
@@ -1355,7 +1829,7 @@ export default function TarefasPage() {
                                   <td className="py-2.5 px-3 font-mono font-medium text-foreground">
                                     {c.controle_cliente ? (
                                       <span
-                                        className="whitespace-nowrap inline-block"
+                                        className="whitespace-nowrap inline-block font-semibold"
                                         title={c.controle_cliente}
                                       >
                                         {c.controle_cliente}
@@ -1576,70 +2050,63 @@ export default function TarefasPage() {
                                           </div>
                                         </div>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                          {/* Bloco 1: Identificação e Status Detalhado */}
-                                          <div className="space-y-2.5">
-                                            <div>
-                                              <span className="font-bold text-foreground block text-[11px] text-muted-foreground">
-                                                Nome do Controle
-                                              </span>
-                                              <p className="text-foreground font-semibold">
-                                                {c.nome_controle || 'Sem Controle Definido'}
-                                              </p>
-                                            </div>
-
+                                        {/* Bloco Superior da Expansão: Status & Data Ref (col-span-3), Próximas Providências (col-span-5), Prazos Ativos (col-span-4) */}
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                          {/* Bloco 1: Status e Data de Referência (sem Nome do Controle) */}
+                                          <div className="md:col-span-3 space-y-3">
                                             {c.descricao_status ? (
                                               <div>
-                                                <span className="font-bold text-foreground block text-[11px] text-muted-foreground">
+                                                <span className="font-bold text-foreground block text-[11px] text-muted-foreground mb-1">
                                                   Descrição do Status
                                                 </span>
-                                                <p className="text-foreground leading-relaxed whitespace-pre-wrap">
+                                                <div className="p-2.5 rounded-lg bg-muted/30 border border-border/50 text-foreground leading-relaxed whitespace-pre-wrap">
                                                   {c.descricao_status}
-                                                </p>
+                                                </div>
                                               </div>
                                             ) : (
                                               <div>
-                                                <span className="font-bold text-foreground block text-[11px] text-muted-foreground">
+                                                <span className="font-bold text-foreground block text-[11px] text-muted-foreground mb-1">
                                                   Status
                                                 </span>
-                                                <p className="text-foreground">
+                                                <p className="text-foreground font-medium">
                                                   {c.status?.nome || '—'}
                                                 </p>
                                               </div>
                                             )}
 
                                             <div>
-                                              <span className="font-bold text-foreground block text-[11px] text-muted-foreground">
+                                              <span className="font-bold text-foreground block text-[11px] text-muted-foreground mb-1">
                                                 Data de Referência
                                               </span>
-                                              <p className="text-foreground">
-                                                {formatDateBR(c.data_referencia)}
+                                              <p className="text-foreground font-medium flex items-center gap-1.5">
+                                                <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
+                                                <span>{formatDateBR(c.data_referencia)}</span>
                                               </p>
                                             </div>
                                           </div>
 
-                                          {/* Bloco 2: Próximas Providências completas */}
-                                          <div className="space-y-2.5">
+                                          {/* Bloco 2: Próximas Providências completas (com mais largura) */}
+                                          <div className="md:col-span-5 space-y-2">
                                             <span className="font-bold text-foreground block text-[11px] text-muted-foreground">
                                               Próximas Providências Completas
                                             </span>
-                                            <div className="p-3 rounded-lg bg-muted/40 border border-border/50 text-foreground leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                                            <div className="p-3 rounded-lg bg-muted/40 border border-border/50 text-foreground leading-relaxed whitespace-pre-wrap min-h-[90px]">
                                               {c.proximas_providencias ||
                                                 'Nenhuma providência registrada para este controle.'}
                                             </div>
                                           </div>
 
-                                          {/* Bloco 3: Todos os Prazos Ativos e Andamentos Recentes */}
-                                          <div className="space-y-2.5">
+                                          {/* Bloco 3: Todos os Prazos Ativos (com mais largura) */}
+                                          <div className="md:col-span-4 space-y-2">
                                             <span className="font-bold text-foreground block text-[11px] text-muted-foreground">
                                               Todos os Prazos Ativos ({c.prazos?.length || 0})
                                             </span>
                                             {!c.prazos || c.prazos.length === 0 ? (
-                                              <p className="text-muted-foreground italic text-[11px]">
+                                              <p className="text-muted-foreground italic text-[11px] p-3 rounded-lg bg-muted/20 border border-border/40">
                                                 Nenhum prazo cadastrado.
                                               </p>
                                             ) : (
-                                              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                                              <div className="space-y-1.5">
                                                 {c.prazos.map((p) => {
                                                   const pVenc = isPrazoOverdue(
                                                     p.data_prazo,
@@ -1648,9 +2115,9 @@ export default function TarefasPage() {
                                                   return (
                                                     <div
                                                       key={p.id}
-                                                      className="flex items-center justify-between text-[11px] p-1.5 rounded-md bg-muted/30 border border-border/40"
+                                                      className="flex items-center justify-between text-[11px] p-2 rounded-lg bg-muted/30 border border-border/40 gap-2"
                                                     >
-                                                      <div className="flex items-center gap-1.5">
+                                                      <div className="flex items-center gap-1.5 shrink-0">
                                                         {p.principal && (
                                                           <span
                                                             className="text-primary font-bold"
@@ -1670,14 +2137,14 @@ export default function TarefasPage() {
                                                           {formatDateBR(p.data_prazo)}
                                                         </span>
                                                         {p.tipo_prazo && (
-                                                          <span className="text-muted-foreground truncate max-w-[120px]">
+                                                          <span className="text-muted-foreground">
                                                             ({p.tipo_prazo.nome})
                                                           </span>
                                                         )}
                                                       </div>
                                                       {p.descricao && (
                                                         <span
-                                                          className="text-muted-foreground truncate max-w-[140px]"
+                                                          className="text-muted-foreground text-right"
                                                           title={p.descricao}
                                                         >
                                                           {p.descricao}
@@ -1688,19 +2155,131 @@ export default function TarefasPage() {
                                                 })}
                                               </div>
                                             )}
-
-                                            <div className="pt-2 border-t border-border/50 flex justify-end">
-                                              <Button
-                                                type="button"
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={(e) => handleOpenEdit(c, e)}
-                                                className="h-7 text-xs rounded-lg text-muted-foreground hover:text-foreground"
-                                              >
-                                                Ver linha do tempo de andamentos
-                                              </Button>
-                                            </div>
                                           </div>
+                                        </div>
+
+                                        {/* Bloco Inferior: Histórico de Andamentos e Decisões de Largura Total */}
+                                        <div className="border-t border-border/60 pt-4 space-y-3">
+                                          <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                              <History className="w-4 h-4 text-primary" />
+                                              <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                                                Histórico de Andamentos e Decisões
+                                              </h4>
+                                              {andamentosCache[c.id]?.items && (
+                                                <Badge
+                                                  variant="secondary"
+                                                  className="text-[10px] px-1.5 py-0 h-4 rounded-full font-bold"
+                                                >
+                                                  {andamentosCache[c.id]?.items?.length || 0}
+                                                </Badge>
+                                              )}
+                                            </div>
+
+                                            {/* Ação de recarregar histórico sob demanda */}
+                                            {andamentosCache[c.id]?.items !== undefined &&
+                                              !andamentosCache[c.id]?.loading && (
+                                                <Button
+                                                  type="button"
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  onClick={() => loadHistorico(c.id, true)}
+                                                  className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground rounded-md"
+                                                  title="Recarregar andamentos deste controle"
+                                                >
+                                                  <RotateCw className="w-3 h-3 mr-1" />
+                                                  Recarregar
+                                                </Button>
+                                              )}
+                                          </div>
+
+                                          {/* Estado de Carregando histórico... */}
+                                          {andamentosCache[c.id]?.loading && (
+                                            <div className="p-4 rounded-xl bg-muted/20 border border-border/40 text-muted-foreground flex items-center justify-center gap-2 text-xs">
+                                              <RefreshCw className="w-4 h-4 animate-spin text-primary" />
+                                              <span>Carregando histórico...</span>
+                                            </div>
+                                          )}
+
+                                          {/* Estado de Erro ao carregar histórico */}
+                                          {andamentosCache[c.id]?.error &&
+                                            !andamentosCache[c.id]?.loading && (
+                                              <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive flex items-center justify-between text-xs">
+                                                <div className="flex items-center gap-2">
+                                                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                                                  <span>Não foi possível carregar o histórico</span>
+                                                </div>
+                                                <Button
+                                                  type="button"
+                                                  variant="outline"
+                                                  size="sm"
+                                                  onClick={() => loadHistorico(c.id, true)}
+                                                  className="h-7 text-xs rounded-lg border-destructive/30 hover:bg-destructive/10 text-destructive font-medium"
+                                                >
+                                                  Tentar novamente
+                                                </Button>
+                                              </div>
+                                            )}
+
+                                          {/* Lista do histórico quando carregado */}
+                                          {!andamentosCache[c.id]?.loading &&
+                                            !andamentosCache[c.id]?.error && (
+                                              <>
+                                                {!andamentosCache[c.id]?.items ||
+                                                andamentosCache[c.id]?.items?.length === 0 ? (
+                                                  <p className="text-muted-foreground italic text-[11px] p-3 rounded-lg bg-muted/20 border border-border/40 text-center">
+                                                    Nenhum andamento registrado
+                                                  </p>
+                                                ) : (
+                                                  <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-[2px] before:bg-border/80">
+                                                    {andamentosCache[c.id]?.items?.map(
+                                                      (andamento) => (
+                                                        <div
+                                                          key={andamento.id}
+                                                          className="relative space-y-1.5"
+                                                        >
+                                                          {/* Marcador vertical da linha do tempo */}
+                                                          <span className="absolute -left-6 top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-card" />
+
+                                                          {/* Cabeçalho do andamento: data e autor/data técnica */}
+                                                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                                                            <span className="font-bold text-foreground text-xs">
+                                                              {formatDateBR(
+                                                                andamento.data_andamento,
+                                                              )}
+                                                            </span>
+                                                            {(andamento.autor_nome ||
+                                                              andamento.created_at) && (
+                                                              <span className="text-[11px] text-muted-foreground">
+                                                                {andamento.autor_nome
+                                                                  ? `por ${andamento.autor_nome}`
+                                                                  : ''}
+                                                                {andamento.created_at && (
+                                                                  <span>
+                                                                    {andamento.autor_nome
+                                                                      ? ' • '
+                                                                      : ''}
+                                                                    incluído em{' '}
+                                                                    {formatDateTimeBR(
+                                                                      andamento.created_at,
+                                                                    )}
+                                                                  </span>
+                                                                )}
+                                                              </span>
+                                                            )}
+                                                          </div>
+
+                                                          {/* Descrição integral sem corte, sem truncate, sem line-clamp e com quebra de linha preservada */}
+                                                          <div className="p-3 rounded-xl bg-muted/30 border border-border/50 text-foreground text-xs leading-relaxed whitespace-pre-wrap">
+                                                            {andamento.descricao}
+                                                          </div>
+                                                        </div>
+                                                      ),
+                                                    )}
+                                                  </div>
+                                                )}
+                                              </>
+                                            )}
                                         </div>
                                       </div>
                                     </td>
@@ -1763,7 +2342,6 @@ export default function TarefasPage() {
                                 <span>{c.status?.nome || '—'}</span>
                               </span>
                             </div>
-
                             {/* Linha 2: Identificação do Caso */}
                             <div
                               onClick={() => toggleRowExpanded(c.id)}
@@ -1778,7 +2356,6 @@ export default function TarefasPage() {
                                 </p>
                               )}
                             </div>
-
                             {/* Linha 3: Próximo Prazo, Follow-up e Responsável */}
                             <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-border/40">
                               <div>
@@ -1831,7 +2408,6 @@ export default function TarefasPage() {
                                 <span>{formatDateTimeBR(c.updated_at)}</span>
                               </div>
                             </div>
-
                             {/* Botões de Ação no Mobile */}
                             <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/40">
                               <Button
@@ -1877,68 +2453,196 @@ export default function TarefasPage() {
                                 </Button>
                               </div>
                             </div>
-
                             {/* Detalhes expandidos no mobile */}
                             {isExpanded && (
-                              <div className="p-3 bg-muted/30 border border-border/60 rounded-xl space-y-3 text-xs mt-2 animate-fade-in">
-                                <div>
-                                  <span className="font-bold text-[10px] text-muted-foreground uppercase block">
-                                    Nome do Controle
-                                  </span>
-                                  <p className="font-medium text-foreground">
-                                    {c.nome_controle || 'Sem Controle Definido'}
-                                  </p>
-                                </div>
-
-                                {c.descricao_status && (
+                              <div className="p-3.5 bg-muted/30 border border-border/60 rounded-xl space-y-3.5 text-xs mt-2 animate-fade-in">
+                                {c.descricao_status ? (
                                   <div>
-                                    <span className="font-bold text-[10px] text-muted-foreground uppercase block">
+                                    <span className="font-bold text-[10px] text-muted-foreground uppercase block mb-1">
                                       Descrição do Status
                                     </span>
-                                    <p className="text-foreground leading-relaxed">
+                                    <div className="p-2.5 rounded-lg bg-background border border-border/50 text-foreground leading-relaxed whitespace-pre-wrap">
                                       {c.descricao_status}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <span className="font-bold text-[10px] text-muted-foreground uppercase block mb-0.5">
+                                      Status
+                                    </span>
+                                    <p className="text-foreground font-medium">
+                                      {c.status?.nome || '—'}
                                     </p>
                                   </div>
                                 )}
 
                                 <div>
-                                  <span className="font-bold text-[10px] text-muted-foreground uppercase block">
-                                    Próximas Providências Completas
+                                  <span className="font-bold text-[10px] text-muted-foreground uppercase block mb-0.5">
+                                    Data de Referência
                                   </span>
-                                  <p className="text-foreground leading-relaxed whitespace-pre-wrap">
-                                    {c.proximas_providencias || 'Nenhuma providência registrada.'}
+                                  <p className="text-foreground font-medium flex items-center gap-1.5">
+                                    <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
+                                    <span>{formatDateBR(c.data_referencia)}</span>
                                   </p>
                                 </div>
 
                                 <div>
                                   <span className="font-bold text-[10px] text-muted-foreground uppercase block mb-1">
-                                    Todos os Prazos ({c.prazos?.length || 0})
+                                    Próximas Providências Completas
+                                  </span>
+                                  <div className="p-2.5 rounded-lg bg-background border border-border/50 text-foreground leading-relaxed whitespace-pre-wrap">
+                                    {c.proximas_providencias || 'Nenhuma providência registrada.'}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <span className="font-bold text-[10px] text-muted-foreground uppercase block mb-1.5">
+                                    Todos os Prazos Ativos ({c.prazos?.length || 0})
                                   </span>
                                   {c.prazos && c.prazos.length > 0 ? (
-                                    <div className="space-y-1">
-                                      {c.prazos.map((p) => (
-                                        <div
-                                          key={p.id}
-                                          className="text-[11px] p-1.5 rounded bg-card border border-border/40 flex items-center justify-between"
-                                        >
-                                          <span>
-                                            {p.principal && '★ '}
-                                            {formatDateBR(p.data_prazo)}
-                                          </span>
-                                          <span className="text-muted-foreground truncate max-w-[120px]">
-                                            {p.tipo_prazo?.nome || p.descricao}
-                                          </span>
-                                        </div>
-                                      ))}
+                                    <div className="space-y-1.5">
+                                      {c.prazos.map((p) => {
+                                        const pVenc = isPrazoOverdue(p.data_prazo, c.status)
+                                        return (
+                                          <div
+                                            key={p.id}
+                                            className="text-[11px] p-2 rounded-lg bg-background border border-border/40 flex items-center justify-between gap-2"
+                                          >
+                                            <span
+                                              className={cn(
+                                                'font-semibold shrink-0',
+                                                pVenc
+                                                  ? 'text-destructive font-bold'
+                                                  : 'text-foreground',
+                                              )}
+                                            >
+                                              {p.principal && '★ '}
+                                              {formatDateBR(p.data_prazo)}
+                                            </span>
+                                            <span className="text-muted-foreground text-right">
+                                              {p.tipo_prazo?.nome || p.descricao || 'Prazo'}
+                                            </span>
+                                          </div>
+                                        )
+                                      })}
                                     </div>
                                   ) : (
-                                    <p className="text-muted-foreground italic text-[11px]">
+                                    <p className="text-muted-foreground italic text-[11px] p-2 rounded-lg bg-background border border-border/40">
                                       Sem prazos ativos.
                                     </p>
                                   )}
                                 </div>
+
+                                {/* Histórico de Andamentos e Decisões no Mobile */}
+                                <div className="border-t border-border/60 pt-3 space-y-2.5">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                      <History className="w-3.5 h-3.5 text-primary" />
+                                      <h5 className="text-[11px] font-bold text-foreground uppercase tracking-wider">
+                                        Histórico de Andamentos
+                                      </h5>
+                                      {andamentosCache[c.id]?.items && (
+                                        <Badge
+                                          variant="secondary"
+                                          className="text-[9px] px-1 py-0 h-4 rounded-full font-bold"
+                                        >
+                                          {andamentosCache[c.id]?.items?.length || 0}
+                                        </Badge>
+                                      )}
+                                    </div>
+
+                                    {andamentosCache[c.id]?.items !== undefined &&
+                                      !andamentosCache[c.id]?.loading && (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => loadHistorico(c.id, true)}
+                                          className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                                        >
+                                          <RotateCw className="w-3 h-3 mr-1" />
+                                          Atualizar
+                                        </Button>
+                                      )}
+                                  </div>
+
+                                  {/* Loading state mobile */}
+                                  {andamentosCache[c.id]?.loading && (
+                                    <div className="p-3 rounded-lg bg-background border border-border/40 text-muted-foreground flex items-center justify-center gap-2 text-xs">
+                                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                                      <span>Carregando histórico...</span>
+                                    </div>
+                                  )}
+
+                                  {/* Error state mobile */}
+                                  {andamentosCache[c.id]?.error &&
+                                    !andamentosCache[c.id]?.loading && (
+                                      <div className="p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                          <span>Não foi possível carregar o histórico</span>
+                                        </div>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => loadHistorico(c.id, true)}
+                                          className="h-6 text-[10px] border-destructive/30 text-destructive font-medium"
+                                        >
+                                          Tentar novamente
+                                        </Button>
+                                      </div>
+                                    )}
+
+                                  {/* Items list mobile */}
+                                  {!andamentosCache[c.id]?.loading &&
+                                    !andamentosCache[c.id]?.error && (
+                                      <>
+                                        {!andamentosCache[c.id]?.items ||
+                                        andamentosCache[c.id]?.items?.length === 0 ? (
+                                          <p className="text-muted-foreground italic text-[11px] p-2.5 rounded-lg bg-background border border-border/40 text-center">
+                                            Nenhum andamento registrado
+                                          </p>
+                                        ) : (
+                                          <div className="relative pl-5 space-y-3 before:absolute before:left-1.5 before:top-2 before:bottom-2 before:w-[2px] before:bg-border/80">
+                                            {andamentosCache[c.id]?.items?.map((andamento) => (
+                                              <div
+                                                key={andamento.id}
+                                                className="relative space-y-1"
+                                              >
+                                                <span className="absolute -left-5 top-1 w-2 h-2 rounded-full bg-primary ring-2 ring-card" />
+                                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                                  <span className="font-bold text-foreground text-xs">
+                                                    {formatDateBR(andamento.data_andamento)}
+                                                  </span>
+                                                  {(andamento.autor_nome ||
+                                                    andamento.created_at) && (
+                                                    <span className="text-[10px] text-muted-foreground">
+                                                      {andamento.autor_nome
+                                                        ? `por ${andamento.autor_nome}`
+                                                        : ''}
+                                                      {andamento.created_at && (
+                                                        <span>
+                                                          {andamento.autor_nome ? ' • ' : ''}
+                                                          {formatDateBR(andamento.created_at)}
+                                                        </span>
+                                                      )}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="p-2.5 rounded-lg bg-background border border-border/50 text-foreground text-xs leading-relaxed whitespace-pre-wrap">
+                                                  {andamento.descricao}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </>
+                                    )}
+                                </div>
                               </div>
                             )}
+                            =======
                           </div>
                         )
                       })}
@@ -1961,6 +2665,14 @@ export default function TarefasPage() {
         responsaveisCatalogo={responsaveisCatalogo}
         usuariosInternos={usuariosInternos}
         onSaved={() => {
+          if (controleToEdit?.id) {
+            // Invalida cache deste controle para recarregar quando reaberto
+            setAndamentosCache((prev) => {
+              const next = { ...prev }
+              delete next[controleToEdit.id]
+              return next
+            })
+          }
           refreshControles()
         }}
       />
