@@ -1,13 +1,17 @@
-import { ReactNode, useState } from 'react'
+import { ReactNode, useState, useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   FileSpreadsheet,
   Settings as SettingsIcon,
+  TableProperties,
+  ChevronDown,
   Check,
   Database,
   Loader2,
   LogOut,
+  FolderKanban,
+  UserCheck,
 } from 'lucide-react'
 import { useTheme } from '@/hooks/useTheme'
 import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
@@ -20,24 +24,6 @@ interface LayoutProps {
   children?: ReactNode
 }
 
-const navItems = [
-  {
-    path: '/',
-    label: 'Dashboard',
-    icon: LayoutDashboard,
-  },
-  {
-    path: '/tarefas',
-    label: 'Controles',
-    icon: FileSpreadsheet,
-  },
-  {
-    path: '/configuracoes',
-    label: 'Configurações',
-    icon: SettingsIcon,
-  },
-]
-
 export default function Layout({ children }: LayoutProps) {
   // Inicializa o tema para assegurar que a classe .dark é aplicada ao html
   useTheme()
@@ -47,6 +33,21 @@ export default function Layout({ children }: LayoutProps) {
   const { toast } = useToast()
   const supabaseConn = useSupabaseConnection()
   const [loggingOut, setLoggingOut] = useState(false)
+
+  // Submenu Tabelas expansível:
+  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes ou /tabelas/responsaveis)
+  const isTabelasChildActive =
+    location.pathname.startsWith('/tabelas/nomes') ||
+    location.pathname.startsWith('/tabelas/responsaveis')
+
+  const [tabelasExpanded, setTabelasExpanded] = useState(isTabelasChildActive)
+
+  // Mantém aberto se navegar para dentro
+  useEffect(() => {
+    if (isTabelasChildActive) {
+      setTabelasExpanded(true)
+    }
+  }, [isTabelasChildActive])
 
   // Deriva dados visuais do usuário logado diretamente do e-mail do auth (sem depender de RLS de perfis)
   const userEmail = user?.email || ''
@@ -97,36 +98,152 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Navigation Items */}
         <nav className="flex-1 py-6 px-3 space-y-1.5">
-          {navItems.map((item) => {
-            const Icon = item.icon
-            const isActive = location.pathname === item.path
+          {/* Dashboard */}
+          <NavLink
+            to="/"
+            end
+            className={cn(
+              'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
+              location.pathname === '/'
+                ? 'bg-primary/10 text-primary font-semibold shadow-xs'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+            )}
+            title="Dashboard"
+          >
+            {location.pathname === '/' && (
+              <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
+            )}
+            <LayoutDashboard
+              className={cn(
+                'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
+                location.pathname === '/'
+                  ? 'text-primary stroke-[2.2]'
+                  : 'text-muted-foreground stroke-[1.8]',
+              )}
+            />
+            <span className="hidden lg:inline-block truncate">Dashboard</span>
+          </NavLink>
 
-            return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
-                  isActive
-                    ? 'bg-primary/10 text-primary font-semibold shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
-                )}
-                title={item.label}
-              >
-                {/* Left accent bar on active */}
-                {isActive && (
-                  <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
-                )}
-                <Icon
+          {/* Controles */}
+          <NavLink
+            to="/tarefas"
+            className={cn(
+              'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
+              location.pathname === '/tarefas'
+                ? 'bg-primary/10 text-primary font-semibold shadow-xs'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+            )}
+            title="Controles"
+          >
+            {location.pathname === '/tarefas' && (
+              <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
+            )}
+            <FileSpreadsheet
+              className={cn(
+                'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
+                location.pathname === '/tarefas'
+                  ? 'text-primary stroke-[2.2]'
+                  : 'text-muted-foreground stroke-[1.8]',
+              )}
+            />
+            <span className="hidden lg:inline-block truncate">Controles</span>
+          </NavLink>
+
+          {/* Tabelas (Expansível) */}
+          <div className="space-y-1">
+            <button
+              type="button"
+              onClick={() => setTabelasExpanded((prev) => !prev)}
+              className={cn(
+                'w-full group relative flex items-center justify-between gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200 text-left',
+                isTabelasChildActive
+                  ? 'bg-primary/10 text-primary font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+              )}
+              title="Tabelas"
+            >
+              {isTabelasChildActive && (
+                <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
+              )}
+              <div className="flex items-center gap-3.5 min-w-0">
+                <TableProperties
                   className={cn(
                     'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
-                    isActive ? 'text-primary stroke-[2.2]' : 'text-muted-foreground stroke-[1.8]',
+                    isTabelasChildActive
+                      ? 'text-primary stroke-[2.2]'
+                      : 'text-muted-foreground stroke-[1.8]',
                   )}
                 />
-                <span className="hidden lg:inline-block truncate">{item.label}</span>
-              </NavLink>
-            )
-          })}
+                <span className="hidden lg:inline-block truncate">Tabelas</span>
+              </div>
+              <ChevronDown
+                className={cn(
+                  'hidden lg:inline-block w-4 h-4 shrink-0 transition-transform duration-200 opacity-70',
+                  tabelasExpanded && 'rotate-180',
+                )}
+              />
+            </button>
+
+            {/* Subitens de Tabelas */}
+            {tabelasExpanded && (
+              <div className="pl-3 lg:pl-6 pr-1 space-y-1 py-0.5 animate-fade-in">
+                <NavLink
+                  to="/tabelas/nomes"
+                  className={cn(
+                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                    location.pathname === '/tabelas/nomes'
+                      ? 'bg-primary/15 text-primary font-semibold'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                  )}
+                  title="Nomes dos Controles"
+                >
+                  <FolderKanban className="w-4 h-4 shrink-0" />
+                  <span className="hidden lg:inline-block truncate">Nomes dos Controles</span>
+                </NavLink>
+
+                <NavLink
+                  to="/tabelas/responsaveis"
+                  className={cn(
+                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                    location.pathname === '/tabelas/responsaveis'
+                      ? 'bg-primary/15 text-primary font-semibold'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                  )}
+                  title="Responsáveis pelo Controle"
+                >
+                  <UserCheck className="w-4 h-4 shrink-0" />
+                  <span className="hidden lg:inline-block truncate">
+                    Responsáveis pelo Controle
+                  </span>
+                </NavLink>
+              </div>
+            )}
+          </div>
+
+          {/* Configurações */}
+          <NavLink
+            to="/configuracoes"
+            className={cn(
+              'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
+              location.pathname === '/configuracoes'
+                ? 'bg-primary/10 text-primary font-semibold shadow-xs'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+            )}
+            title="Configurações"
+          >
+            {location.pathname === '/configuracoes' && (
+              <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
+            )}
+            <SettingsIcon
+              className={cn(
+                'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
+                location.pathname === '/configuracoes'
+                  ? 'text-primary stroke-[2.2]'
+                  : 'text-muted-foreground stroke-[1.8]',
+              )}
+            />
+            <span className="hidden lg:inline-block truncate">Configurações</span>
+          </NavLink>
         </nav>
 
         {/* Sidebar Footer */}
@@ -215,41 +332,88 @@ export default function Layout({ children }: LayoutProps) {
       </main>
 
       {/* Mobile Fixed Bottom Navigation Bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur-md border-t border-border flex items-center justify-around px-2 py-2 safe-area-pb">
-        {navItems.map((item) => {
-          const Icon = item.icon
-          const isActive = location.pathname === item.path
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur-md border-t border-border flex items-center justify-around px-1 py-1.5 safe-area-pb text-[11px]">
+        {/* Dashboard */}
+        <NavLink
+          to="/"
+          end
+          className={cn(
+            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+            location.pathname === '/'
+              ? 'text-primary font-semibold'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {location.pathname === '/' && (
+            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+          )}
+          <LayoutDashboard className="w-4 h-4 mb-0.5" />
+          <span>Dashboard</span>
+        </NavLink>
 
-          return (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={cn(
-                'flex flex-col items-center justify-center py-1.5 px-3 rounded-lg text-xs font-medium transition-colors relative',
-                isActive
-                  ? 'text-primary font-semibold'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {isActive && <span className="absolute -top-2 w-8 h-1 bg-primary rounded-full" />}
-              <Icon className={cn('w-5 h-5 mb-1', isActive ? 'stroke-[2.2]' : 'stroke-[1.8]')} />
-              <span>{item.label}</span>
-            </NavLink>
-          )
-        })}
+        {/* Controles */}
+        <NavLink
+          to="/tarefas"
+          className={cn(
+            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+            location.pathname === '/tarefas'
+              ? 'text-primary font-semibold'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {location.pathname === '/tarefas' && (
+            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+          )}
+          <FileSpreadsheet className="w-4 h-4 mb-0.5" />
+          <span>Controles</span>
+        </NavLink>
+
+        {/* Tabelas (Navega para a primeira subpágina ou ativa com destaque) */}
+        <NavLink
+          to="/tabelas/nomes"
+          className={cn(
+            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+            isTabelasChildActive
+              ? 'text-primary font-semibold'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {isTabelasChildActive && (
+            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+          )}
+          <TableProperties className="w-4 h-4 mb-0.5" />
+          <span>Tabelas</span>
+        </NavLink>
+
+        {/* Configurações */}
+        <NavLink
+          to="/configuracoes"
+          className={cn(
+            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+            location.pathname === '/configuracoes'
+              ? 'text-primary font-semibold'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {location.pathname === '/configuracoes' && (
+            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+          )}
+          <SettingsIcon className="w-4 h-4 mb-0.5" />
+          <span>Ajustes</span>
+        </NavLink>
 
         {/* Botão Sair no Mobile */}
         <button
           type="button"
           onClick={handleSignOut}
           disabled={loggingOut}
-          className="flex flex-col items-center justify-center py-1.5 px-3 rounded-lg text-xs font-medium text-muted-foreground hover:text-destructive transition-colors"
+          className="flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium text-muted-foreground hover:text-destructive transition-colors"
           title="Sair do aplicativo"
         >
           {loggingOut ? (
-            <Loader2 className="w-5 h-5 mb-1 animate-spin text-destructive" />
+            <Loader2 className="w-4 h-4 mb-0.5 animate-spin text-destructive" />
           ) : (
-            <LogOut className="w-5 h-5 mb-1 stroke-[1.8]" />
+            <LogOut className="w-4 h-4 mb-0.5 stroke-[1.8]" />
           )}
           <span>Sair</span>
         </button>

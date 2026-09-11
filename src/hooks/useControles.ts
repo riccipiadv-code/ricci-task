@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   TaskControleRecord,
+  TaskNomeControleRecord,
+  TaskResponsavelControleRecord,
   TaskStatusRecord,
   TaskTipoPrazoRecord,
   TaskResponsavelRecord,
@@ -18,6 +20,10 @@ import { useAuth } from '@/hooks/use-auth'
 export function useControles() {
   const { user } = useAuth()
   const [controles, setControles] = useState<TaskControleRecord[]>([])
+  const [nomesControle, setNomesControle] = useState<TaskNomeControleRecord[]>([])
+  const [responsaveisControle, setResponsaveisControle] = useState<TaskResponsavelControleRecord[]>(
+    [],
+  )
   const [statusList, setStatusList] = useState<TaskStatusRecord[]>([])
   const [tiposPrazoList, setTiposPrazoList] = useState<TaskTipoPrazoRecord[]>([])
   const [responsaveisCatalogo, setResponsaveisCatalogo] = useState<TaskResponsavelRecord[]>([])
@@ -26,19 +32,19 @@ export function useControles() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Carrega metadados (status, responsáveis, tipos de prazo)
+  // Carrega metadados (status, tipos de prazo, nomes dos controles e responsáveis pelo controle)
   const loadMetadata = useCallback(async () => {
     try {
-      const [statuses, tipos, catResps, users] = await Promise.all([
+      const [statuses, tipos, nomes, resps] = await Promise.all([
         controleService.getStatusList(),
         controleService.getTiposPrazoList(),
-        controleService.getResponsaveisCatalogo(),
-        controleService.getUsuariosInternosLegaldesk(),
+        controleService.getNomesControle({ incluirInativos: true }),
+        controleService.getResponsaveisControle({ incluirInativos: true }),
       ])
       setStatusList(statuses)
       setTiposPrazoList(tipos)
-      setResponsaveisCatalogo(catResps)
-      setUsuariosInternos(users)
+      setNomesControle(nomes)
+      setResponsaveisControle(resps)
     } catch (err: any) {
       console.error('Erro ao carregar metadados:', err)
       setError(err?.message || 'Falha ao carregar cadastros')
@@ -142,31 +148,100 @@ export function useControles() {
     return controleService.calculateMetrics(controles)
   }, [controles])
 
-  // Lista unificada e agrupada de opções de responsáveis para formulários
+  // Lista de opções de responsáveis alimentada EXCLUSIVAMENTE por task_responsaveis_controle
   const responsaveisOptions = useMemo<ResponsavelOption[]>(() => {
-    const internas: ResponsavelOption[] = usuariosInternos.map((u) => ({
-      value: `interno:${u.id}`,
-      id: u.id,
-      grupo: 'interno',
-      nome: u.nome,
-      detalhe: u.email || (u.sigla ? `Sigla: ${u.sigla}` : undefined),
-      tipo: 'interno',
-    }))
+    return responsaveisControle
+      .filter((r) => r.ativo)
+      .map((r) => ({
+        value: r.id,
+        id: r.id,
+        grupo: 'catalogo',
+        nome: r.nome,
+        detalhe: undefined,
+        tipo: 'equipe',
+      }))
+  }, [responsaveisControle])
 
-    const catalogos: ResponsavelOption[] = responsaveisCatalogo.map((r) => ({
-      value: `catalogo:${r.id}`,
-      id: r.id,
-      grupo: 'catalogo',
-      nome: r.nome,
-      detalhe: r.tipo === 'equipe' ? 'Equipe interna' : 'Terceiro / Correspondente',
-      tipo: r.tipo,
-    }))
+  // CRUD Nomes dos Controles
+  const refreshNomesControle = useCallback(async () => {
+    try {
+      const data = await controleService.getNomesControle({ incluirInativos: true })
+      setNomesControle(data)
+    } catch (err: any) {
+      console.error('Erro ao atualizar nomes de controle:', err)
+    }
+  }, [])
 
-    return [...internas, ...catalogos]
-  }, [usuariosInternos, responsaveisCatalogo])
+  const saveNomeControle = useCallback(
+    async (input: { id?: string; nome: string; ativo?: boolean }) => {
+      const saved = await controleService.saveNomeControle(input, user?.id)
+      await refreshNomesControle()
+      await refreshControles()
+      return saved
+    },
+    [user?.id, refreshNomesControle, refreshControles],
+  )
+
+  const toggleNomeControleAtivo = useCallback(
+    async (id: string, ativo: boolean) => {
+      await controleService.toggleNomeControleAtivo(id, ativo, user?.id)
+      await refreshNomesControle()
+      await refreshControles()
+    },
+    [user?.id, refreshNomesControle, refreshControles],
+  )
+
+  const excluirNomeControle = useCallback(
+    async (id: string) => {
+      await controleService.excluirNomeControle(id, user?.id)
+      await refreshNomesControle()
+      await refreshControles()
+    },
+    [user?.id, refreshNomesControle, refreshControles],
+  )
+
+  // CRUD Responsáveis pelo Controle
+  const refreshResponsaveisControle = useCallback(async () => {
+    try {
+      const data = await controleService.getResponsaveisControle({ incluirInativos: true })
+      setResponsaveisControle(data)
+    } catch (err: any) {
+      console.error('Erro ao atualizar responsaveis do controle:', err)
+    }
+  }, [])
+
+  const saveResponsavelControle = useCallback(
+    async (input: { id?: string; nome: string; ativo?: boolean }) => {
+      const saved = await controleService.saveResponsavelControle(input, user?.id)
+      await refreshResponsaveisControle()
+      await refreshControles()
+      return saved
+    },
+    [user?.id, refreshResponsaveisControle, refreshControles],
+  )
+
+  const toggleResponsavelControleAtivo = useCallback(
+    async (id: string, ativo: boolean) => {
+      await controleService.toggleResponsavelControleAtivo(id, ativo, user?.id)
+      await refreshResponsaveisControle()
+      await refreshControles()
+    },
+    [user?.id, refreshResponsaveisControle, refreshControles],
+  )
+
+  const excluirResponsavelControle = useCallback(
+    async (id: string) => {
+      await controleService.excluirResponsavelControle(id, user?.id)
+      await refreshResponsaveisControle()
+      await refreshControles()
+    },
+    [user?.id, refreshResponsaveisControle, refreshControles],
+  )
 
   return {
     controles,
+    nomesControle,
+    responsaveisControle,
     statusList,
     tiposPrazoList,
     responsaveisCatalogo,
@@ -178,6 +253,14 @@ export function useControles() {
     error,
     refreshAll,
     refreshControles,
+    refreshNomesControle,
+    refreshResponsaveisControle,
+    saveNomeControle,
+    toggleNomeControleAtivo,
+    excluirNomeControle,
+    saveResponsavelControle,
+    toggleResponsavelControleAtivo,
+    excluirResponsavelControle,
     saveControle,
     arquivarControle,
     savePrazo,

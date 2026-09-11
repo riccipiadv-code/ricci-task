@@ -7,6 +7,8 @@ import { AuthProvider } from '@/hooks/use-auth'
 import { ProtectedLayout, PublicRoute } from './components/ProtectedRoute'
 import Index from './pages/Index'
 import TarefasPage from './pages/Tarefas'
+import NomesControlePage from './pages/NomesControle'
+import ResponsaveisControlePage from './pages/ResponsaveisControle'
 import ConfiguracoesPage from './pages/Configuracoes'
 import LoginPage from './pages/Login'
 import NotFound from './pages/NotFound'
@@ -35,6 +37,8 @@ const App = () => (
           <Route element={<ProtectedLayout />}>
             <Route path="/" element={<Index />} />
             <Route path="/tarefas" element={<TarefasPage />} />
+            <Route path="/tabelas/nomes" element={<NomesControlePage />} />
+            <Route path="/tabelas/responsaveis" element={<ResponsaveisControlePage />} />
             <Route path="/configuracoes" element={<ConfiguracoesPage />} />
           </Route>
 

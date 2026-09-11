@@ -161,32 +161,34 @@ export default function TarefasPage() {
     return () => clearTimeout(handler)
   }, [searchInput])
 
-  // Lista única e ordenada de todos os "Nome do Controle" existentes no acervo
+  // Lista única e ordenada de todos os "Nome do Controle" existentes no acervo (por ID e rótulo)
   const allNomesControle = useMemo(() => {
-    const set = new Set<string>()
+    const map = new Map<string, string>()
     for (const c of controles) {
-      if (c.nome_controle && c.nome_controle.trim()) {
-        set.add(c.nome_controle.trim())
-      } else {
-        set.add('Sem Controle Definido')
+      const idKey = c.nome_controle_id || 'sem_controle'
+      const label = c.nome_controle_rel?.nome || c.nome_controle?.trim() || 'Sem Controle Definido'
+      if (!map.has(idKey)) {
+        map.set(idKey, label)
       }
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+    return Array.from(map.entries())
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'))
   }, [controles])
 
-  // Alterna grupo individual
-  const toggleGroupCollapse = (groupName: string) => {
+  // Alterna grupo individual por ID
+  const toggleGroupCollapse = (groupId: string) => {
     setCollapsedGroups((prev) => ({
       ...prev,
-      [groupName]: !prev[groupName],
+      [groupId]: !prev[groupId],
     }))
   }
 
   // Alterna todos os grupos (expandir todos ou recolher todos)
   const toggleAllGroups = (collapse: boolean) => {
     const next: Record<string, boolean> = {}
-    allNomesControle.forEach((name) => {
-      next[name] = collapse
+    allNomesControle.forEach((item) => {
+      next[item.id] = collapse
     })
     setCollapsedGroups(next)
   }
@@ -312,11 +314,11 @@ export default function TarefasPage() {
       })
     }
 
-    // 2. Filtro por Controle (seleção múltipla quando > 1)
+    // 2. Filtro por Controle (filtrando por ID `nome_controle_id`)
     if (selectedControles.length > 0) {
       list = list.filter((c) => {
-        const groupName = c.nome_controle?.trim() || 'Sem Controle Definido'
-        return selectedControles.includes(groupName)
+        const idKey = c.nome_controle_id || 'sem_controle'
+        return selectedControles.includes(idKey)
       })
     }
 
@@ -325,15 +327,9 @@ export default function TarefasPage() {
       list = list.filter((c) => c.status_id === statusFilter)
     }
 
-    // 4. Filtro por Responsável
+    // 4. Filtro por Responsável (filtrando exclusivamente por `responsavel_controle_id`)
     if (responsavelFilter !== 'todos') {
-      if (responsavelFilter.startsWith('interno:')) {
-        const id = responsavelFilter.replace('interno:', '')
-        list = list.filter((c) => c.responsavel_legaldesk_id === id)
-      } else if (responsavelFilter.startsWith('catalogo:')) {
-        const id = responsavelFilter.replace('catalogo:', '')
-        list = list.filter((c) => c.responsavel_id === id)
-      }
+      list = list.filter((c) => c.responsavel_controle_id === responsavelFilter)
     }
 
     // 5. Filtro por Tipo de Prazo
@@ -539,32 +535,32 @@ export default function TarefasPage() {
     next7DaysStr,
   ])
 
-  // Agrupamento dos controles filtrados por `nome_controle`
+  // Agrupamento dos controles filtrados por `nome_controle_id`, usando o nome como rótulo
   // Regra 10: Dentro de cada grupo, casos ficam ordenados pelo campo selecionado.
   // Quando houver vários grupos, ordena também os grupos pela primeira ocorrência resultante;
   // no padrão de prazo, o grupo com o prazo mais próximo vem primeiro.
   const groupedControles = useMemo(() => {
-    const map = new Map<string, TaskControleRecord[]>()
+    const map = new Map<string, { id: string; nome: string; items: TaskControleRecord[] }>()
     // Preserva a ordem de inserção da primeira aparição na lista já ordenada!
     const groupOrder: string[] = []
 
     for (const item of filteredControles) {
-      const groupName = item.nome_controle?.trim() || 'Sem Controle Definido'
-      const existing = map.get(groupName)
+      const groupId = item.nome_controle_id || 'sem_controle'
+      const groupName =
+        item.nome_controle_rel?.nome || item.nome_controle?.trim() || 'Sem Controle Definido'
+      const existing = map.get(groupId)
       if (!existing) {
-        map.set(groupName, [item])
-        groupOrder.push(groupName)
+        map.set(groupId, { id: groupId, nome: groupName, items: [item] })
+        groupOrder.push(groupId)
       } else {
-        existing.push(item)
+        existing.items.push(item)
       }
     }
 
-    const groups: { nome: string; items: TaskControleRecord[] }[] = []
-    for (const name of groupOrder) {
-      groups.push({
-        nome: name,
-        items: map.get(name) || [],
-      })
+    const groups: { id: string; nome: string; items: TaskControleRecord[] }[] = []
+    for (const id of groupOrder) {
+      const g = map.get(id)
+      if (g) groups.push(g)
     }
     return groups
   }, [filteredControles])
@@ -651,12 +647,13 @@ export default function TarefasPage() {
     }
 
     if (selectedControles.length > 0) {
-      selectedControles.forEach((sc) => {
+      selectedControles.forEach((scId) => {
+        const itemInfo = allNomesControle.find((n) => n.id === scId)
         chips.push({
-          id: `controle:${sc}`,
-          label: `Controle: ${sc}`,
+          id: `controle:${scId}`,
+          label: `Controle: ${itemInfo?.label || scId}`,
           onRemove: () => {
-            setSelectedControles((prev) => prev.filter((item) => item !== sc))
+            setSelectedControles((prev) => prev.filter((item) => item !== scId))
           },
         })
       })
@@ -672,7 +669,9 @@ export default function TarefasPage() {
     }
 
     if (responsavelFilter !== 'todos') {
-      const resp = responsaveisOptions.find((r) => r.value === responsavelFilter)
+      const resp = responsaveisOptions.find(
+        (r) => r.id === responsavelFilter || r.value === responsavelFilter,
+      )
       chips.push({
         id: 'responsavel',
         label: `Resp.: ${resp?.nome || responsavelFilter}`,
@@ -895,17 +894,17 @@ export default function TarefasPage() {
                     )}
                   </div>
                   <div className="max-h-60 overflow-y-auto space-y-1 py-1">
-                    {allNomesControle.map((nome) => {
-                      const isSelected = selectedControles.includes(nome)
+                    {allNomesControle.map((item) => {
+                      const isSelected = selectedControles.includes(item.id)
                       return (
                         <button
-                          key={nome}
+                          key={item.id}
                           type="button"
                           onClick={() => {
                             if (isSelected) {
-                              setSelectedControles((prev) => prev.filter((i) => i !== nome))
+                              setSelectedControles((prev) => prev.filter((i) => i !== item.id))
                             } else {
-                              setSelectedControles((prev) => [...prev, nome])
+                              setSelectedControles((prev) => [...prev, item.id])
                             }
                           }}
                           className={cn(
@@ -915,7 +914,7 @@ export default function TarefasPage() {
                               : 'hover:bg-muted text-foreground',
                           )}
                         >
-                          <span className="truncate">{nome}</span>
+                          <span className="truncate">{item.label}</span>
                           {isSelected && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
                         </button>
                       )
@@ -960,9 +959,8 @@ export default function TarefasPage() {
               <SelectContent className="rounded-xl max-h-72">
                 <SelectItem value="todos">Todos os responsáveis</SelectItem>
                 {responsaveisOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.nome}{' '}
-                    {opt.tipo === 'interno' ? '(Interno)' : `(${opt.tipo || 'Catálogo'})`}
+                  <SelectItem key={opt.id} value={opt.id}>
+                    {opt.nome}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1184,17 +1182,17 @@ export default function TarefasPage() {
                     <div className="space-y-1.5">
                       <label className="font-semibold text-foreground">Nome do Controle</label>
                       <div className="max-h-36 overflow-y-auto space-y-1 border border-border rounded-xl p-2 bg-background">
-                        {allNomesControle.map((nome) => {
-                          const isSel = selectedControles.includes(nome)
+                        {allNomesControle.map((item) => {
+                          const isSel = selectedControles.includes(item.id)
                           return (
                             <button
-                              key={nome}
+                              key={item.id}
                               type="button"
                               onClick={() => {
                                 if (isSel) {
-                                  setSelectedControles((prev) => prev.filter((i) => i !== nome))
+                                  setSelectedControles((prev) => prev.filter((i) => i !== item.id))
                                 } else {
-                                  setSelectedControles((prev) => [...prev, nome])
+                                  setSelectedControles((prev) => [...prev, item.id])
                                 }
                               }}
                               className={cn(
@@ -1204,7 +1202,7 @@ export default function TarefasPage() {
                                   : 'hover:bg-muted text-foreground',
                               )}
                             >
-                              <span className="truncate">{nome}</span>
+                              <span className="truncate">{item.label}</span>
                               {isSel && <CheckCircle2 className="w-3.5 h-3.5" />}
                             </button>
                           )
@@ -1241,9 +1239,8 @@ export default function TarefasPage() {
                       <SelectContent className="rounded-xl max-h-60">
                         <SelectItem value="todos">Todos os responsáveis</SelectItem>
                         {responsaveisOptions.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.nome}{' '}
-                            {opt.tipo === 'interno' ? '(Interno)' : `(${opt.tipo || 'Catálogo'})`}
+                          <SelectItem key={opt.id} value={opt.id}>
+                            {opt.nome}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1498,16 +1495,15 @@ export default function TarefasPage() {
       ) : (
         <div className="space-y-5 w-full">
           {groupedControles.map((group) => {
-            const isGroupCollapsed = Boolean(collapsedGroups[group.nome])
-
+            const isGroupCollapsed = Boolean(collapsedGroups[group.id])
             return (
               <div
-                key={group.nome}
+                key={group.id}
                 className="bg-card border border-border rounded-2xl shadow-card overflow-hidden transition-all duration-200"
               >
                 {/* Cabeçalho do Grupo por Nome do Controle */}
                 <div
-                  onClick={() => toggleGroupCollapse(group.nome)}
+                  onClick={() => toggleGroupCollapse(group.id)}
                   className="px-4 py-3 sm:px-5 sm:py-3.5 bg-muted/40 hover:bg-muted/60 cursor-pointer border-b border-border/80 flex items-center justify-between gap-3 transition-colors"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
@@ -2052,7 +2048,7 @@ export default function TarefasPage() {
 
                                         {/* Bloco Superior da Expansão: Status & Data Ref (col-span-3), Próximas Providências (col-span-5), Prazos Ativos (col-span-4) */}
                                         <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                                          {/* Bloco 1: Status e Data de Referência (sem Nome do Controle) */}
+                                          {/* Bloco 1: Status e Data de Follow-up (sem Nome do Controle) */}
                                           <div className="md:col-span-3 space-y-3">
                                             {c.descricao_status ? (
                                               <div>
@@ -2076,7 +2072,7 @@ export default function TarefasPage() {
 
                                             <div>
                                               <span className="font-bold text-foreground block text-[11px] text-muted-foreground mb-1">
-                                                Data de Referência
+                                                Data de Follow-up
                                               </span>
                                               <p className="text-foreground font-medium flex items-center gap-1.5">
                                                 <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
@@ -2478,7 +2474,7 @@ export default function TarefasPage() {
 
                                 <div>
                                   <span className="font-bold text-[10px] text-muted-foreground uppercase block mb-0.5">
-                                    Data de Referência
+                                    Data de Follow-up
                                   </span>
                                   <p className="text-foreground font-medium flex items-center gap-1.5">
                                     <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
@@ -2642,7 +2638,6 @@ export default function TarefasPage() {
                                 </div>
                               </div>
                             )}
-                            =======
                           </div>
                         )
                       })}
@@ -2662,8 +2657,6 @@ export default function TarefasPage() {
         controleToEdit={controleToEdit}
         statusList={statusList}
         tiposPrazoList={tiposPrazoList}
-        responsaveisCatalogo={responsaveisCatalogo}
-        usuariosInternos={usuariosInternos}
         onSaved={() => {
           if (controleToEdit?.id) {
             // Invalida cache deste controle para recarregar quando reaberto

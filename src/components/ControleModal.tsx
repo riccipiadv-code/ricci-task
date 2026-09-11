@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -37,9 +37,15 @@ import {
   CalendarClock,
   Sparkles,
   Loader2,
+  FolderKanban,
+  UserCheck,
+  AlertCircle,
+  Search,
 } from 'lucide-react'
 import {
   TaskControleRecord,
+  TaskNomeControleRecord,
+  TaskResponsavelControleRecord,
   TaskStatusRecord,
   TaskTipoPrazoRecord,
   TaskResponsavelRecord,
@@ -60,8 +66,8 @@ interface ControleModalProps {
   controleToEdit?: TaskControleRecord | null
   statusList: TaskStatusRecord[]
   tiposPrazoList: TaskTipoPrazoRecord[]
-  responsaveisCatalogo: TaskResponsavelRecord[]
-  usuariosInternos: LegaldeskUsuarioRecord[]
+  responsaveisCatalogo?: TaskResponsavelRecord[]
+  usuariosInternos?: LegaldeskUsuarioRecord[]
   onSaved: (controle: TaskControleRecord) => void
 }
 
@@ -80,17 +86,36 @@ export function ControleModal({
   controleToEdit,
   statusList,
   tiposPrazoList,
-  responsaveisCatalogo,
-  usuariosInternos,
   onSaved,
 }: ControleModalProps) {
   const { toast } = useToast()
+
+  // Listas de nomes dos controles e responsáveis pelo controle
+  const [nomesLista, setNomesLista] = useState<TaskNomeControleRecord[]>([])
+  const [respsLista, setRespsLista] = useState<TaskResponsavelControleRecord[]>([])
+  const [loadingListas, setLoadingListas] = useState(false)
+
+  // Modais de cadastro rápido (+)
+  const [quickNomeModalOpen, setQuickNomeModalOpen] = useState(false)
+  const [quickNomeInput, setQuickNomeInput] = useState('')
+  const [quickNomeError, setQuickNomeError] = useState<string | null>(null)
+  const [quickNomeSaving, setQuickNomeSaving] = useState(false)
+
+  const [quickRespModalOpen, setQuickRespModalOpen] = useState(false)
+  const [quickRespInput, setQuickRespInput] = useState('')
+  const [quickRespError, setQuickRespError] = useState<string | null>(null)
+  const [quickRespSaving, setQuickRespSaving] = useState(false)
+
+  // Filtros de busca inline para os seletores pesquisáveis
+  const [buscaNomeSelect, setBuscaNomeSelect] = useState('')
+  const [buscaRespSelect, setBuscaRespSelect] = useState('')
 
   // Aba ativa: dados | prazos | providencias | andamentos
   const [activeTab, setActiveTab] = useState('dados')
 
   // Estado do formulário de dados do caso
-  const [nomeControle, setNomeControle] = useState('')
+  const [nomeControleId, setNomeControleId] = useState('')
+  const [responsavelControleId, setResponsavelControleId] = useState('')
   const [controleCliente, setControleCliente] = useState('')
   const [controleRicci, setControleRicci] = useState('')
   const [identificacaoCaso, setIdentificacaoCaso] = useState('')
@@ -98,10 +123,7 @@ export function ControleModal({
   const [statusId, setStatusId] = useState('')
   const [descricaoStatus, setDescricaoStatus] = useState('')
 
-  // Responsável: encoded value "interno:UUID" ou "catalogo:UUID"
-  const [responsavelSelection, setResponsavelSelection] = useState('')
-
-  // Providências e follow-up
+  // Providências e data de follow-up
   const [proximasProvidencias, setProximasProvidencias] = useState('')
   const [followUp, setFollowUp] = useState('')
   const [updatedAtDisplay, setUpdatedAtDisplay] = useState<string | null>(null)
@@ -147,18 +169,39 @@ export function ControleModal({
     return statusSelecionado?.codigo === 'aguardando_autorizacao'
   }, [statusSelecionado])
 
+  // Carrega listas de Nomes e Responsáveis ao abrir o modal
+  const carregarListasAuxiliares = useCallback(async () => {
+    setLoadingListas(true)
+    try {
+      const [nomes, resps] = await Promise.all([
+        controleService.getNomesControle({ incluirInativos: true }),
+        controleService.getResponsaveisControle({ incluirInativos: true }),
+      ])
+      setNomesLista(nomes)
+      setRespsLista(resps)
+    } catch (err) {
+      console.error('Erro ao carregar listas no ControleModal:', err)
+    } finally {
+      setLoadingListas(false)
+    }
+  }, [])
+
   // Popula o formulário ao abrir
   useEffect(() => {
     if (!open) return
 
+    carregarListasAuxiliares()
     setActiveTab('dados')
     setNomeControleError(false)
     setIdentificacaoError(false)
     setStatusError(false)
     setResponsavelError(false)
+    setBuscaNomeSelect('')
+    setBuscaRespSelect('')
 
     if (controleToEdit) {
-      setNomeControle(controleToEdit.nome_controle || '')
+      setNomeControleId(controleToEdit.nome_controle_id || '')
+      setResponsavelControleId(controleToEdit.responsavel_controle_id || '')
       setControleCliente(controleToEdit.controle_cliente || '')
       setControleRicci(controleToEdit.controle_ricci || '')
       setIdentificacaoCaso(controleToEdit.identificacao_caso || '')
@@ -172,15 +215,6 @@ export function ControleModal({
       setProximasProvidencias(controleToEdit.proximas_providencias || '')
       setFollowUp(controleToEdit.follow_up ? controleToEdit.follow_up.split('T')[0] : '')
       setUpdatedAtDisplay(controleToEdit.updated_at || null)
-
-      // Responsável
-      if (controleToEdit.responsavel_legaldesk_id) {
-        setResponsavelSelection(`interno:${controleToEdit.responsavel_legaldesk_id}`)
-      } else if (controleToEdit.responsavel_id) {
-        setResponsavelSelection(`catalogo:${controleToEdit.responsavel_id}`)
-      } else {
-        setResponsavelSelection('')
-      }
 
       // Prazos existentes
       const draftList: DraftPrazo[] = (controleToEdit.prazos || []).map((p) => ({
@@ -201,21 +235,131 @@ export function ControleModal({
       }
     } else {
       // Novo controle
-      setNomeControle('')
+      setNomeControleId('')
+      setResponsavelControleId('')
       setControleCliente('')
       setControleRicci('')
       setIdentificacaoCaso('')
       setDataReferencia(new Date().toISOString().split('T')[0])
       setStatusId(statusPadraoId)
       setDescricaoStatus('')
-      setResponsavelSelection('')
       setProximasProvidencias('')
       setFollowUp('')
       setUpdatedAtDisplay(null)
       setPrazos([])
       setAndamentos([])
     }
-  }, [open, controleToEdit, statusPadraoId])
+  }, [open, controleToEdit, statusPadraoId, carregarListasAuxiliares])
+
+  // Opções de Nomes dos Controles (ativos + selecionado caso inativo na edição)
+  const opcoesNomes = useMemo(() => {
+    let list = nomesLista.filter((n) => n.ativo || n.id === nomeControleId)
+    if (buscaNomeSelect.trim()) {
+      const q = buscaNomeSelect.trim().toLowerCase()
+      list = list.filter((n) => n.nome.toLowerCase().includes(q))
+    }
+    return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+  }, [nomesLista, nomeControleId, buscaNomeSelect])
+
+  // Opções de Responsáveis pelo Controle (ativos + selecionado caso inativo na edição)
+  const opcoesResponsaveis = useMemo(() => {
+    let list = respsLista.filter((r) => r.ativo || r.id === responsavelControleId)
+    if (buscaRespSelect.trim()) {
+      const q = buscaRespSelect.trim().toLowerCase()
+      list = list.filter((r) => r.nome.toLowerCase().includes(q))
+    }
+    return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+  }, [respsLista, responsavelControleId, buscaRespSelect])
+
+  // Cadastro rápido de Nome do Controle
+  const handleSalvarQuickNome = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setQuickNomeError(null)
+    const clean = quickNomeInput.trim()
+    if (!clean) {
+      setQuickNomeError('O Nome do Controle é obrigatório.')
+      return
+    }
+    if (clean.length > 500) {
+      setQuickNomeError('Máximo de 500 caracteres.')
+      return
+    }
+    if (!/[\p{L}\p{N}]/u.test(clean)) {
+      setQuickNomeError('Deve conter letras ou números.')
+      return
+    }
+
+    setQuickNomeSaving(true)
+    try {
+      const saved = await controleService.saveNomeControle({ nome: clean, ativo: true })
+      await carregarListasAuxiliares()
+      setNomeControleId(saved.id)
+      setNomeControleError(false)
+      setQuickNomeModalOpen(false)
+      setQuickNomeInput('')
+      toast({
+        title: 'Nome do Controle cadastrado',
+        description: `"${saved.nome}" foi selecionado automaticamente.`,
+      })
+    } catch (err: any) {
+      if (
+        err?.code === '23505' ||
+        err?.message?.includes('23505') ||
+        err?.message?.includes('Já existe um Nome do Controle equivalente')
+      ) {
+        setQuickNomeError('Já existe um Nome do Controle equivalente a este.')
+      } else {
+        setQuickNomeError(err?.message || 'Erro ao cadastrar nome do controle.')
+      }
+    } finally {
+      setQuickNomeSaving(false)
+    }
+  }
+
+  // Cadastro rápido de Responsável pelo Controle
+  const handleSalvarQuickResp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setQuickRespError(null)
+    const clean = quickRespInput.trim()
+    if (!clean) {
+      setQuickRespError('O nome do responsável é obrigatório.')
+      return
+    }
+    if (clean.length > 255) {
+      setQuickRespError('Máximo de 255 caracteres.')
+      return
+    }
+    if (!/[\p{L}\p{N}]/u.test(clean)) {
+      setQuickRespError('Deve conter letras ou números.')
+      return
+    }
+
+    setQuickRespSaving(true)
+    try {
+      const saved = await controleService.saveResponsavelControle({ nome: clean, ativo: true })
+      await carregarListasAuxiliares()
+      setResponsavelControleId(saved.id)
+      setResponsavelError(false)
+      setQuickRespModalOpen(false)
+      setQuickRespInput('')
+      toast({
+        title: 'Responsável cadastrado',
+        description: `"${saved.nome}" foi selecionado automaticamente.`,
+      })
+    } catch (err: any) {
+      if (
+        err?.code === '23505' ||
+        err?.message?.includes('23505') ||
+        err?.message?.includes('Já existe um Responsável equivalente')
+      ) {
+        setQuickRespError('Já existe um Responsável equivalente a este.')
+      } else {
+        setQuickRespError(err?.message || 'Erro ao cadastrar responsável.')
+      }
+    } finally {
+      setQuickRespSaving(false)
+    }
+  }
 
   const loadAndamentos = async (tarefaId: string) => {
     setLoadingAndamentos(true)
@@ -405,8 +549,12 @@ export function ControleModal({
     if (e) e.preventDefault()
 
     let hasError = false
-    if (!nomeControle.trim()) {
+    if (!nomeControleId) {
       setNomeControleError(true)
+      hasError = true
+    }
+    if (!responsavelControleId) {
+      setResponsavelError(true)
       hasError = true
     }
     if (!identificacaoCaso.trim()) {
@@ -417,42 +565,28 @@ export function ControleModal({
       setStatusError(true)
       hasError = true
     }
-    if (!responsavelSelection) {
-      setResponsavelError(true)
-      hasError = true
-    }
 
     if (hasError) {
       setActiveTab('dados')
       toast({
         variant: 'destructive',
         title: 'Campos obrigatórios',
-        description: 'Verifique os campos obrigatórios em Dados do Caso e Responsável.',
+        description:
+          'Preencha Nome do Controle, Responsável pelo Controle, Identificação do Caso e Status.',
       })
       return
     }
 
-    // Separa interno vs catalogo
-    let responsavelLegaldeskId: string | null = null
-    let responsavelId: string | null = null
-
-    if (responsavelSelection.startsWith('interno:')) {
-      responsavelLegaldeskId = responsavelSelection.replace('interno:', '')
-    } else if (responsavelSelection.startsWith('catalogo:')) {
-      responsavelId = responsavelSelection.replace('catalogo:', '')
-    }
-
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
-      nome_controle: nomeControle.trim(),
+      nome_controle_id: nomeControleId,
+      responsavel_controle_id: responsavelControleId,
       controle_cliente: controleCliente.trim() || null,
       controle_ricci: controleRicci.trim() || null,
       identificacao_caso: identificacaoCaso.trim(),
       status_id: statusId,
       descricao_status: descricaoStatus.trim() || null,
       proximas_providencias: proximasProvidencias.trim() || null,
-      responsavel_legaldesk_id: responsavelLegaldeskId,
-      responsavel_id: responsavelId,
       follow_up: followUp || null,
       data_referencia: dataReferencia || new Date().toISOString().split('T')[0],
     }
@@ -571,37 +705,105 @@ export function ControleModal({
                   </div>
                 )}
 
-                {/* Bloco 1: Nome do Controle, Códigos e Identificação */}
+                {/* Bloco 1: Nome do Controle (Seletor pesquisável + Botão +), Códigos e Identificação */}
                 <div className="space-y-4">
-                  {/* Nome do Controle (Campo Obrigatório - Título do acompanhamento) */}
+                  {/* Nome do Controle */}
                   <div className="space-y-1.5">
-                    <Label
-                      htmlFor="nome-controle"
-                      className="text-xs font-semibold text-foreground flex items-center justify-between"
-                    >
-                      <span>
-                        Nome do Controle <span className="text-destructive">*</span>
-                      </span>
+                    <div className="flex items-center justify-between">
+                      <Label
+                        htmlFor="nome-controle-select"
+                        className="text-xs font-semibold text-foreground flex items-center gap-1"
+                      >
+                        <span>Nome do Controle</span>
+                        <span className="text-destructive">*</span>
+                      </Label>
                       <span className="text-[11px] text-muted-foreground">
-                        Título do acompanhamento
+                        Tabela task_nomes_controle
                       </span>
-                    </Label>
-                    <Input
-                      id="nome-controle"
-                      placeholder="Ex: Ricci Advogados PI e Natura (Contencioso) - Controle Ações Estratégicas e Status de Medidas Definidas"
-                      value={nomeControle}
-                      onChange={(e) => {
-                        setNomeControle(e.target.value)
-                        if (nomeControleError && e.target.value.trim()) setNomeControleError(false)
-                      }}
-                      className={cn(
-                        'h-10 rounded-xl bg-background font-medium',
-                        nomeControleError && 'border-destructive focus-visible:ring-destructive',
-                      )}
-                    />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Select
+                          value={nomeControleId}
+                          onValueChange={(val) => {
+                            setNomeControleId(val)
+                            if (nomeControleError) setNomeControleError(false)
+                          }}
+                        >
+                          <SelectTrigger
+                            id="nome-controle-select"
+                            className={cn(
+                              'h-11 rounded-xl bg-background font-medium text-left truncate text-xs sm:text-sm',
+                              nomeControleError &&
+                                'border-destructive focus-visible:ring-destructive',
+                            )}
+                          >
+                            <SelectValue placeholder="Selecione o Nome do Controle..." />
+                          </SelectTrigger>
+                          <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                            <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                              <div className="relative">
+                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                <Input
+                                  placeholder="Filtrar nomes..."
+                                  value={buscaNomeSelect}
+                                  onChange={(e) => setBuscaNomeSelect(e.target.value)}
+                                  className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            </div>
+
+                            {loadingListas ? (
+                              <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                <span>Carregando nomes...</span>
+                              </div>
+                            ) : opcoesNomes.length === 0 ? (
+                              <div className="p-4 text-center text-xs text-muted-foreground">
+                                Nenhum Nome do Controle encontrado.
+                              </div>
+                            ) : (
+                              opcoesNomes.map((n) => (
+                                <SelectItem key={n.id} value={n.id} className="py-2.5">
+                                  <div className="flex items-center justify-between w-full gap-2">
+                                    <span className="font-semibold text-foreground text-xs leading-snug break-words">
+                                      {n.nome}
+                                    </span>
+                                    {!n.ativo && (
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                        Inativo
+                                      </span>
+                                    )}
+                                  </div>
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Botão + compacto para cadastrar novo Nome do Controle */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setQuickNomeInput('')
+                          setQuickNomeError(null)
+                          setQuickNomeModalOpen(true)
+                        }}
+                        className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
+                        title="Cadastrar novo Nome do Controle"
+                      >
+                        <Plus className="w-5 h-5 stroke-[2.5]" />
+                      </Button>
+                    </div>
+
                     {nomeControleError && (
                       <p className="text-xs text-destructive font-medium">
-                        O Nome do Controle é obrigatório.
+                        O Nome do Controle é obrigatório. Selecione uma opção válida.
                       </p>
                     )}
                   </div>
@@ -675,7 +877,7 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Bloco 2: Status e Data de Referência */}
+                {/* Bloco 2: Status e Data de Follow-up (antiga Data de Referência) */}
                 <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-4">
                   <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
@@ -728,7 +930,7 @@ export function ControleModal({
 
                     <div className="space-y-1.5">
                       <Label htmlFor="data-referencia" className="text-xs font-semibold">
-                        Data de Referência <span className="text-destructive">*</span>
+                        Data de Follow-up <span className="text-destructive">*</span>
                       </Label>
                       <Input
                         id="data-referencia"
@@ -756,7 +958,7 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Bloco 3: Responsável (Única seleção agrupada visualmente) */}
+                {/* Bloco 3: Responsável pelo Controle (Seletor pesquisável exclusivo + Botão +) */}
                 <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
@@ -766,76 +968,92 @@ export function ControleModal({
                       </span>
                     </div>
                     <span className="text-[11px] text-muted-foreground">
-                      Pessoas internas ou terceiros
+                      Tabela task_responsaveis_controle
                     </span>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Select
-                      value={responsavelSelection}
-                      onValueChange={(val) => {
-                        setResponsavelSelection(val)
-                        if (responsavelError) setResponsavelError(false)
-                      }}
-                    >
-                      <SelectTrigger
-                        className={cn(
-                          'h-11 rounded-xl bg-background text-sm',
-                          responsavelError && 'border-destructive focus-visible:ring-destructive',
-                        )}
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Select
+                        value={responsavelControleId}
+                        onValueChange={(val) => {
+                          setResponsavelControleId(val)
+                          if (responsavelError) setResponsavelError(false)
+                        }}
                       >
-                        <SelectValue placeholder="Selecione o responsável..." />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl max-h-80">
-                        {/* Grupo 1: Pessoas internas (legaldesk_usuarios ativos) */}
-                        <SelectGroup>
-                          <SelectLabel className="text-xs font-bold text-primary uppercase tracking-wider px-2 py-1.5 bg-muted/50 rounded-md my-1">
-                            👥 Pessoas Internas ({usuariosInternos.length})
-                          </SelectLabel>
-                          {usuariosInternos.map((u) => (
-                            <SelectItem key={u.id} value={`interno:${u.id}`} className="py-2">
-                              <div className="flex flex-col">
-                                <span className="font-semibold text-foreground text-xs leading-tight">
-                                  {u.nome}
-                                </span>
-                                {u.email && (
-                                  <span className="text-[11px] text-muted-foreground truncate">
-                                    {u.email}
+                        <SelectTrigger
+                          className={cn(
+                            'h-11 rounded-xl bg-background text-sm font-medium',
+                            responsavelError && 'border-destructive focus-visible:ring-destructive',
+                          )}
+                        >
+                          <SelectValue placeholder="Selecione o responsável pelo controle..." />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                          <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                            <div className="relative">
+                              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                              <Input
+                                placeholder="Filtrar responsáveis..."
+                                value={buscaRespSelect}
+                                onChange={(e) => setBuscaRespSelect(e.target.value)}
+                                className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                          </div>
+
+                          {loadingListas ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                              <span>Carregando responsáveis...</span>
+                            </div>
+                          ) : opcoesResponsaveis.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground">
+                              Nenhum responsável encontrado.
+                            </div>
+                          ) : (
+                            opcoesResponsaveis.map((r) => (
+                              <SelectItem key={r.id} value={r.id} className="py-2.5">
+                                <div className="flex items-center justify-between w-full gap-2">
+                                  <span className="font-semibold text-foreground text-xs">
+                                    {r.nome}
                                   </span>
-                                )}
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
+                                  {!r.ativo && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                      Inativo
+                                    </span>
+                                  )}
+                                </div>
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </div>
 
-                        {/* Grupo 2: Equipes e Terceiros (task_responsaveis ativos) */}
-                        <SelectGroup>
-                          <SelectLabel className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider px-2 py-1.5 bg-muted/50 rounded-md my-1 mt-2">
-                            🏢 Equipes e Terceiros ({responsaveisCatalogo.length})
-                          </SelectLabel>
-                          {responsaveisCatalogo.map((r) => (
-                            <SelectItem key={r.id} value={`catalogo:${r.id}`} className="py-2">
-                              <div className="flex items-center justify-between w-full gap-2">
-                                <span className="font-semibold text-foreground text-xs">
-                                  {r.nome}
-                                </span>
-                                <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground">
-                                  {r.tipo === 'equipe' ? 'Equipe' : 'Terceiro'}
-                                </span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-
-                    {responsavelError && (
-                      <p className="text-xs text-destructive font-medium">
-                        O responsável é obrigatório. Selecione uma pessoa interna ou
-                        equipe/terceiro.
-                      </p>
-                    )}
+                    {/* Botão + compacto para cadastrar novo Responsável */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setQuickRespInput('')
+                        setQuickRespError(null)
+                        setQuickRespModalOpen(true)
+                      }}
+                      className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
+                      title="Cadastrar novo Responsável"
+                    >
+                      <Plus className="w-5 h-5 stroke-[2.5]" />
+                    </Button>
                   </div>
+
+                  {responsavelError && (
+                    <p className="text-xs text-destructive font-medium">
+                      O Responsável pelo Controle é obrigatório. Selecione uma opção válida.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -1340,6 +1558,146 @@ export function ControleModal({
         description="Tem certeza que deseja excluir apenas este andamento? Os demais itens do histórico deste controle serão preservados."
         confirmButtonText="Excluir Andamento"
       />
+
+      {/* Modal Compacto (+) para cadastrar novo Nome do Controle */}
+      <Dialog open={quickNomeModalOpen} onOpenChange={setQuickNomeModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <FolderKanban className="w-4 h-4 text-primary" />
+              <span>Novo Nome do Controle</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Cadastre um novo título oficial para vinculá-lo imediatamente a este caso.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSalvarQuickNome} className="space-y-3.5 py-1">
+            <div className="space-y-1.5">
+              <Label htmlFor="quick-nome-input" className="text-xs font-semibold text-foreground">
+                Nome do Controle <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="quick-nome-input"
+                autoFocus
+                placeholder="Ex: Ricci Advogados PI e Natura (Contencioso) - Controle Ações Estratégicas"
+                value={quickNomeInput}
+                onChange={(e) => {
+                  setQuickNomeInput(e.target.value)
+                  if (quickNomeError) setQuickNomeError(null)
+                }}
+                maxLength={500}
+                className={cn(
+                  'h-10 rounded-xl bg-background text-sm',
+                  quickNomeError && 'border-destructive focus-visible:ring-destructive',
+                )}
+              />
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Máx. 500 caracteres (trim aplicado)</span>
+                <span>{quickNomeInput.trim().length}/500</span>
+              </div>
+            </div>
+
+            {quickNomeError && (
+              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{quickNomeError}</span>
+              </div>
+            )}
+
+            <DialogFooter className="pt-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setQuickNomeModalOpen(false)}
+                className="h-9 rounded-xl text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={quickNomeSaving}
+                className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
+              >
+                {quickNomeSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                <span>Salvar e Selecionar</span>
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal Compacto (+) para cadastrar novo Responsável pelo Controle */}
+      <Dialog open={quickRespModalOpen} onOpenChange={setQuickRespModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <UserCheck className="w-4 h-4 text-primary" />
+              <span>Novo Responsável pelo Controle</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Cadastre um novo responsável para selecioná-lo imediatamente neste caso.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSalvarQuickResp} className="space-y-3.5 py-1">
+            <div className="space-y-1.5">
+              <Label htmlFor="quick-resp-input" className="text-xs font-semibold text-foreground">
+                Nome do Responsável <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="quick-resp-input"
+                autoFocus
+                placeholder="Ex: RICCI, NATURA, DANNEMANN e MARCELO MAZZOLA"
+                value={quickRespInput}
+                onChange={(e) => {
+                  setQuickRespInput(e.target.value)
+                  if (quickRespError) setQuickRespError(null)
+                }}
+                maxLength={255}
+                className={cn(
+                  'h-10 rounded-xl bg-background text-sm',
+                  quickRespError && 'border-destructive focus-visible:ring-destructive',
+                )}
+              />
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Máx. 255 caracteres</span>
+                <span>{quickRespInput.trim().length}/255</span>
+              </div>
+            </div>
+
+            {quickRespError && (
+              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{quickRespError}</span>
+              </div>
+            )}
+
+            <DialogFooter className="pt-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setQuickRespModalOpen(false)}
+                className="h-9 rounded-xl text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={quickRespSaving}
+                className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
+              >
+                {quickRespSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                <span>Salvar e Selecionar</span>
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

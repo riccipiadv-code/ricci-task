@@ -490,8 +490,6 @@ export default function Index() {
         controleToEdit={controleToEdit}
         statusList={statusList}
         tiposPrazoList={tiposPrazoList}
-        responsaveisCatalogo={responsaveisCatalogo}
-        usuariosInternos={usuariosInternos}
         onSaved={() => {
           refreshControles()
         }}

@@ -78,9 +78,37 @@ export interface TaskAndamentoRecord {
   autor_nome?: string | null
 }
 
+export interface TaskNomeControleRecord {
+  id: string
+  nome: string
+  nome_normalizado?: string | null
+  ativo: boolean
+  created_at: string
+  created_by?: string | null
+  updated_at: string
+  updated_by?: string | null
+  deleted_at?: string | null
+  deleted_by?: string | null
+}
+
+export interface TaskResponsavelControleRecord {
+  id: string
+  nome: string
+  nome_normalizado?: string | null
+  ativo: boolean
+  created_at: string
+  created_by?: string | null
+  updated_at: string
+  updated_by?: string | null
+  deleted_at?: string | null
+  deleted_by?: string | null
+}
+
 export interface TaskControleRecord {
   id: string
   nome_controle: string
+  nome_controle_id: string
+  responsavel_controle_id: string
   controle_cliente: string | null
   controle_ricci: string | null
   identificacao_caso: string
@@ -90,7 +118,7 @@ export interface TaskControleRecord {
   responsavel_legaldesk_id: string | null
   responsavel_id: string | null
   follow_up: string | null // YYYY-MM-DD
-  data_referencia: string // YYYY-MM-DD
+  data_referencia: string // YYYY-MM-DD (apresentado como Data de Follow-up)
   created_at: string
   created_by?: string | null
   updated_at: string
@@ -100,6 +128,8 @@ export interface TaskControleRecord {
 
   // Relações resolvidas
   status?: TaskStatusRecord | null
+  nome_controle_rel?: TaskNomeControleRecord | null
+  responsavel_controle_rel?: TaskResponsavelControleRecord | null
   responsavel_interno?: LegaldeskUsuarioRecord | null
   responsavel_catalogo?: TaskResponsavelRecord | null
   prazos?: TaskPrazoRecord[]
@@ -113,7 +143,9 @@ export interface TaskControleRecord {
 
 export interface SaveControleInput {
   id?: string
-  nome_controle: string
+  nome_controle_id: string
+  responsavel_controle_id: string
+  nome_controle?: string
   controle_cliente?: string | null
   controle_ricci?: string | null
   identificacao_caso: string

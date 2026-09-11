@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase/client'
 import {
   TaskControleRecord,
+  TaskNomeControleRecord,
+  TaskResponsavelControleRecord,
   TaskStatusRecord,
   TaskTipoPrazoRecord,
   TaskResponsavelRecord,
@@ -86,6 +88,280 @@ export const controleService = {
   },
 
   // --------------------------------------------------------------------------
+  // Nomes dos Controles (task_nomes_controle)
+  // --------------------------------------------------------------------------
+  async getNomesControle(options?: {
+    incluirInativos?: boolean
+  }): Promise<TaskNomeControleRecord[]> {
+    let query = supabase
+      .from('task_nomes_controle')
+      .select('*')
+      .is('deleted_at', null)
+      .order('nome', { ascending: true })
+
+    if (!options?.incluirInativos) {
+      query = query.eq('ativo', true)
+    }
+
+    const { data, error } = await query
+    if (error) {
+      console.error('Erro ao buscar task_nomes_controle:', error)
+      throw error
+    }
+    return (data as TaskNomeControleRecord[]) || []
+  },
+
+  async saveNomeControle(
+    input: { id?: string; nome: string; ativo?: boolean },
+    userId?: string | null,
+  ): Promise<TaskNomeControleRecord> {
+    const nomeLimpo = input.nome.trim()
+    if (!nomeLimpo) {
+      throw new Error('O Nome do Controle é obrigatório.')
+    }
+    if (nomeLimpo.length > 500) {
+      throw new Error('O Nome do Controle não pode exceder 500 caracteres.')
+    }
+    // Não permitir valor composto apenas por pontuação e espaços
+    // Mantém validação: precisa conter ao menos um caractere alfanumérico
+    if (!/[\p{L}\p{N}]/u.test(nomeLimpo)) {
+      throw new Error(
+        'O Nome do Controle deve conter letras ou números (não apenas pontuação ou espaços).',
+      )
+    }
+
+    const payload: any = {
+      nome: nomeLimpo,
+      ativo: input.ativo !== undefined ? input.ativo : true,
+      updated_at: new Date().toISOString(),
+      updated_by: userId || null,
+    }
+
+    if (input.id) {
+      const { data, error } = await supabase
+        .from('task_nomes_controle')
+        .update(payload)
+        .eq('id', input.id)
+        .select()
+        .single()
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error('Já existe um Nome do Controle equivalente a este.')
+        }
+        console.error('Erro ao atualizar task_nomes_controle:', error)
+        throw error
+      }
+      return data as TaskNomeControleRecord
+    } else {
+      payload.created_by = userId || null
+      const { data, error } = await supabase
+        .from('task_nomes_controle')
+        .insert(payload)
+        .select()
+        .single()
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error('Já existe um Nome do Controle equivalente a este.')
+        }
+        console.error('Erro ao inserir task_nomes_controle:', error)
+        throw error
+      }
+      return data as TaskNomeControleRecord
+    }
+  },
+
+  async toggleNomeControleAtivo(id: string, ativo: boolean, userId?: string | null): Promise<void> {
+    const { error } = await supabase
+      .from('task_nomes_controle')
+      .update({
+        ativo,
+        updated_at: new Date().toISOString(),
+        updated_by: userId || null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Erro ao alternar status de task_nomes_controle:', error)
+      throw error
+    }
+  },
+
+  async excluirNomeControle(id: string, userId?: string | null): Promise<void> {
+    // 1. Verificação prévia no frontend se está em uso em casos ativos
+    const { count, error: countErr } = await supabase
+      .from('task_tarefas')
+      .select('id', { count: 'exact', head: true })
+      .eq('nome_controle_id', id)
+      .is('deleted_at', null)
+
+    if (countErr) {
+      console.error('Erro ao verificar uso de task_nomes_controle:', countErr)
+    }
+    if (count && count > 0) {
+      throw new Error(
+        `Não é possível excluir: este Nome do Controle está vinculado a ${count} caso(s) ativo(s).`,
+      )
+    }
+
+    // 2. Exclusão lógica: preencher deleted_at e deleted_by (trigger do banco também protege)
+    const { error } = await supabase
+      .from('task_nomes_controle')
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: userId || null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Erro ao excluir task_nomes_controle:', error)
+      if (error.message?.includes('vinculado a caso(s) ativo(s)')) {
+        throw new Error('Não é possível excluir: Nome do Controle vinculado a caso(s) ativo(s).')
+      }
+      throw error
+    }
+  },
+
+  // --------------------------------------------------------------------------
+  // Responsáveis pelo Controle (task_responsaveis_controle)
+  // --------------------------------------------------------------------------
+  async getResponsaveisControle(options?: {
+    incluirInativos?: boolean
+  }): Promise<TaskResponsavelControleRecord[]> {
+    let query = supabase
+      .from('task_responsaveis_controle')
+      .select('*')
+      .is('deleted_at', null)
+      .order('nome', { ascending: true })
+
+    if (!options?.incluirInativos) {
+      query = query.eq('ativo', true)
+    }
+
+    const { data, error } = await query
+    if (error) {
+      console.error('Erro ao buscar task_responsaveis_controle:', error)
+      throw error
+    }
+    return (data as TaskResponsavelControleRecord[]) || []
+  },
+
+  async saveResponsavelControle(
+    input: { id?: string; nome: string; ativo?: boolean },
+    userId?: string | null,
+  ): Promise<TaskResponsavelControleRecord> {
+    const nomeLimpo = input.nome.trim()
+    if (!nomeLimpo) {
+      throw new Error('O nome do responsável é obrigatório.')
+    }
+    if (nomeLimpo.length > 255) {
+      throw new Error('O nome do responsável não pode exceder 255 caracteres.')
+    }
+    if (!/[\p{L}\p{N}]/u.test(nomeLimpo)) {
+      throw new Error(
+        'O nome do responsável deve conter letras ou números (não apenas pontuação ou espaços).',
+      )
+    }
+
+    const payload: any = {
+      nome: nomeLimpo,
+      ativo: input.ativo !== undefined ? input.ativo : true,
+      updated_at: new Date().toISOString(),
+      updated_by: userId || null,
+    }
+
+    if (input.id) {
+      const { data, error } = await supabase
+        .from('task_responsaveis_controle')
+        .update(payload)
+        .eq('id', input.id)
+        .select()
+        .single()
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error('Já existe um Responsável equivalente a este.')
+        }
+        console.error('Erro ao atualizar task_responsaveis_controle:', error)
+        throw error
+      }
+      return data as TaskResponsavelControleRecord
+    } else {
+      payload.created_by = userId || null
+      const { data, error } = await supabase
+        .from('task_responsaveis_controle')
+        .insert(payload)
+        .select()
+        .single()
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error('Já existe um Responsável equivalente a este.')
+        }
+        console.error('Erro ao inserir task_responsaveis_controle:', error)
+        throw error
+      }
+      return data as TaskResponsavelControleRecord
+    }
+  },
+
+  async toggleResponsavelControleAtivo(
+    id: string,
+    ativo: boolean,
+    userId?: string | null,
+  ): Promise<void> {
+    const { error } = await supabase
+      .from('task_responsaveis_controle')
+      .update({
+        ativo,
+        updated_at: new Date().toISOString(),
+        updated_by: userId || null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Erro ao alternar status de task_responsaveis_controle:', error)
+      throw error
+    }
+  },
+
+  async excluirResponsavelControle(id: string, userId?: string | null): Promise<void> {
+    // 1. Verificação prévia no frontend se está em uso em casos ativos
+    const { count, error: countErr } = await supabase
+      .from('task_tarefas')
+      .select('id', { count: 'exact', head: true })
+      .eq('responsavel_controle_id', id)
+      .is('deleted_at', null)
+
+    if (countErr) {
+      console.error('Erro ao verificar uso de task_responsaveis_controle:', countErr)
+    }
+    if (count && count > 0) {
+      throw new Error(
+        `Não é possível excluir: este Responsável está vinculado a ${count} caso(s) ativo(s).`,
+      )
+    }
+
+    // 2. Exclusão lógica: preencher deleted_at e deleted_by (trigger do banco também protege)
+    const { error } = await supabase
+      .from('task_responsaveis_controle')
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: userId || null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Erro ao excluir task_responsaveis_controle:', error)
+      if (error.message?.includes('vinculado a caso(s) ativo(s)')) {
+        throw new Error('Não é possível excluir: Responsável vinculado a caso(s) ativo(s).')
+      }
+      throw error
+    }
+  },
+
+  // --------------------------------------------------------------------------
   // Controles (task_tarefas)
   // --------------------------------------------------------------------------
   async getControles(): Promise<TaskControleRecord[]> {
@@ -106,13 +382,11 @@ export const controleService = {
 
     const tarefaIds = tarefas.map((t) => t.id)
 
-    // 2. Busca dependências em paralelo: status, responsáveis catálogo, internos, prazos
-    const [statusRes, respCatRes, respIntRes, prazosRes] = await Promise.all([
+    // 2. Busca dependências em paralelo: status, nomes_controle, responsaveis_controle, prazos
+    const [statusRes, nomesRes, respCtrlRes, prazosRes] = await Promise.all([
       supabase.from('task_status').select('*'),
-      supabase.from('task_responsaveis').select('*'),
-      supabase
-        .from('legaldesk_usuarios')
-        .select('id, source_id, nome, sigla, email, ativo, tipo_usuario, departamento'),
+      supabase.from('task_nomes_controle').select('*'),
+      supabase.from('task_responsaveis_controle').select('*'),
       supabase
         .from('task_prazos')
         .select('*, task_tipos_prazo (*)')
@@ -124,11 +398,13 @@ export const controleService = {
     const statusMap = new Map<string, TaskStatusRecord>()
     ;(statusRes.data || []).forEach((s) => statusMap.set(s.id, s as TaskStatusRecord))
 
-    const respCatMap = new Map<string, TaskResponsavelRecord>()
-    ;(respCatRes.data || []).forEach((r) => respCatMap.set(r.id, r as TaskResponsavelRecord))
+    const nomesMap = new Map<string, TaskNomeControleRecord>()
+    ;(nomesRes.data || []).forEach((n) => nomesMap.set(n.id, n as TaskNomeControleRecord))
 
-    const respIntMap = new Map<string, LegaldeskUsuarioRecord>()
-    ;(respIntRes.data || []).forEach((u) => respIntMap.set(u.id, u as LegaldeskUsuarioRecord))
+    const respCtrlMap = new Map<string, TaskResponsavelControleRecord>()
+    ;(respCtrlRes.data || []).forEach((r) =>
+      respCtrlMap.set(r.id, r as TaskResponsavelControleRecord),
+    )
 
     const prazosByTarefa = new Map<string, TaskPrazoRecord[]>()
     ;(prazosRes.data || []).forEach((raw: any) => {
@@ -154,10 +430,10 @@ export const controleService = {
     // 3. Monta os objetos de controles completos
     const controles: TaskControleRecord[] = tarefas.map((t) => {
       const status = statusMap.get(t.status_id) || null
-      const respInt = t.responsavel_legaldesk_id
-        ? respIntMap.get(t.responsavel_legaldesk_id) || null
+      const nomeControleRel = t.nome_controle_id ? nomesMap.get(t.nome_controle_id) || null : null
+      const respControleRel = t.responsavel_controle_id
+        ? respCtrlMap.get(t.responsavel_controle_id) || null
         : null
-      const respCat = t.responsavel_id ? respCatMap.get(t.responsavel_id) || null : null
       const prazos = prazosByTarefa.get(t.id) || []
 
       // Prazo destaque: principal ativo ou próximo ativo mais próximo
@@ -165,19 +441,15 @@ export const controleService = {
       const proximoPrazo = prazos.length > 0 ? prazos[0] : null
       const prazoDestaque = principalPrazo || proximoPrazo || null
 
-      let responsavelNome = 'Não atribuído'
-      let responsavelTipoBadge = '—'
-      if (respInt) {
-        responsavelNome = respInt.nome
-        responsavelTipoBadge = 'Interno'
-      } else if (respCat) {
-        responsavelNome = respCat.nome
-        responsavelTipoBadge = respCat.tipo === 'equipe' ? 'Equipe' : 'Terceiro'
-      }
+      const nomeExibicao = nomeControleRel?.nome || t.nome_controle || ''
+      const responsavelNome = respControleRel?.nome || 'Não atribuído'
+      const responsavelTipoBadge = respControleRel ? 'Controle' : '—'
 
       return {
         id: t.id,
-        nome_controle: t.nome_controle || '',
+        nome_controle: nomeExibicao,
+        nome_controle_id: t.nome_controle_id,
+        responsavel_controle_id: t.responsavel_controle_id,
         controle_cliente: t.controle_cliente,
         controle_ricci: t.controle_ricci,
         identificacao_caso: t.identificacao_caso,
@@ -195,8 +467,10 @@ export const controleService = {
         deleted_at: t.deleted_at,
         deleted_by: t.deleted_by,
         status,
-        responsavel_interno: respInt,
-        responsavel_catalogo: respCat,
+        nome_controle_rel: nomeControleRel,
+        responsavel_controle_rel: respControleRel,
+        responsavel_interno: null,
+        responsavel_catalogo: null,
         prazos,
         responsavel_nome: responsavelNome,
         responsavel_tipo_badge: responsavelTipoBadge,
@@ -246,18 +520,22 @@ export const controleService = {
       return null
     }
 
-    const [statusRes, respCatRes, respIntRes, prazosRes, andamentosRes] = await Promise.all([
+    const [statusRes, nomeRes, respCtrlRes, prazosRes, andamentosRes] = await Promise.all([
       t.status_id
         ? supabase.from('task_status').select('*').eq('id', t.status_id).maybeSingle()
         : Promise.resolve({ data: null }),
-      t.responsavel_id
-        ? supabase.from('task_responsaveis').select('*').eq('id', t.responsavel_id).maybeSingle()
-        : Promise.resolve({ data: null }),
-      t.responsavel_legaldesk_id
+      t.nome_controle_id
         ? supabase
-            .from('legaldesk_usuarios')
-            .select('id, source_id, nome, sigla, email, ativo, tipo_usuario, departamento')
-            .eq('id', t.responsavel_legaldesk_id)
+            .from('task_nomes_controle')
+            .select('*')
+            .eq('id', t.nome_controle_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      t.responsavel_controle_id
+        ? supabase
+            .from('task_responsaveis_controle')
+            .select('*')
+            .eq('id', t.responsavel_controle_id)
             .maybeSingle()
         : Promise.resolve({ data: null }),
       supabase
@@ -302,40 +580,31 @@ export const controleService = {
     const principalPrazo = prazos.find((p) => p.principal && p.ativo)
     const proximoPrazo = prazos.filter((p) => p.ativo)[0] || null
 
-    let responsavelNome = 'Não atribuído'
-    let responsavelTipoBadge = '—'
-    if (respIntRes.data) {
-      responsavelNome = respIntRes.data.nome
-      responsavelTipoBadge = 'Interno'
-    } else if (respCatRes.data) {
-      responsavelNome = respCatRes.data.nome
-      responsavelTipoBadge = respCatRes.data.tipo === 'equipe' ? 'Equipe' : 'Terceiro'
-    }
+    const nomeRel = nomeRes.data as TaskNomeControleRecord | null
+    const respRel = respCtrlRes.data as TaskResponsavelControleRecord | null
 
     return {
       ...t,
-      nome_controle: t.nome_controle || '',
+      nome_controle: nomeRel?.nome || t.nome_controle || '',
       status: (statusRes.data as TaskStatusRecord) || null,
-      responsavel_interno: (respIntRes.data as LegaldeskUsuarioRecord) || null,
-      responsavel_catalogo: (respCatRes.data as TaskResponsavelRecord) || null,
+      nome_controle_rel: nomeRel,
+      responsavel_controle_rel: respRel,
+      responsavel_interno: null,
+      responsavel_catalogo: null,
       prazos,
       andamentos,
-      responsavel_nome: responsavelNome,
-      responsavel_tipo_badge: responsavelTipoBadge,
+      responsavel_nome: respRel?.nome || 'Não atribuído',
+      responsavel_tipo_badge: respRel ? 'Controle' : '—',
       prazo_destaque: principalPrazo || proximoPrazo,
     }
   },
 
   async saveControle(input: SaveControleInput): Promise<TaskControleRecord> {
-    // Garante checagem: apenas um responsável preenchido
-    if (input.responsavel_legaldesk_id && input.responsavel_id) {
-      throw new Error('Preencha apenas um responsável (interno OU catálogo).')
+    if (!input.nome_controle_id) {
+      throw new Error('O campo Nome do Controle é obrigatório.')
     }
-    if (!input.responsavel_legaldesk_id && !input.responsavel_id) {
-      throw new Error('O campo Responsável é obrigatório.')
-    }
-    if (!input.nome_controle || !input.nome_controle.trim()) {
-      throw new Error('Nome do Controle é obrigatório.')
+    if (!input.responsavel_controle_id) {
+      throw new Error('O campo Responsável pelo Controle é obrigatório.')
     }
     if (!input.identificacao_caso.trim()) {
       throw new Error('Identificação do Caso é obrigatória.')
@@ -345,15 +614,14 @@ export const controleService = {
     }
 
     const payload: any = {
-      nome_controle: input.nome_controle.trim(),
+      nome_controle_id: input.nome_controle_id,
+      responsavel_controle_id: input.responsavel_controle_id,
       controle_cliente: input.controle_cliente?.trim() || null,
       controle_ricci: input.controle_ricci?.trim() || null,
       identificacao_caso: input.identificacao_caso.trim(),
       status_id: input.status_id,
       descricao_status: input.descricao_status?.trim() || null,
       proximas_providencias: input.proximas_providencias?.trim() || null,
-      responsavel_legaldesk_id: input.responsavel_legaldesk_id || null,
-      responsavel_id: input.responsavel_id || null,
       follow_up: input.follow_up || null,
       data_referencia: input.data_referencia || new Date().toISOString().split('T')[0],
     }
