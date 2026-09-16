@@ -1285,39 +1285,16 @@ export default function TarefasPage() {
                 {/* Conteúdo do Grupo quando não recolhido */}
                 {!isGroupCollapsed && (
                   <>
-                    {/* VISUALIZAÇÃO DESKTOP / TABLET (Tabela com 11 colunas na ordem obrigatória) */}
+                    {/* VISUALIZAÇÃO DESKTOP / TABLET (Tabela com 10 colunas: Inicia por Identificação do Caso) */}
                     <div className="hidden md:block overflow-x-auto w-full">
-                      <table className="w-full text-left border-collapse table-fixed min-w-[1100px]">
+                      <table className="w-full text-left border-collapse table-fixed min-w-[1020px]">
                         <thead>
                           <tr className="border-b border-border/80 bg-muted/20 text-[11px] font-bold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur-md select-none">
                             {/* Expandir */}
                             <th className="py-2.5 px-2 w-9 text-center" aria-label="Expandir"></th>
 
-                            {/* 1. Nome do Controle */}
-                            <th className="py-2.5 px-3 w-[200px]">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('nome_controle', e)}
-                                className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
-                                  sortField === 'nome_controle' && 'text-primary font-extrabold',
-                                )}
-                              >
-                                <span>Nome do Controle</span>
-                                {sortField === 'nome_controle' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
-                              </button>
-                            </th>
-
-                            {/* 2. Identificação do Caso */}
-                            <th className="py-2.5 px-3 w-[280px]">
+                            {/* 1. Identificação do Caso */}
+                            <th className="py-2.5 px-3 w-[320px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('identificacao_caso', e)}
@@ -1340,8 +1317,8 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 3. Próxima Providência */}
-                            <th className="py-2.5 px-3 w-[300px]">
+                            {/* 2. Próxima Providência */}
+                            <th className="py-2.5 px-3 w-[340px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('providencia', e)}
@@ -1575,14 +1552,7 @@ export default function TarefasPage() {
                                     </button>
                                   </td>
 
-                                  {/* 1. Nome do Controle */}
-                                  <td className="py-2.5 px-3 font-semibold text-foreground truncate">
-                                    <span title={c.nome_controle || ''}>
-                                      {c.nome_controle || '—'}
-                                    </span>
-                                  </td>
-
-                                  {/* 2. Identificação do Caso */}
+                                  {/* 1. Identificação do Caso */}
                                   <td className="py-2.5 px-3">
                                     <Tooltip>
                                       <TooltipTrigger asChild>
@@ -1751,7 +1721,7 @@ export default function TarefasPage() {
                                 {/* DETALHE RÁPIDO EXPANDIDO */}
                                 {isExpanded && (
                                   <tr className="bg-muted/15 border-b border-border/80">
-                                    <td colSpan={11} className="py-4 px-5">
+                                    <td colSpan={10} className="py-4 px-5">
                                       <div className="bg-card border border-border/80 rounded-xl p-4 shadow-xs space-y-4 text-xs">
                                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-3">
                                           <div>
