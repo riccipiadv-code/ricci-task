@@ -23,6 +23,7 @@ import {
   ArrowDown,
   Clock,
   Briefcase,
+  Loader2,
 } from 'lucide-react'
 import { useControles } from '@/hooks/useControles'
 import { TaskControleRecord } from '@/types/task'
