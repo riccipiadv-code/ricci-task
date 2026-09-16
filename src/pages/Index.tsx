@@ -20,27 +20,17 @@ import { ControleModal } from '@/components/ControleModal'
 import { Button } from '@/components/ui/button'
 import {
   formatDateBR,
-  formatDateTimeBR,
   getTimeOfDayGreeting,
   getFullDateFormattedBR,
   getStatusBadgeStyle,
   isPrazoOverdue,
-  isFollowUpOverdue,
 } from '@/lib/formatters'
 import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
 
 export default function Index() {
-  const {
-    controles,
-    metrics,
-    statusList,
-    tiposPrazoList,
-    responsaveisCatalogo,
-    usuariosInternos,
-    loading,
-    refreshControles,
-  } = useControles()
+  const { controles, metrics, statusList, tiposPrazoList, loading, refreshControles } =
+    useControles()
 
   const { user } = useAuth()
   const [modalOpen, setModalOpen] = useState(false)
@@ -66,13 +56,16 @@ export default function Index() {
       .slice(0, 5)
   }, [controles])
 
-  // Controles com atenção prioritária (prazos ou follow-ups vencidos)
+  // Controles com atenção prioritária (prazo geral ou da próxima providência aberta vencido)
   const controlesComAtencao = useMemo(() => {
     return controles
       .filter((c) => {
-        const prazoVencido = isPrazoOverdue(c.prazo_destaque?.data_prazo, c.status)
-        const followUpVencido = isFollowUpOverdue(c.follow_up, c.status)
-        return prazoVencido || followUpVencido
+        const prazoGeralVencido = isPrazoOverdue(c.prazo_conclusao, c.status)
+        const prazoProvVencido = isPrazoOverdue(
+          c.proxima_providencia?.prazo_conclusao,
+          c.proxima_providencia?.status,
+        )
+        return prazoGeralVencido || prazoProvVencido
       })
       .slice(0, 5)
   }, [controles])
@@ -131,14 +124,13 @@ export default function Index() {
         </div>
       </div>
 
-      {/* 5 Indicadores Obrigatórios do Dashboard (conforme critério do usuário):
+      {/* 4 Indicadores Estratégicos do Dashboard:
           1. Controles em andamento
           2. Aguardando autorização
-          3. Prazos vencidos
-          4. Follow-ups vencidos
-          5. Controles concluídos
+          3. Prazos vencidos (geral ou providência)
+          4. Controles concluídos
       */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         {/* Card 1: Em Andamento */}
         <div className="group relative bg-card border border-border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1">
           <div className="flex items-center justify-between">
@@ -194,32 +186,7 @@ export default function Index() {
           </div>
         </div>
 
-        {/* Card 4: Follow-ups Vencidos */}
-        <div
-          className={cn(
-            'group relative bg-card border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1',
-            metrics.followUpsVencidos > 0
-              ? 'border-amber-500/40 bg-amber-500/[0.02]'
-              : 'border-border',
-          )}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-              Follow-ups Vencidos
-            </span>
-            <div className="h-9 w-9 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center transition-transform group-hover:scale-110">
-              <CalendarClock className="w-5 h-5 stroke-[2.2]" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-1.5">
-            <span className="text-2xl sm:text-3xl font-extrabold text-amber-600 dark:text-amber-400 tracking-tight">
-              {metrics.followUpsVencidos}
-            </span>
-            <span className="text-[11px] text-muted-foreground font-medium">a contatar</span>
-          </div>
-        </div>
-
-        {/* Card 5: Controles Concluídos */}
+        {/* Card 4: Controles Concluídos */}
         <div className="group relative bg-card border border-border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-muted-foreground">Concluídos</span>
@@ -291,7 +258,7 @@ export default function Index() {
           </div>
         </div>
 
-        {/* Card de Demandas com Atenção Prioritária (Prazos/Follow-ups vencidos) */}
+        {/* Card de Demandas com Atenção Prioritária (Prazos vencidos) */}
         <div className="lg:col-span-2 bg-card border border-border rounded-2xl p-6 shadow-card flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <div>
@@ -300,7 +267,7 @@ export default function Index() {
                 <span>Demandas de Atenção Prioritária</span>
               </h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Controles não finalizados com prazo ou follow-up vencido
+                Controles não finalizados com prazo geral ou de providência vencido
               </p>
             </div>
             <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-muted text-muted-foreground">
@@ -313,12 +280,15 @@ export default function Index() {
               <div className="py-8 text-center text-xs text-muted-foreground space-y-1">
                 <CheckCircle2 className="w-7 h-7 text-emerald-500 mx-auto" />
                 <p className="font-semibold text-foreground text-sm">Tudo em dia!</p>
-                <p>Nenhum controle ativo possui prazos ou follow-ups vencidos no momento.</p>
+                <p>Nenhum controle ativo possui prazos vencidos no momento.</p>
               </div>
             ) : (
               controlesComAtencao.map((c) => {
-                const prazoVencido = isPrazoOverdue(c.prazo_destaque?.data_prazo, c.status)
-                const followUpVencido = isFollowUpOverdue(c.follow_up, c.status)
+                const prazoGeralVencido = isPrazoOverdue(c.prazo_conclusao, c.status)
+                const prazoProvVencido = isPrazoOverdue(
+                  c.proxima_providencia?.prazo_conclusao,
+                  c.proxima_providencia?.status,
+                )
 
                 return (
                   <div
@@ -328,9 +298,9 @@ export default function Index() {
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        {c.controle_ricci && (
+                        {c.pasta_ricci && (
                           <span className="font-mono text-[11px] font-bold text-primary">
-                            [{c.controle_ricci}]
+                            [{c.pasta_ricci}]
                           </span>
                         )}
                         <span className="text-xs font-bold text-foreground truncate">
@@ -344,16 +314,16 @@ export default function Index() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      {prazoVencido && c.prazo_destaque && (
+                      {prazoGeralVencido && c.prazo_conclusao && (
                         <span className="text-[11px] font-bold text-destructive bg-destructive/10 px-2 py-0.5 rounded-md flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3" />
-                          Prazo: {formatDateBR(c.prazo_destaque.data_prazo)}
+                          Prazo Caso: {formatDateBR(c.prazo_conclusao)}
                         </span>
                       )}
-                      {followUpVencido && c.follow_up && (
+                      {prazoProvVencido && c.proxima_providencia?.prazo_conclusao && (
                         <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md flex items-center gap-1">
-                          <CalendarClock className="w-3 h-3" />
-                          Follow: {formatDateBR(c.follow_up)}
+                          <AlertTriangle className="w-3 h-3" />
+                          Prazo Prov.: {formatDateBR(c.proxima_providencia.prazo_conclusao)}
                         </span>
                       )}
                     </div>
@@ -412,7 +382,7 @@ export default function Index() {
           <div className="divide-y divide-border">
             {recentControles.map((c) => {
               const statusBadge = getStatusBadgeStyle(c.status?.codigo, c.status?.finaliza)
-              const prazo = c.prazo_destaque
+              const proxProv = c.proxima_providencia
 
               return (
                 <div
@@ -422,14 +392,14 @@ export default function Index() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      {c.controle_cliente && (
+                      {c.pasta_cliente && (
                         <span className="font-mono text-[11px] font-semibold text-muted-foreground">
-                          {c.controle_cliente}
+                          {c.pasta_cliente}
                         </span>
                       )}
-                      {c.controle_ricci && (
+                      {c.pasta_ricci && (
                         <span className="font-mono text-[11px] font-bold text-primary">
-                          [{c.controle_ricci}]
+                          [{c.pasta_ricci}]
                         </span>
                       )}
                       <span className="text-sm font-bold text-foreground group-hover:text-primary transition-colors">
@@ -443,9 +413,9 @@ export default function Index() {
                           Caso: {c.identificacao_caso}
                         </span>
                       )}
-                      {c.nome_controle && c.proximas_providencias && <span>•</span>}
-                      {c.proximas_providencias && (
-                        <span className="truncate">{c.proximas_providencias}</span>
+                      {c.nome_controle && proxProv?.providencia && <span>•</span>}
+                      {proxProv?.providencia && (
+                        <span className="truncate">Próx. Prov.: {proxProv.providencia}</span>
                       )}
                     </div>
                   </div>
@@ -469,10 +439,10 @@ export default function Index() {
                     </span>
 
                     {/* Prazo */}
-                    {prazo && (
+                    {(proxProv?.prazo_conclusao || c.prazo_conclusao) && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
                         <Calendar className="w-3 h-3" />
-                        {formatDateBR(prazo.data_prazo)}
+                        {formatDateBR(proxProv?.prazo_conclusao || c.prazo_conclusao)}
                       </span>
                     )}
                   </div>

@@ -76,7 +76,7 @@ export default function ConfiguracoesPage() {
     toast({
       title: checked ? 'Notificações ativadas' : 'Notificações desativadas',
       description: checked
-        ? 'Destaque visual para prazos e follow-ups vencidos habilitado.'
+        ? 'Destaque visual para prazos vencidos habilitado.'
         : 'Avisos visuais de vencimento silenciados.',
     })
   }
@@ -254,7 +254,7 @@ export default function ConfiguracoesPage() {
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Destacar em vermelho prazos vencidos e em âmbar follow-ups vencidos
+                  Destacar em vermelho prazos vencidos do controle e das providências
                 </p>
               </div>
               <Switch
@@ -305,12 +305,12 @@ export default function ConfiguracoesPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Armazenamento:</span>
               <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                Supabase PostgreSQL (task_tarefas, task_prazos, task_andamentos)
+                Supabase PostgreSQL (task_tarefas, task_providencias)
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
-              <span className="font-medium text-foreground">Pessoas Internas:</span>
-              <span className="text-foreground">legaldesk_usuarios (somente leitura ativa)</span>
+              <span className="font-medium text-foreground">Cadastros Operacionais:</span>
+              <span className="text-foreground">task_responsaveis_controle e task_executores</span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Controles Ativos Carregados:</span>
@@ -365,9 +365,9 @@ export default function ConfiguracoesPage() {
           </div>
 
           <div className="pt-2 text-xs text-muted-foreground leading-relaxed border-t border-border/60">
-            Controle de casos jurídicos com prazos múltiplos, providências detalhadas, follow-ups e
-            andamentos em linha do tempo. Todos os dados são sincronizados em tempo real com o banco
-            PostgreSQL Supabase.
+            Controle de casos jurídicos com providências vinculadas, responsáveis e executores
+            dedicados. Todos os dados são sincronizados em tempo real com o banco PostgreSQL
+            Supabase.
           </div>
         </section>
       </div>

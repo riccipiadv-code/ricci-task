@@ -11,13 +11,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -25,17 +22,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Plus,
   Trash2,
-  Edit2,
   Calendar,
   Clock,
   User,
-  Info,
   CheckCircle2,
-  AlertTriangle,
-  History,
   FileText,
-  CalendarClock,
-  Sparkles,
   Loader2,
   FolderKanban,
   UserCheck,
@@ -46,15 +37,13 @@ import {
   TaskControleRecord,
   TaskNomeControleRecord,
   TaskResponsavelControleRecord,
+  TaskExecutorRecord,
   TaskStatusRecord,
+  TaskStatusProvidenciaRecord,
   TaskTipoPrazoRecord,
-  TaskResponsavelRecord,
-  LegaldeskUsuarioRecord,
-  TaskPrazoRecord,
-  TaskAndamentoRecord,
   SaveControleInput,
 } from '@/types/task'
-import { formatDateBR, formatDateTimeBR, getStatusBadgeStyle } from '@/lib/formatters'
+import { formatDateTimeBR } from '@/lib/formatters'
 import { controleService } from '@/services/controleService'
 import { useToast } from '@/hooks/use-toast'
 import { DeleteConfirmDialog } from '@/components/DeleteConfirmDialog'
@@ -65,19 +54,20 @@ interface ControleModalProps {
   onOpenChange: (open: boolean) => void
   controleToEdit?: TaskControleRecord | null
   statusList: TaskStatusRecord[]
+  statusProvidenciaList?: TaskStatusProvidenciaRecord[]
   tiposPrazoList: TaskTipoPrazoRecord[]
-  responsaveisCatalogo?: TaskResponsavelRecord[]
-  usuariosInternos?: LegaldeskUsuarioRecord[]
   onSaved: (controle: TaskControleRecord) => void
 }
 
-interface DraftPrazo {
+interface DraftProvidenciaItem {
   id?: string // se já existe no banco
-  data_prazo: string
-  tipo_prazo_id: string | null
-  descricao: string
-  principal: boolean
-  ativo: boolean
+  tempId: string
+  providencia: string
+  prazo_conclusao: string
+  tipo_prazo_id: string
+  status_id: string
+  ordem: number
+  isPersisted?: boolean
 }
 
 export function ControleModal({
@@ -85,14 +75,18 @@ export function ControleModal({
   onOpenChange,
   controleToEdit,
   statusList,
+  statusProvidenciaList = [],
   tiposPrazoList,
   onSaved,
 }: ControleModalProps) {
   const { toast } = useToast()
 
-  // Listas de nomes dos controles e responsáveis pelo controle
+  // Listas auxiliares (Nomes, Responsáveis, Executores, Status Providência)
   const [nomesLista, setNomesLista] = useState<TaskNomeControleRecord[]>([])
   const [respsLista, setRespsLista] = useState<TaskResponsavelControleRecord[]>([])
+  const [execsLista, setExecsLista] = useState<TaskExecutorRecord[]>([])
+  const [statusProvLista, setStatusProvLista] =
+    useState<TaskStatusProvidenciaRecord[]>(statusProvidenciaList)
   const [loadingListas, setLoadingListas] = useState(false)
 
   // Modais de cadastro rápido (+)
@@ -106,85 +100,83 @@ export function ControleModal({
   const [quickRespError, setQuickRespError] = useState<string | null>(null)
   const [quickRespSaving, setQuickRespSaving] = useState(false)
 
-  // Filtros de busca inline para os seletores pesquisáveis
+  const [quickExecModalOpen, setQuickExecModalOpen] = useState(false)
+  const [quickExecInput, setQuickExecInput] = useState('')
+  const [quickExecError, setQuickExecError] = useState<string | null>(null)
+  const [quickExecSaving, setQuickExecSaving] = useState(false)
+
+  // Filtros de busca inline para os seletores
   const [buscaNomeSelect, setBuscaNomeSelect] = useState('')
   const [buscaRespSelect, setBuscaRespSelect] = useState('')
+  const [buscaExecSelect, setBuscaExecSelect] = useState('')
 
-  // Aba ativa: dados | prazos | providencias | andamentos
-  const [activeTab, setActiveTab] = useState('dados')
+  // Aba ativa: dados | providencias
+  const [activeTab, setActiveTab] = useState<'dados' | 'providencias'>('dados')
 
-  // Estado do formulário de dados do caso
+  // Estado do formulário: Dados do Caso
   const [nomeControleId, setNomeControleId] = useState('')
-  const [responsavelControleId, setResponsavelControleId] = useState('')
-  const [controleCliente, setControleCliente] = useState('')
-  const [controleRicci, setControleRicci] = useState('')
   const [identificacaoCaso, setIdentificacaoCaso] = useState('')
-  const [dataReferencia, setDataReferencia] = useState('')
   const [statusId, setStatusId] = useState('')
-  const [descricaoStatus, setDescricaoStatus] = useState('')
-
-  // Providências e data de follow-up
-  const [proximasProvidencias, setProximasProvidencias] = useState('')
-  const [followUp, setFollowUp] = useState('')
+  const [dataAutorizacao, setDataAutorizacao] = useState('')
+  const [prazoConclusao, setPrazoConclusao] = useState('')
+  const [responsavelControleId, setResponsavelControleId] = useState('')
+  const [executorId, setExecutorId] = useState('')
+  const [pastaCliente, setPastaCliente] = useState('')
+  const [pastaRicci, setPastaRicci] = useState('')
   const [updatedAtDisplay, setUpdatedAtDisplay] = useState<string | null>(null)
 
-  // Prazos vinculados
-  const [prazos, setPrazos] = useState<DraftPrazo[]>([])
-  const [novoPrazoModalOpen, setNovoPrazoModalOpen] = useState(false)
-  const [prazoEmEdicaoIndex, setPrazoEmEdicaoIndex] = useState<number | null>(null)
-  const [draftPrazoData, setDraftPrazoData] = useState('')
-  const [draftPrazoTipoId, setDraftPrazoTipoId] = useState('')
-  const [draftPrazoDescricao, setDraftPrazoDescricao] = useState('')
-  const [draftPrazoPrincipal, setDraftPrazoPrincipal] = useState(false)
-
-  // Andamentos vinculados (somente quando editando controle já existente no banco)
-  const [andamentos, setAndamentos] = useState<TaskAndamentoRecord[]>([])
-  const [loadingAndamentos, setLoadingAndamentos] = useState(false)
-  const [andamentoFormOpen, setAndamentoFormOpen] = useState(false)
-  const [andamentoEmEdicao, setAndamentoEmEdicao] = useState<TaskAndamentoRecord | null>(null)
-  const [andamentoData, setAndamentoData] = useState('')
-  const [andamentoDescricao, setAndamentoDescricao] = useState('')
-  const [andamentoToDelete, setAndamentoToDelete] = useState<TaskAndamentoRecord | null>(null)
-  const [andamentoDeleteConfirmOpen, setAndamentoDeleteConfirmOpen] = useState(false)
+  // Estado das Providências
+  const [providencias, setProvidencias] = useState<DraftProvidenciaItem[]>([])
+  const [providenciaToDelete, setProvidenciaToDelete] = useState<DraftProvidenciaItem | null>(null)
+  const [deleteProvConfirmOpen, setDeleteProvConfirmOpen] = useState(false)
 
   // Erros de validação
   const [nomeControleError, setNomeControleError] = useState(false)
   const [identificacaoError, setIdentificacaoError] = useState(false)
   const [statusError, setStatusError] = useState(false)
   const [responsavelError, setResponsavelError] = useState(false)
+  const [executorError, setExecutorError] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Carrega status padrão caso novo
+  // Status de providência padrão
+  const statusProvPadraoId = useMemo(() => {
+    const pendente = statusProvLista.find((s) => s.codigo === 'pendente')
+    return pendente?.id || statusProvLista[0]?.id || ''
+  }, [statusProvLista])
+
+  // Status geral do controle padrão
   const statusPadraoId = useMemo(() => {
     const emAndamento = statusList.find((s) => s.codigo === 'em_andamento')
-    return emAndamento?.id || (statusList[0]?.id ?? '')
+    return emAndamento?.id || statusList[0]?.id || ''
   }, [statusList])
 
-  // Identifica se o status selecionado é "Aguardando autorização"
-  const statusSelecionado = useMemo(() => {
-    return statusList.find((s) => s.id === statusId)
-  }, [statusList, statusId])
+  // Tipo de prazo padrão
+  const tipoPrazoPadraoId = useMemo(() => {
+    return tiposPrazoList[0]?.id || ''
+  }, [tiposPrazoList])
 
-  const isAguardandoAutorizacao = useMemo(() => {
-    return statusSelecionado?.codigo === 'aguardando_autorizacao'
-  }, [statusSelecionado])
-
-  // Carrega listas de Nomes e Responsáveis ao abrir o modal
+  // Carrega listas auxiliares
   const carregarListasAuxiliares = useCallback(async () => {
     setLoadingListas(true)
     try {
-      const [nomes, resps] = await Promise.all([
+      const [nomes, resps, execs, stProv] = await Promise.all([
         controleService.getNomesControle({ incluirInativos: true }),
         controleService.getResponsaveisControle({ incluirInativos: true }),
+        controleService.getExecutores({ incluirInativos: true }),
+        statusProvidenciaList.length > 0
+          ? Promise.resolve(statusProvidenciaList)
+          : controleService.getStatusProvidencia(),
       ])
       setNomesLista(nomes)
       setRespsLista(resps)
+      setExecsLista(execs)
+      setStatusProvLista(stProv)
     } catch (err) {
-      console.error('Erro ao carregar listas no ControleModal:', err)
+      console.error('Erro ao carregar listas auxiliares no ControleModal:', err)
     } finally {
       setLoadingListas(false)
     }
-  }, [])
+  }, [statusProvidenciaList])
 
   // Popula o formulário ao abrir
   useEffect(() => {
@@ -196,62 +188,65 @@ export function ControleModal({
     setIdentificacaoError(false)
     setStatusError(false)
     setResponsavelError(false)
+    setExecutorError(false)
     setBuscaNomeSelect('')
     setBuscaRespSelect('')
+    setBuscaExecSelect('')
 
     if (controleToEdit) {
       setNomeControleId(controleToEdit.nome_controle_id || '')
-      setResponsavelControleId(controleToEdit.responsavel_controle_id || '')
-      setControleCliente(controleToEdit.controle_cliente || '')
-      setControleRicci(controleToEdit.controle_ricci || '')
       setIdentificacaoCaso(controleToEdit.identificacao_caso || '')
-      setDataReferencia(
-        controleToEdit.data_referencia
-          ? controleToEdit.data_referencia.split('T')[0]
-          : new Date().toISOString().split('T')[0],
-      )
       setStatusId(controleToEdit.status_id || statusPadraoId)
-      setDescricaoStatus(controleToEdit.descricao_status || '')
-      setProximasProvidencias(controleToEdit.proximas_providencias || '')
-      setFollowUp(controleToEdit.follow_up ? controleToEdit.follow_up.split('T')[0] : '')
+      setDataAutorizacao(
+        controleToEdit.data_autorizacao ? controleToEdit.data_autorizacao.split('T')[0] : '',
+      )
+      setPrazoConclusao(
+        controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
+      )
+      setResponsavelControleId(controleToEdit.responsavel_controle_id || '')
+      setExecutorId(controleToEdit.executor_id || '')
+      setPastaCliente(controleToEdit.pasta_cliente || '')
+      setPastaRicci(controleToEdit.pasta_ricci || '')
       setUpdatedAtDisplay(controleToEdit.updated_at || null)
 
-      // Prazos existentes
-      const draftList: DraftPrazo[] = (controleToEdit.prazos || []).map((p) => ({
-        id: p.id,
-        data_prazo: p.data_prazo ? p.data_prazo.split('T')[0] : '',
-        tipo_prazo_id: p.tipo_prazo_id,
-        descricao: p.descricao || '',
-        principal: p.principal,
-        ativo: p.ativo,
-      }))
-      setPrazos(draftList)
-
-      // Carregar andamentos atualizados do banco
-      if (controleToEdit.id) {
-        loadAndamentos(controleToEdit.id)
-      } else {
-        setAndamentos([])
-      }
+      // Carrega providências existentes
+      const draftList: DraftProvidenciaItem[] = (controleToEdit.providencias || []).map(
+        (p, idx) => ({
+          id: p.id,
+          tempId: p.id || `existing-${idx}`,
+          providencia: p.providencia || '',
+          prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : '',
+          tipo_prazo_id: p.tipo_prazo_id || tipoPrazoPadraoId,
+          status_id: p.status_id || statusProvPadraoId,
+          ordem: p.ordem ?? idx,
+          isPersisted: true,
+        }),
+      )
+      setProvidencias(draftList)
     } else {
       // Novo controle
       setNomeControleId('')
-      setResponsavelControleId('')
-      setControleCliente('')
-      setControleRicci('')
       setIdentificacaoCaso('')
-      setDataReferencia(new Date().toISOString().split('T')[0])
       setStatusId(statusPadraoId)
-      setDescricaoStatus('')
-      setProximasProvidencias('')
-      setFollowUp('')
+      setDataAutorizacao('')
+      setPrazoConclusao('')
+      setResponsavelControleId('')
+      setExecutorId('')
+      setPastaCliente('')
+      setPastaRicci('')
       setUpdatedAtDisplay(null)
-      setPrazos([])
-      setAndamentos([])
+      setProvidencias([])
     }
-  }, [open, controleToEdit, statusPadraoId, carregarListasAuxiliares])
+  }, [
+    open,
+    controleToEdit,
+    statusPadraoId,
+    tipoPrazoPadraoId,
+    statusProvPadraoId,
+    carregarListasAuxiliares,
+  ])
 
-  // Opções de Nomes dos Controles (ativos + selecionado caso inativo na edição)
+  // Opções de Nomes dos Controles
   const opcoesNomes = useMemo(() => {
     let list = nomesLista.filter((n) => n.ativo || n.id === nomeControleId)
     if (buscaNomeSelect.trim()) {
@@ -261,7 +256,7 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
-  // Opções de Responsáveis pelo Controle (ativos + selecionado caso inativo na edição)
+  // Opções de Responsáveis pelo Controle
   const opcoesResponsaveis = useMemo(() => {
     let list = respsLista.filter((r) => r.ativo || r.id === responsavelControleId)
     if (buscaRespSelect.trim()) {
@@ -271,7 +266,93 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [respsLista, responsavelControleId, buscaRespSelect])
 
-  // Cadastro rápido de Nome do Controle
+  // Opções de Executores do Controle
+  const opcoesExecutores = useMemo(() => {
+    let list = execsLista.filter((e) => e.ativo || e.id === executorId)
+    if (buscaExecSelect.trim()) {
+      const q = buscaExecSelect.trim().toLowerCase()
+      list = list.filter((e) => e.nome.toLowerCase().includes(q))
+    }
+    return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+  }, [execsLista, executorId, buscaExecSelect])
+
+  // Ordenação visual dos cards de providências pelo prazo de conclusão crescente.
+  // Itens sem prazo ficam ao final. Mantém chave estável com tempId.
+  const providenciasExibicao = useMemo(() => {
+    return [...providencias].sort((a, b) => {
+      if (!a.prazo_conclusao && !b.prazo_conclusao) return a.ordem - b.ordem
+      if (!a.prazo_conclusao) return 1
+      if (!b.prazo_conclusao) return -1
+      if (a.prazo_conclusao !== b.prazo_conclusao) {
+        return a.prazo_conclusao.localeCompare(b.prazo_conclusao)
+      }
+      return a.ordem - b.ordem
+    })
+  }, [providencias])
+
+  // Adicionar nova providência (posiciona ao final)
+  const handleAdicionarProvidencia = () => {
+    const novoItem: DraftProvidenciaItem = {
+      tempId: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      providencia: '',
+      prazo_conclusao: '',
+      tipo_prazo_id: tipoPrazoPadraoId,
+      status_id: statusProvPadraoId,
+      ordem: providencias.length,
+      isPersisted: false,
+    }
+    setProvidencias((prev) => [...prev, novoItem])
+  }
+
+  // Atualizar campo de uma providência específica
+  const handleUpdateProvidencia = (
+    tempId: string,
+    field: keyof DraftProvidenciaItem,
+    value: any,
+  ) => {
+    setProvidencias((prev) =>
+      prev.map((item) => (item.tempId === tempId ? { ...item, [field]: value } : item)),
+    )
+  }
+
+  // Solicitar remoção de uma providência
+  const handleSolicitarRemocaoProvidencia = (item: DraftProvidenciaItem) => {
+    if (item.isPersisted && item.id) {
+      setProvidenciaToDelete(item)
+      setDeleteProvConfirmOpen(true)
+    } else {
+      // Item ainda não salvo no banco, remove diretamente do estado
+      setProvidencias((prev) => prev.filter((p) => p.tempId !== item.tempId))
+      toast({ title: 'Providência removida' })
+    }
+  }
+
+  // Confirmar exclusão lógica de providência já persistida no banco
+  const handleConfirmarExclusaoProvidencia = async () => {
+    if (!providenciaToDelete?.id) return
+    try {
+      await controleService.deleteProvidencia(providenciaToDelete.id)
+      setProvidencias((prev) => prev.filter((p) => p.id !== providenciaToDelete.id))
+      toast({ title: 'Providência excluída com sucesso' })
+      if (controleToEdit?.id) {
+        const freshUpdated = await controleService.getControleUpdatedAt(controleToEdit.id)
+        if (freshUpdated) setUpdatedAtDisplay(freshUpdated)
+      }
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao excluir providência',
+        description: err?.message || 'Falha na exclusão lógica.',
+      })
+    } finally {
+      setProvidenciaToDelete(null)
+      setDeleteProvConfirmOpen(false)
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // CADASTROS RÁPIDOS (+)
+  // --------------------------------------------------------------------------
   const handleSalvarQuickNome = async (e: React.FormEvent) => {
     e.preventDefault()
     setQuickNomeError(null)
@@ -316,7 +397,6 @@ export function ControleModal({
     }
   }
 
-  // Cadastro rápido de Responsável pelo Controle
   const handleSalvarQuickResp = async (e: React.FormEvent) => {
     e.preventDefault()
     setQuickRespError(null)
@@ -361,200 +441,60 @@ export function ControleModal({
     }
   }
 
-  const loadAndamentos = async (tarefaId: string) => {
-    setLoadingAndamentos(true)
-    try {
-      const list = await controleService.getAndamentos(tarefaId)
-      setAndamentos(list)
-    } catch (err) {
-      console.error('Erro ao carregar andamentos:', err)
-    } finally {
-      setLoadingAndamentos(false)
+  const handleSalvarQuickExec = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setQuickExecError(null)
+    const clean = quickExecInput.trim()
+    if (!clean) {
+      setQuickExecError('O nome do executor é obrigatório.')
+      return
     }
-  }
-
-  // --------------------------------------------------------------------------
-  // Gestão de Prazos no Modal
-  // --------------------------------------------------------------------------
-  const handleOpenAdicionarPrazo = () => {
-    setPrazoEmEdicaoIndex(null)
-    setDraftPrazoData(new Date().toISOString().split('T')[0])
-    setDraftPrazoTipoId(tiposPrazoList[0]?.id || '')
-    setDraftPrazoDescricao('')
-    // Se não há nenhum prazo marcado como principal, sugere principal
-    const hasPrincipal = prazos.some((p) => p.principal && p.ativo)
-    setDraftPrazoPrincipal(!hasPrincipal)
-    setNovoPrazoModalOpen(true)
-  }
-
-  const handleOpenEditarPrazo = (index: number) => {
-    const item = prazos[index]
-    setPrazoEmEdicaoIndex(index)
-    setDraftPrazoData(item.data_prazo)
-    setDraftPrazoTipoId(item.tipo_prazo_id || '')
-    setDraftPrazoDescricao(item.descricao)
-    setDraftPrazoPrincipal(item.principal)
-    setNovoPrazoModalOpen(true)
-  }
-
-  const handleSalvarDraftPrazo = () => {
-    if (!draftPrazoData) {
-      toast({
-        variant: 'destructive',
-        title: 'Data obrigatória',
-        description: 'Informe a data do prazo.',
-      })
+    if (clean.length > 255) {
+      setQuickExecError('Máximo de 255 caracteres.')
+      return
+    }
+    if (!/[\p{L}\p{N}]/u.test(clean)) {
+      setQuickExecError('Deve conter letras ou números.')
       return
     }
 
-    let updated = [...prazos]
-
-    // Se este prazo foi marcado como principal, desmarca os demais
-    if (draftPrazoPrincipal) {
-      updated = updated.map((p, idx) => {
-        if (prazoEmEdicaoIndex !== null && idx === prazoEmEdicaoIndex) return p
-        return { ...p, principal: false }
+    setQuickExecSaving(true)
+    try {
+      const saved = await controleService.saveExecutor({ nome: clean, ativo: true })
+      await carregarListasAuxiliares()
+      setExecutorId(saved.id)
+      setExecutorError(false)
+      setQuickExecModalOpen(false)
+      setQuickExecInput('')
+      toast({
+        title: 'Executor cadastrado',
+        description: `"${saved.nome}" foi selecionado automaticamente.`,
       })
-    }
-
-    const prazoObj: DraftPrazo = {
-      id: prazoEmEdicaoIndex !== null ? updated[prazoEmEdicaoIndex].id : undefined,
-      data_prazo: draftPrazoData,
-      tipo_prazo_id: draftPrazoTipoId || null,
-      descricao: draftPrazoDescricao.trim(),
-      principal: draftPrazoPrincipal,
-      ativo: prazoEmEdicaoIndex !== null ? updated[prazoEmEdicaoIndex].ativo : true,
-    }
-
-    if (prazoEmEdicaoIndex !== null) {
-      updated[prazoEmEdicaoIndex] = prazoObj
-    } else {
-      updated.push(prazoObj)
-    }
-
-    setPrazos(updated)
-    setNovoPrazoModalOpen(false)
-  }
-
-  const handleRemoverPrazo = async (index: number) => {
-    const item = prazos[index]
-    if (item.id) {
-      try {
-        await controleService.deletePrazo(item.id)
-        if (controleToEdit?.id) {
-          const freshUpdated = await controleService.getControleUpdatedAt(controleToEdit.id)
-          if (freshUpdated) setUpdatedAtDisplay(freshUpdated)
-        }
-      } catch (err: any) {
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao excluir prazo',
-          description: err.message,
-        })
-        return
+    } catch (err: any) {
+      if (
+        err?.code === '23505' ||
+        err?.message?.includes('23505') ||
+        err?.message?.includes('Já existe um Executor equivalente')
+      ) {
+        setQuickExecError('Já existe um Executor equivalente a este.')
+      } else {
+        setQuickExecError(err?.message || 'Erro ao cadastrar executor.')
       }
-    }
-    const next = [...prazos]
-    next.splice(index, 1)
-    setPrazos(next)
-    toast({ title: 'Prazo removido' })
-  }
-
-  const handleTogglePrazoPrincipal = (index: number) => {
-    const next = prazos.map((p, i) => ({
-      ...p,
-      principal: i === index ? !p.principal : false,
-    }))
-    setPrazos(next)
-  }
-
-  // --------------------------------------------------------------------------
-  // Gestão de Andamentos no Modal
-  // --------------------------------------------------------------------------
-  const handleOpenAdicionarAndamento = () => {
-    setAndamentoEmEdicao(null)
-    setAndamentoData(new Date().toISOString().split('T')[0])
-    setAndamentoDescricao('')
-    setAndamentoFormOpen(true)
-  }
-
-  const handleOpenEditarAndamento = (item: TaskAndamentoRecord) => {
-    setAndamentoEmEdicao(item)
-    setAndamentoData(item.data_andamento.split('T')[0])
-    setAndamentoDescricao(item.descricao)
-    setAndamentoFormOpen(true)
-  }
-
-  const handleSalvarAndamento = async () => {
-    if (!controleToEdit?.id) return
-    if (!andamentoData) {
-      toast({ variant: 'destructive', title: 'Data do andamento obrigatória' })
-      return
-    }
-    if (!andamentoDescricao.trim()) {
-      toast({ variant: 'destructive', title: 'Descrição do andamento obrigatória' })
-      return
-    }
-
-    try {
-      await controleService.saveAndamento({
-        id: andamentoEmEdicao?.id,
-        tarefa_id: controleToEdit.id,
-        data_andamento: andamentoData,
-        descricao: andamentoDescricao.trim(),
-      })
-
-      // Recarrega lista e timestamp do controle
-      await loadAndamentos(controleToEdit.id)
-      const freshUpdated = await controleService.getControleUpdatedAt(controleToEdit.id)
-      if (freshUpdated) setUpdatedAtDisplay(freshUpdated)
-
-      setAndamentoFormOpen(false)
-      toast({
-        title: andamentoEmEdicao ? 'Andamento atualizado' : 'Andamento registrado com sucesso',
-      })
-    } catch (err: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao salvar andamento',
-        description: err.message,
-      })
-    }
-  }
-
-  const handleConfirmarExclusaoAndamento = async () => {
-    if (!andamentoToDelete || !controleToEdit?.id) return
-    try {
-      await controleService.deleteAndamento(andamentoToDelete.id)
-      await loadAndamentos(controleToEdit.id)
-      const freshUpdated = await controleService.getControleUpdatedAt(controleToEdit.id)
-      if (freshUpdated) setUpdatedAtDisplay(freshUpdated)
-      toast({ title: 'Andamento excluído com sucesso' })
-    } catch (err: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao excluir andamento',
-        description: err.message,
-      })
     } finally {
-      setAndamentoToDelete(null)
-      setAndamentoDeleteConfirmOpen(false)
+      setQuickExecSaving(false)
     }
   }
 
   // --------------------------------------------------------------------------
-  // Submit Principal do Controle
+  // SUBMIT PRINCIPAL DO CONTROLE
   // --------------------------------------------------------------------------
   const handleSubmitControle = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
+    if (saving) return
 
     let hasError = false
     if (!nomeControleId) {
       setNomeControleError(true)
-      hasError = true
-    }
-    if (!responsavelControleId) {
-      setResponsavelError(true)
       hasError = true
     }
     if (!identificacaoCaso.trim()) {
@@ -565,6 +505,14 @@ export function ControleModal({
       setStatusError(true)
       hasError = true
     }
+    if (!responsavelControleId) {
+      setResponsavelError(true)
+      hasError = true
+    }
+    if (!executorId) {
+      setExecutorError(true)
+      hasError = true
+    }
 
     if (hasError) {
       setActiveTab('dados')
@@ -572,50 +520,66 @@ export function ControleModal({
         variant: 'destructive',
         title: 'Campos obrigatórios',
         description:
-          'Preencha Nome do Controle, Responsável pelo Controle, Identificação do Caso e Status.',
+          'Preencha Nome do Controle, Identificação do Caso, Status, Responsável e Executor.',
       })
       return
+    }
+
+    // Validação das providências incluídas: todos os 4 campos são obrigatórios
+    for (let i = 0; i < providencias.length; i++) {
+      const p = providencias[i]
+      if (!p.providencia.trim() || !p.prazo_conclusao || !p.tipo_prazo_id || !p.status_id) {
+        setActiveTab('providencias')
+        toast({
+          variant: 'destructive',
+          title: 'Providência incompleta',
+          description: `Preencha todos os campos obrigatórios (Providência, Prazo, Tipo e Status) da providência #${i + 1}.`,
+        })
+        return
+      }
     }
 
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
       nome_controle_id: nomeControleId,
-      responsavel_controle_id: responsavelControleId,
-      controle_cliente: controleCliente.trim() || null,
-      controle_ricci: controleRicci.trim() || null,
       identificacao_caso: identificacaoCaso.trim(),
       status_id: statusId,
-      descricao_status: descricaoStatus.trim() || null,
-      proximas_providencias: proximasProvidencias.trim() || null,
-      follow_up: followUp || null,
-      data_referencia: dataReferencia || new Date().toISOString().split('T')[0],
+      data_autorizacao: dataAutorizacao || null,
+      prazo_conclusao: prazoConclusao || null,
+      responsavel_controle_id: responsavelControleId,
+      executor_id: executorId,
+      pasta_cliente: pastaCliente.trim() || null,
+      pasta_ricci: pastaRicci.trim() || null,
     }
 
     setSaving(true)
     try {
-      const saved = await controleService.saveControle(payload)
+      // 1. Salva o controle principal em task_tarefas
+      const savedControle = await controleService.saveControle(payload)
 
-      // Salva os prazos que foram adicionados/editados no rascunho
-      if (prazos.length > 0) {
-        for (const p of prazos) {
-          await controleService.savePrazo({
+      // 2. Salva as providências (inserção ou atualização individual)
+      if (providencias.length > 0) {
+        for (let i = 0; i < providencias.length; i++) {
+          const p = providencias[i]
+          await controleService.saveProvidencia({
             id: p.id,
-            tarefa_id: saved.id,
-            data_prazo: p.data_prazo,
+            tarefa_id: savedControle.id,
+            providencia: p.providencia.trim(),
+            prazo_conclusao: p.prazo_conclusao,
             tipo_prazo_id: p.tipo_prazo_id,
-            descricao: p.descricao,
-            principal: p.principal,
-            ativo: p.ativo,
+            status_id: p.status_id,
+            ordem: i,
           })
         }
       }
 
-      // Recarrega o controle completo
-      const fullyLoaded = await controleService.getControleById(saved.id)
-      onSaved(fullyLoaded || saved)
+      // 3. Recarrega controle completo com relacionamentos hidratados
+      const fullyLoaded = await controleService.getControleById(savedControle.id)
+      onSaved(fullyLoaded || savedControle)
+
       toast({
         title: controleToEdit ? 'Controle atualizado' : 'Controle criado com sucesso',
-        description: `Caso: ${saved.identificacao_caso}`,
+        description: `Caso: ${savedControle.identificacao_caso}`,
       })
       onOpenChange(false)
     } catch (err: any) {
@@ -645,7 +609,7 @@ export function ControleModal({
                   </span>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground mt-1">
-                  Gerenciamento integrado com prazos múltiplos, providências e andamentos.
+                  Gerenciamento de controles com acompanhamento por providências.
                 </DialogDescription>
               </div>
 
@@ -658,25 +622,18 @@ export function ControleModal({
               )}
             </div>
 
-            {/* Abas */}
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full mt-3">
-              <TabsList className="grid w-full grid-cols-4 rounded-xl bg-muted/60 p-1">
+            {/* Abas: Apenas Dados do Caso | Providência (N) */}
+            <Tabs
+              value={activeTab}
+              onValueChange={(val) => setActiveTab(val as 'dados' | 'providencias')}
+              className="w-full mt-3"
+            >
+              <TabsList className="grid w-full grid-cols-2 rounded-xl bg-muted/60 p-1">
                 <TabsTrigger value="dados" className="rounded-lg text-xs font-semibold">
                   Dados do Caso
                 </TabsTrigger>
-                <TabsTrigger value="prazos" className="rounded-lg text-xs font-semibold">
-                  Prazos ({prazos.length})
-                </TabsTrigger>
                 <TabsTrigger value="providencias" className="rounded-lg text-xs font-semibold">
-                  Providências & Follow-up
-                </TabsTrigger>
-                <TabsTrigger
-                  value="andamentos"
-                  className="rounded-lg text-xs font-semibold"
-                  disabled={!controleToEdit}
-                  title={!controleToEdit ? 'Disponível após criar o controle' : undefined}
-                >
-                  Andamentos ({andamentos.length})
+                  Providência ({providencias.length})
                 </TabsTrigger>
               </TabsList>
             </Tabs>
@@ -685,29 +642,13 @@ export function ControleModal({
           {/* Conteúdo com scroll */}
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {/* ============================================================= */}
-            {/* ABA 1: DADOS DO CASO & RESPONSÁVEL                            */}
+            {/* ABA 1: DADOS DO CASO                                          */}
             {/* ============================================================= */}
             {activeTab === 'dados' && (
               <div className="space-y-5">
-                {/* Orientação quando Aguardando autorização */}
-                {isAguardandoAutorizacao && (
-                  <div className="flex items-start gap-3 p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/20 text-xs text-violet-900 dark:text-violet-200">
-                    <Info className="w-4 h-4 text-violet-600 dark:text-violet-400 mt-0.5 shrink-0" />
-                    <div>
-                      <p className="font-semibold">Status: Aguardando autorização</p>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">
-                        Os campos <strong>Controle Cliente</strong> e{' '}
-                        <strong>Controle Ricci</strong> são opcionais neste momento. Os códigos
-                        poderão ser preenchidos posteriormente assim que a autorização for
-                        concedida.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Bloco 1: Nome do Controle (Seletor pesquisável + Botão +), Códigos e Identificação */}
+                {/* Bloco 1: Nome do Controle e Identificação do Caso */}
                 <div className="space-y-4">
-                  {/* Nome do Controle */}
+                  {/* Nome do Controle (task_nomes_controle) */}
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <Label
@@ -785,7 +726,7 @@ export function ControleModal({
                         </Select>
                       </div>
 
-                      {/* Botão + compacto para cadastrar novo Nome do Controle */}
+                      {/* Botão + compacto */}
                       <Button
                         type="button"
                         variant="outline"
@@ -808,83 +749,49 @@ export function ControleModal({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <Label
-                        htmlFor="ctrl-cliente"
-                        className="text-xs font-semibold text-foreground"
-                      >
-                        Controle Cliente{' '}
-                        {!isAguardandoAutorizacao && (
-                          <span className="text-muted-foreground">(opcional)</span>
-                        )}
-                      </Label>
-                      <Input
-                        id="ctrl-cliente"
-                        placeholder="Ex: CC-2025-081"
-                        value={controleCliente}
-                        onChange={(e) => setControleCliente(e.target.value)}
-                        className="h-10 rounded-xl bg-background"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label htmlFor="ctrl-ricci" className="text-xs font-semibold text-foreground">
-                        Controle Ricci{' '}
-                        {!isAguardandoAutorizacao && (
-                          <span className="text-muted-foreground">(opcional)</span>
-                        )}
-                      </Label>
-                      <Input
-                        id="ctrl-ricci"
-                        placeholder="Ex: RICCI-9941"
-                        value={controleRicci}
-                        onChange={(e) => setControleRicci(e.target.value)}
-                        className="h-10 rounded-xl bg-background"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2 space-y-1.5">
-                      <Label
-                        htmlFor="ident-caso"
-                        className="text-xs font-semibold text-foreground flex items-center justify-between"
-                      >
-                        <span>
-                          Identificação do Caso <span className="text-destructive">*</span>
-                        </span>
-                        <span className="text-[11px] text-muted-foreground">Obrigatório</span>
-                      </Label>
-                      <Input
-                        id="ident-caso"
-                        placeholder="Ex: Ação Anulatória de Marca X - 1ª Vara Empresarial"
-                        value={identificacaoCaso}
-                        onChange={(e) => {
-                          setIdentificacaoCaso(e.target.value)
-                          if (identificacaoError && e.target.value.trim())
-                            setIdentificacaoError(false)
-                        }}
-                        className={cn(
-                          'h-10 rounded-xl bg-background font-medium',
-                          identificacaoError && 'border-destructive focus-visible:ring-destructive',
-                        )}
-                      />
-                      {identificacaoError && (
-                        <p className="text-xs text-destructive font-medium">
-                          A Identificação do Caso é obrigatória.
-                        </p>
+                  {/* Identificação do Caso */}
+                  <div className="space-y-1.5">
+                    <Label
+                      htmlFor="ident-caso"
+                      className="text-xs font-semibold text-foreground flex items-center justify-between"
+                    >
+                      <span>
+                        Identificação do Caso <span className="text-destructive">*</span>
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">Obrigatório</span>
+                    </Label>
+                    <Input
+                      id="ident-caso"
+                      placeholder="Ex: Ação Anulatória de Marca X - 1ª Vara Empresarial"
+                      value={identificacaoCaso}
+                      onChange={(e) => {
+                        setIdentificacaoCaso(e.target.value)
+                        if (identificacaoError && e.target.value.trim()) {
+                          setIdentificacaoError(false)
+                        }
+                      }}
+                      className={cn(
+                        'h-10 rounded-xl bg-background font-medium',
+                        identificacaoError && 'border-destructive focus-visible:ring-destructive',
                       )}
-                    </div>
+                    />
+                    {identificacaoError && (
+                      <p className="text-xs text-destructive font-medium">
+                        A Identificação do Caso é obrigatória.
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                {/* Bloco 2: Status e Data de Follow-up (antiga Data de Referência) */}
+                {/* Bloco 2: Seção Status do Controle (Status, Data de Autorização, Prazo de Conclusão) */}
                 <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-4">
                   <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
                     <span>Status do Controle</span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    {/* Status (obrigatório, task_status) */}
                     <div className="space-y-1.5">
                       <Label className="text-xs font-semibold">
                         Status <span className="text-destructive">*</span>
@@ -905,22 +812,18 @@ export function ControleModal({
                           <SelectValue placeholder="Selecione o status" />
                         </SelectTrigger>
                         <SelectContent className="rounded-xl">
-                          {statusList.map((st) => {
-                            const badge = getStatusBadgeStyle(st.codigo, st.finaliza)
-                            return (
-                              <SelectItem key={st.id} value={st.id}>
-                                <div className="flex items-center gap-2">
-                                  <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-                                  <span>{st.nome}</span>
-                                  {st.finaliza && (
-                                    <span className="text-[10px] text-muted-foreground">
-                                      (Conclui)
-                                    </span>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            )
-                          })}
+                          {statusList.map((st) => (
+                            <SelectItem key={st.id} value={st.id}>
+                              <div className="flex items-center gap-2">
+                                <span>{st.nome}</span>
+                                {st.finaliza && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    (Conclui)
+                                  </span>
+                                )}
+                              </div>
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       {statusError && (
@@ -928,431 +831,448 @@ export function ControleModal({
                       )}
                     </div>
 
+                    {/* Data de Autorização (opcional) */}
                     <div className="space-y-1.5">
-                      <Label htmlFor="data-referencia" className="text-xs font-semibold">
-                        Data de Follow-up <span className="text-destructive">*</span>
+                      <Label htmlFor="data-autorizacao" className="text-xs font-semibold">
+                        Data de Autorização{' '}
+                        <span className="text-muted-foreground">(opcional)</span>
                       </Label>
                       <Input
-                        id="data-referencia"
+                        id="data-autorizacao"
                         type="date"
-                        value={dataReferencia}
-                        onChange={(e) => setDataReferencia(e.target.value)}
+                        value={dataAutorizacao}
+                        onChange={(e) => setDataAutorizacao(e.target.value)}
                         className="h-10 rounded-xl bg-background"
                       />
                     </div>
 
-                    <div className="sm:col-span-2 space-y-1.5">
-                      <Label htmlFor="desc-status" className="text-xs font-semibold">
-                        Descrição do Status{' '}
-                        <span className="text-muted-foreground">(opcional)</span>
+                    {/* Prazo de Conclusão (opcional) */}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="prazo-conclusao" className="text-xs font-semibold">
+                        Prazo de Conclusão <span className="text-muted-foreground">(opcional)</span>
                       </Label>
-                      <Textarea
-                        id="desc-status"
-                        rows={2}
-                        placeholder="Detalhes complementares sobre o status atual do caso..."
-                        value={descricaoStatus}
-                        onChange={(e) => setDescricaoStatus(e.target.value)}
-                        className="resize-none rounded-xl bg-background"
+                      <Input
+                        id="prazo-conclusao"
+                        type="date"
+                        value={prazoConclusao}
+                        onChange={(e) => setPrazoConclusao(e.target.value)}
+                        className="h-10 rounded-xl bg-background"
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* Bloco 3: Responsável pelo Controle (Seletor pesquisável exclusivo + Botão +) */}
-                <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
-                      <User className="w-4 h-4 text-primary" />
-                      <span>
-                        Responsável pelo Controle <span className="text-destructive">*</span>
-                      </span>
+                {/* Bloco 3: Responsável pelo Controle e Executor do Controle (duas seções independentes e obrigatórias) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Responsável pelo Controle (task_responsaveis_controle) */}
+                  <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
+                        <User className="w-4 h-4 text-primary" />
+                        <span>
+                          Responsável pelo Controle <span className="text-destructive">*</span>
+                        </span>
+                      </div>
                     </div>
-                    <span className="text-[11px] text-muted-foreground">
-                      Tabela task_responsaveis_controle
-                    </span>
-                  </div>
 
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <Select
-                        value={responsavelControleId}
-                        onValueChange={(val) => {
-                          setResponsavelControleId(val)
-                          if (responsavelError) setResponsavelError(false)
-                        }}
-                      >
-                        <SelectTrigger
-                          className={cn(
-                            'h-11 rounded-xl bg-background text-sm font-medium',
-                            responsavelError && 'border-destructive focus-visible:ring-destructive',
-                          )}
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Select
+                          value={responsavelControleId}
+                          onValueChange={(val) => {
+                            setResponsavelControleId(val)
+                            if (responsavelError) setResponsavelError(false)
+                          }}
                         >
-                          <SelectValue placeholder="Selecione o responsável pelo controle..." />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
-                          <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                            <div className="relative">
-                              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                              <Input
-                                placeholder="Filtrar responsáveis..."
-                                value={buscaRespSelect}
-                                onChange={(e) => setBuscaRespSelect(e.target.value)}
-                                className="h-8 pl-8 pr-2 text-xs rounded-lg"
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => e.stopPropagation()}
-                              />
+                          <SelectTrigger
+                            className={cn(
+                              'h-11 rounded-xl bg-background text-sm font-medium',
+                              responsavelError &&
+                                'border-destructive focus-visible:ring-destructive',
+                            )}
+                          >
+                            <SelectValue placeholder="Selecione o responsável..." />
+                          </SelectTrigger>
+                          <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                            <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                              <div className="relative">
+                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                <Input
+                                  placeholder="Filtrar responsáveis..."
+                                  value={buscaRespSelect}
+                                  onChange={(e) => setBuscaRespSelect(e.target.value)}
+                                  className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                />
+                              </div>
                             </div>
-                          </div>
 
-                          {loadingListas ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                              <span>Carregando responsáveis...</span>
-                            </div>
-                          ) : opcoesResponsaveis.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground">
-                              Nenhum responsável encontrado.
-                            </div>
-                          ) : (
-                            opcoesResponsaveis.map((r) => (
-                              <SelectItem key={r.id} value={r.id} className="py-2.5">
-                                <div className="flex items-center justify-between w-full gap-2">
-                                  <span className="font-semibold text-foreground text-xs">
-                                    {r.nome}
-                                  </span>
-                                  {!r.ativo && (
-                                    <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
-                                      Inativo
+                            {loadingListas ? (
+                              <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                <span>Carregando responsáveis...</span>
+                              </div>
+                            ) : opcoesResponsaveis.length === 0 ? (
+                              <div className="p-4 text-center text-xs text-muted-foreground">
+                                Nenhum responsável encontrado.
+                              </div>
+                            ) : (
+                              opcoesResponsaveis.map((r) => (
+                                <SelectItem key={r.id} value={r.id} className="py-2.5">
+                                  <div className="flex items-center justify-between w-full gap-2">
+                                    <span className="font-semibold text-foreground text-xs">
+                                      {r.nome}
                                     </span>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
+                                    {!r.ativo && (
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                        Inativo
+                                      </span>
+                                    )}
+                                  </div>
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setQuickRespInput('')
+                          setQuickRespError(null)
+                          setQuickRespModalOpen(true)
+                        }}
+                        className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
+                        title="Cadastrar novo Responsável"
+                      >
+                        <Plus className="w-5 h-5 stroke-[2.5]" />
+                      </Button>
                     </div>
 
-                    {/* Botão + compacto para cadastrar novo Responsável */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setQuickRespInput('')
-                        setQuickRespError(null)
-                        setQuickRespModalOpen(true)
-                      }}
-                      className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
-                      title="Cadastrar novo Responsável"
-                    >
-                      <Plus className="w-5 h-5 stroke-[2.5]" />
-                    </Button>
+                    {responsavelError && (
+                      <p className="text-xs text-destructive font-medium">
+                        O Responsável pelo Controle é obrigatório.
+                      </p>
+                    )}
                   </div>
 
-                  {responsavelError && (
-                    <p className="text-xs text-destructive font-medium">
-                      O Responsável pelo Controle é obrigatório. Selecione uma opção válida.
-                    </p>
-                  )}
+                  {/* Executor do Controle (task_executores) */}
+                  <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
+                        <UserCheck className="w-4 h-4 text-primary" />
+                        <span>
+                          Executor do Controle <span className="text-destructive">*</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Select
+                          value={executorId}
+                          onValueChange={(val) => {
+                            setExecutorId(val)
+                            if (executorError) setExecutorError(false)
+                          }}
+                        >
+                          <SelectTrigger
+                            className={cn(
+                              'h-11 rounded-xl bg-background text-sm font-medium',
+                              executorError && 'border-destructive focus-visible:ring-destructive',
+                            )}
+                          >
+                            <SelectValue placeholder="Selecione o executor..." />
+                          </SelectTrigger>
+                          <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                            <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                              <div className="relative">
+                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                <Input
+                                  placeholder="Filtrar executores..."
+                                  value={buscaExecSelect}
+                                  onChange={(e) => setBuscaExecSelect(e.target.value)}
+                                  className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            </div>
+
+                            {loadingListas ? (
+                              <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                <span>Carregando executores...</span>
+                              </div>
+                            ) : opcoesExecutores.length === 0 ? (
+                              <div className="p-4 text-center text-xs text-muted-foreground">
+                                Nenhum executor encontrado.
+                              </div>
+                            ) : (
+                              opcoesExecutores.map((e) => (
+                                <SelectItem key={e.id} value={e.id} className="py-2.5">
+                                  <div className="flex items-center justify-between w-full gap-2">
+                                    <span className="font-semibold text-foreground text-xs">
+                                      {e.nome}
+                                    </span>
+                                    {!e.ativo && (
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                        Inativo
+                                      </span>
+                                    )}
+                                  </div>
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setQuickExecInput('')
+                          setQuickExecError(null)
+                          setQuickExecModalOpen(true)
+                        }}
+                        className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
+                        title="Cadastrar novo Executor"
+                      >
+                        <Plus className="w-5 h-5 stroke-[2.5]" />
+                      </Button>
+                    </div>
+
+                    {executorError && (
+                      <p className="text-xs text-destructive font-medium">
+                        O Executor do Controle é obrigatório.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bloco 4: Pasta Cliente e Pasta Ricci (lado a lado no final de Dados do Caso) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div className="space-y-1.5">
+                    <Label
+                      htmlFor="pasta-cliente"
+                      className="text-xs font-semibold text-foreground"
+                    >
+                      Pasta Cliente <span className="text-muted-foreground">(opcional)</span>
+                    </Label>
+                    <Input
+                      id="pasta-cliente"
+                      placeholder="Ex.: CC-2025-081"
+                      value={pastaCliente}
+                      onChange={(e) => setPastaCliente(e.target.value)}
+                      className="h-10 rounded-xl bg-background"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pasta-ricci" className="text-xs font-semibold text-foreground">
+                      Pasta Ricci <span className="text-muted-foreground">(opcional)</span>
+                    </Label>
+                    <Input
+                      id="pasta-ricci"
+                      placeholder="Ex.: RICCI-9941"
+                      value={pastaRicci}
+                      onChange={(e) => setPastaRicci(e.target.value)}
+                      className="h-10 rounded-xl bg-background"
+                    />
+                  </div>
                 </div>
               </div>
             )}
 
             {/* ============================================================= */}
-            {/* ABA 2: PRAZOS MÚLTIPLOS                                       */}
+            {/* ABA 2: PROVIDÊNCIA (MÚLTIPLAS)                                */}
             {/* ============================================================= */}
-            {activeTab === 'prazos' && (
+            {activeTab === 'providencias' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div>
-                    <h3 className="text-sm font-bold text-foreground">Prazos do Controle</h3>
+                    <h3 className="text-sm font-bold text-foreground">Providências do Controle</h3>
                     <p className="text-xs text-muted-foreground">
-                      Múltiplos prazos vinculados. Marque um prazo como <strong>Principal</strong>{' '}
-                      para priorizá-lo na listagem.
+                      Adicione e gerencie providências com prazo, tipo e status individual.
                     </p>
                   </div>
                   <Button
                     type="button"
                     size="sm"
-                    onClick={handleOpenAdicionarPrazo}
+                    onClick={handleAdicionarProvidencia}
                     className="h-9 rounded-xl px-3.5 bg-primary text-primary-foreground font-semibold text-xs flex items-center gap-1.5 shadow-sm"
                   >
                     <Plus className="w-4 h-4 stroke-[2.5]" />
-                    <span>Adicionar Prazo</span>
+                    <span>Adicionar providência</span>
                   </Button>
                 </div>
 
-                {prazos.length === 0 ? (
+                {providencias.length === 0 ? (
                   <div className="p-8 text-center border border-dashed border-border rounded-2xl bg-muted/20 space-y-2">
                     <Calendar className="w-8 h-8 text-muted-foreground mx-auto" />
                     <p className="text-xs text-muted-foreground">
-                      Nenhum prazo cadastrado para este controle.
+                      Nenhuma providência adicionada a este controle.
                     </p>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={handleOpenAdicionarPrazo}
+                      onClick={handleAdicionarProvidencia}
                       className="rounded-xl text-xs"
                     >
-                      + Cadastrar primeiro prazo
+                      + Adicionar providência
                     </Button>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {prazos.map((prazo, index) => {
-                      const tipo = tiposPrazoList.find((t) => t.id === prazo.tipo_prazo_id)
-                      const isVencido = prazo.data_prazo < new Date().toISOString().split('T')[0]
-
+                  <div className="space-y-4">
+                    {providenciasExibicao.map((item, index) => {
                       return (
                         <div
-                          key={index}
-                          className={cn(
-                            'p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors',
-                            prazo.principal
-                              ? 'bg-primary/5 border-primary/40'
-                              : 'bg-card border-border',
-                          )}
+                          key={item.tempId}
+                          className="p-4 rounded-xl border border-border bg-card shadow-xs space-y-3 relative group"
                         >
-                          <div className="flex items-start sm:items-center gap-3 min-w-0">
-                            {/* Indicador de Principal */}
-                            <button
-                              type="button"
-                              onClick={() => handleTogglePrazoPrincipal(index)}
-                              className={cn(
-                                'h-8 px-2 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition-colors',
-                                prazo.principal
-                                  ? 'bg-primary text-primary-foreground shadow-xs'
-                                  : 'bg-muted text-muted-foreground hover:bg-muted/80',
-                              )}
-                              title="Clique para alternar prazo principal"
-                            >
-                              <Sparkles className="w-3 h-3" />
-                              <span>{prazo.principal ? 'Principal' : 'Tornar principal'}</span>
-                            </button>
-
-                            <div className="min-w-0 space-y-0.5">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span
-                                  className={cn(
-                                    'text-xs font-bold flex items-center gap-1',
-                                    isVencido ? 'text-destructive' : 'text-foreground',
-                                  )}
-                                >
-                                  <Calendar className="w-3.5 h-3.5" />
-                                  {formatDateBR(prazo.data_prazo)}
+                          {/* Topo do card da providência */}
+                          <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-2">
+                            <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-bold">
+                                {index + 1}
+                              </span>
+                              <span>Providência #{index + 1}</span>
+                              {item.isPersisted && (
+                                <span className="text-[10px] text-muted-foreground font-normal">
+                                  (salva no banco)
                                 </span>
-
-                                {tipo && (
-                                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-md bg-muted text-muted-foreground border border-border">
-                                    {tipo.nome}
-                                  </span>
-                                )}
-
-                                {isVencido && (
-                                  <span className="text-[10px] font-bold uppercase text-destructive bg-destructive/10 px-1.5 py-0.2 rounded">
-                                    Vencido
-                                  </span>
-                                )}
-                              </div>
-
-                              {prazo.descricao && (
-                                <p className="text-xs text-muted-foreground truncate max-w-md">
-                                  {prazo.descricao}
-                                </p>
                               )}
-                            </div>
+                            </span>
+
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleSolicitarRemocaoProvidencia(item)}
+                              className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                              title="Remover providência"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0 self-end sm:self-center">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenEditarPrazo(index)}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                              title="Editar prazo"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleRemoverPrazo(index)}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                              title="Remover prazo"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
+                          {/* Campos da providência na ordem obrigatória:
+                              1. Providência (textarea/descrição)
+                              2. Prazo de Conclusão (date)
+                              3. Tipo de Prazo (seletor)
+                              4. Status (seletor)
+                          */}
+                          <div className="space-y-3">
+                            {/* Campo 1: Providência (textarea) */}
+                            <div className="space-y-1">
+                              <Label className="text-xs font-semibold flex items-center justify-between">
+                                <span>
+                                  Providência <span className="text-destructive">*</span>
+                                </span>
+                                <span className="text-[11px] text-muted-foreground font-normal">
+                                  Descrição detalhada
+                                </span>
+                              </Label>
+                              <Textarea
+                                rows={2}
+                                placeholder="Descreva a providência a ser tomada..."
+                                value={item.providencia}
+                                onChange={(e) =>
+                                  handleUpdateProvidencia(
+                                    item.tempId,
+                                    'providencia',
+                                    e.target.value,
+                                  )
+                                }
+                                className="resize-y min-h-[60px] rounded-xl bg-background text-xs sm:text-sm"
+                              />
+                            </div>
+
+                            {/* Campos 2, 3 e 4 em grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              {/* Campo 2: Prazo de Conclusão (date) */}
+                              <div className="space-y-1">
+                                <Label className="text-xs font-semibold">
+                                  Prazo de Conclusão <span className="text-destructive">*</span>
+                                </Label>
+                                <Input
+                                  type="date"
+                                  value={item.prazo_conclusao}
+                                  onChange={(e) =>
+                                    handleUpdateProvidencia(
+                                      item.tempId,
+                                      'prazo_conclusao',
+                                      e.target.value,
+                                    )
+                                  }
+                                  className="h-9 rounded-xl bg-background text-xs"
+                                />
+                              </div>
+
+                              {/* Campo 3: Tipo de Prazo */}
+                              <div className="space-y-1">
+                                <Label className="text-xs font-semibold">
+                                  Tipo de Prazo <span className="text-destructive">*</span>
+                                </Label>
+                                <Select
+                                  value={item.tipo_prazo_id}
+                                  onValueChange={(val) =>
+                                    handleUpdateProvidencia(item.tempId, 'tipo_prazo_id', val)
+                                  }
+                                >
+                                  <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                                    <SelectValue placeholder="Selecione o tipo..." />
+                                  </SelectTrigger>
+                                  <SelectContent className="rounded-xl">
+                                    {tiposPrazoList.map((tp) => (
+                                      <SelectItem key={tp.id} value={tp.id}>
+                                        {tp.nome}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              {/* Campo 4: Status (task_status_providencia) */}
+                              <div className="space-y-1">
+                                <Label className="text-xs font-semibold">
+                                  Status <span className="text-destructive">*</span>
+                                </Label>
+                                <Select
+                                  value={item.status_id}
+                                  onValueChange={(val) =>
+                                    handleUpdateProvidencia(item.tempId, 'status_id', val)
+                                  }
+                                >
+                                  <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                                    <SelectValue placeholder="Selecione o status..." />
+                                  </SelectTrigger>
+                                  <SelectContent className="rounded-xl">
+                                    {statusProvLista.map((st) => (
+                                      <SelectItem key={st.id} value={st.id}>
+                                        <div className="flex items-center gap-1.5">
+                                          <span>{st.nome}</span>
+                                          {st.finaliza && (
+                                            <span className="text-[10px] text-muted-foreground">
+                                              (Finaliza)
+                                            </span>
+                                          )}
+                                        </div>
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       )
                     })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ============================================================= */}
-            {/* ABA 3: PROVIDÊNCIAS & FOLLOW-UP                               */}
-            {/* ============================================================= */}
-            {activeTab === 'providencias' && (
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="prox-prov"
-                    className="text-xs font-semibold text-foreground flex items-center justify-between"
-                  >
-                    <span>Próximas Providências</span>
-                    <span className="text-[11px] text-muted-foreground">Texto longo detalhado</span>
-                  </Label>
-                  <Textarea
-                    id="prox-prov"
-                    rows={6}
-                    placeholder="Descreva as providências a serem tomadas no caso, peticionamentos, contatos com o cliente ou correspondente..."
-                    value={proximasProvidencias}
-                    onChange={(e) => setProximasProvidencias(e.target.value)}
-                    className="resize-y min-h-[120px] rounded-xl bg-background font-normal text-xs sm:text-sm leading-relaxed"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                  <div className="space-y-1.5">
-                    <Label
-                      htmlFor="follow-up-date"
-                      className="text-xs font-semibold text-foreground flex items-center gap-1.5"
-                    >
-                      <CalendarClock className="w-3.5 h-3.5 text-amber-500" />
-                      <span>Data de Follow-up</span>
-                    </Label>
-                    <Input
-                      id="follow-up-date"
-                      type="date"
-                      value={followUp}
-                      onChange={(e) => setFollowUp(e.target.value)}
-                      className="h-10 rounded-xl bg-background"
-                    />
-                    <p className="text-[11px] text-muted-foreground">
-                      Follow-ups vencidos ganham destaque âmbar na listagem e no dashboard.
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-foreground">
-                      Última Atualização no Banco
-                    </Label>
-                    <div className="h-10 rounded-xl bg-muted/40 border border-border px-3 flex items-center text-xs text-muted-foreground">
-                      {updatedAtDisplay
-                        ? formatDateTimeBR(updatedAtDisplay)
-                        : 'Será gravada ao salvar'}
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      Campo técnico somente leitura, atualizado por triggers do banco de dados.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ============================================================= */}
-            {/* ABA 4: ANDAMENTOS E DECISÕES (LINHA DO TEMPO)                 */}
-            {/* ============================================================= */}
-            {activeTab === 'andamentos' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <h3 className="text-sm font-bold text-foreground">Andamentos e Decisões</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Histórico cronológico em ordem decrescente.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleOpenAdicionarAndamento}
-                    className="h-9 rounded-xl px-3.5 bg-primary text-primary-foreground font-semibold text-xs flex items-center gap-1.5 shadow-sm"
-                  >
-                    <Plus className="w-4 h-4 stroke-[2.5]" />
-                    <span>Adicionar Andamento</span>
-                  </Button>
-                </div>
-
-                {loadingAndamentos ? (
-                  <div className="p-8 text-center text-muted-foreground text-xs flex items-center justify-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span>Carregando andamentos...</span>
-                  </div>
-                ) : andamentos.length === 0 ? (
-                  <div className="p-8 text-center border border-dashed border-border rounded-2xl bg-muted/20 space-y-2">
-                    <History className="w-8 h-8 text-muted-foreground mx-auto" />
-                    <p className="text-xs text-muted-foreground">
-                      Nenhum andamento ou decisão registrado ainda.
-                    </p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleOpenAdicionarAndamento}
-                      className="rounded-xl text-xs"
-                    >
-                      + Adicionar primeiro andamento
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-border">
-                    {andamentos.map((item) => (
-                      <div
-                        key={item.id}
-                        className="relative group bg-card border border-border rounded-xl p-3.5 space-y-1.5 shadow-xs hover:border-primary/40 transition-colors"
-                      >
-                        {/* Dot da timeline */}
-                        <span className="absolute -left-[27px] top-4 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-background" />
-
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-foreground">
-                              {formatDateBR(item.data_andamento)}
-                            </span>
-                            {item.created_at && (
-                              <span className="text-[11px] text-muted-foreground">
-                                • Incluído em {formatDateTimeBR(item.created_at)}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenEditarAndamento(item)}
-                              className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                              title="Editar andamento"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setAndamentoToDelete(item)
-                                setAndamentoDeleteConfirmOpen(true)
-                              }}
-                              className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                              title="Excluir andamento"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-
-                        <p className="text-xs sm:text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed">
-                          {item.descricao}
-                        </p>
-                      </div>
-                    ))}
                   </div>
                 )}
               </div>
@@ -1362,11 +1282,7 @@ export function ControleModal({
           {/* Footer Principal */}
           <DialogFooter className="px-6 py-4 border-t border-border/70 shrink-0 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="text-xs text-muted-foreground text-left w-full sm:w-auto">
-              {isAguardandoAutorizacao && (
-                <span className="text-violet-600 dark:text-violet-400 font-medium">
-                  Aguardando autorização ativa
-                </span>
-              )}
+              <span>{providencias.length} providência(s) vinculada(s)</span>
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
@@ -1392,171 +1308,14 @@ export function ControleModal({
         </DialogContent>
       </Dialog>
 
-      {/* Submodal para Adicionar / Editar Prazo */}
-      <Dialog open={novoPrazoModalOpen} onOpenChange={setNovoPrazoModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold">
-              {prazoEmEdicaoIndex !== null ? 'Editar Prazo' : 'Adicionar Prazo'}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
-              Vincule um novo prazo ao controle de caso.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="prazo-data" className="text-xs font-semibold">
-                Data do Prazo <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="prazo-data"
-                type="date"
-                value={draftPrazoData}
-                onChange={(e) => setDraftPrazoData(e.target.value)}
-                className="h-10 rounded-xl bg-background"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Tipo de Prazo</Label>
-              <Select value={draftPrazoTipoId} onValueChange={setDraftPrazoTipoId}>
-                <SelectTrigger className="h-10 rounded-xl bg-background">
-                  <SelectValue placeholder="Selecione o tipo..." />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl">
-                  {tiposPrazoList.map((tp) => (
-                    <SelectItem key={tp.id} value={tp.id}>
-                      {tp.nome}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="prazo-desc" className="text-xs font-semibold">
-                Descrição do Prazo <span className="text-muted-foreground">(opcional)</span>
-              </Label>
-              <Textarea
-                id="prazo-desc"
-                rows={2}
-                placeholder="Ex: Apresentar contestação / manifestação..."
-                value={draftPrazoDescricao}
-                onChange={(e) => setDraftPrazoDescricao(e.target.value)}
-                className="resize-none rounded-xl bg-background"
-              />
-            </div>
-
-            <div className="flex items-center space-x-2 pt-2">
-              <Checkbox
-                id="prazo-principal"
-                checked={draftPrazoPrincipal}
-                onCheckedChange={(checked) => setDraftPrazoPrincipal(Boolean(checked))}
-              />
-              <Label htmlFor="prazo-principal" className="text-xs font-semibold cursor-pointer">
-                Marcar como Prazo Principal deste controle
-              </Label>
-            </div>
-            <p className="text-[11px] text-muted-foreground pl-6">
-              Apenas um prazo ativo pode ser principal. Ele será exibido na listagem com maior
-              prioridade.
-            </p>
-          </div>
-
-          <DialogFooter className="pt-3 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setNovoPrazoModalOpen(false)}
-              className="rounded-xl h-10"
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSalvarDraftPrazo}
-              className="rounded-xl h-10 px-4 bg-primary text-primary-foreground font-semibold"
-            >
-              Salvar Prazo
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Submodal para Adicionar / Editar Andamento */}
-      <Dialog open={andamentoFormOpen} onOpenChange={setAndamentoFormOpen}>
-        <DialogContent className="max-w-md rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold">
-              {andamentoEmEdicao ? 'Editar Andamento' : 'Novo Andamento / Decisão'}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
-              Registre despachos, decisões, reuniões ou notas relevantes.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="andamento-data" className="text-xs font-semibold">
-                Data do Andamento <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="andamento-data"
-                type="date"
-                value={andamentoData}
-                onChange={(e) => setAndamentoData(e.target.value)}
-                className="h-10 rounded-xl bg-background"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="andamento-desc" className="text-xs font-semibold">
-                Descrição <span className="text-destructive">*</span>
-              </Label>
-              <Textarea
-                id="andamento-desc"
-                rows={4}
-                placeholder="Descreva o andamento, decisão judicial, despacho ou nota..."
-                value={andamentoDescricao}
-                onChange={(e) => setAndamentoDescricao(e.target.value)}
-                className="resize-none rounded-xl bg-background"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="pt-3 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setAndamentoFormOpen(false)}
-              className="rounded-xl h-10"
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSalvarAndamento}
-              className="rounded-xl h-10 px-4 bg-primary text-primary-foreground font-semibold"
-            >
-              Gravar Andamento
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Confirmação de Exclusão de Andamento */}
+      {/* Confirmação de Exclusão Lógica de Providência persistida */}
       <DeleteConfirmDialog
-        open={andamentoDeleteConfirmOpen}
-        onOpenChange={setAndamentoDeleteConfirmOpen}
-        onConfirm={handleConfirmarExclusaoAndamento}
-        title="Excluir andamento?"
-        description="Tem certeza que deseja excluir apenas este andamento? Os demais itens do histórico deste controle serão preservados."
-        confirmButtonText="Excluir Andamento"
+        open={deleteProvConfirmOpen}
+        onOpenChange={setDeleteProvConfirmOpen}
+        onConfirm={handleConfirmarExclusaoProvidencia}
+        title="Excluir providência?"
+        description="Deseja excluir logicamente esta providência salva no banco de dados? As demais providências e o caso serão preservados."
+        confirmButtonText="Excluir Providência"
       />
 
       {/* Modal Compacto (+) para cadastrar novo Nome do Controle */}
@@ -1593,7 +1352,7 @@ export function ControleModal({
                 )}
               />
               <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                <span>Máx. 500 caracteres (trim aplicado)</span>
+                <span>Máx. 500 caracteres</span>
                 <span>{quickNomeInput.trim().length}/500</span>
               </div>
             </div>
@@ -1634,7 +1393,7 @@ export function ControleModal({
         <DialogContent className="max-w-md rounded-2xl p-6">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <UserCheck className="w-4 h-4 text-primary" />
+              <User className="w-4 h-4 text-primary" />
               <span>Novo Responsável pelo Controle</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
@@ -1692,6 +1451,76 @@ export function ControleModal({
                 className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
               >
                 {quickRespSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                <span>Salvar e Selecionar</span>
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal Compacto (+) para cadastrar novo Executor do Controle */}
+      <Dialog open={quickExecModalOpen} onOpenChange={setQuickExecModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <UserCheck className="w-4 h-4 text-primary" />
+              <span>Novo Executor do Controle</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Cadastre um novo executor para selecioná-lo imediatamente neste caso.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSalvarQuickExec} className="space-y-3.5 py-1">
+            <div className="space-y-1.5">
+              <Label htmlFor="quick-exec-input" className="text-xs font-semibold text-foreground">
+                Nome do Executor <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="quick-exec-input"
+                autoFocus
+                placeholder="Ex: Dra. Mariana Costa"
+                value={quickExecInput}
+                onChange={(e) => {
+                  setQuickExecInput(e.target.value)
+                  if (quickExecError) setQuickExecError(null)
+                }}
+                maxLength={255}
+                className={cn(
+                  'h-10 rounded-xl bg-background text-sm',
+                  quickExecError && 'border-destructive focus-visible:ring-destructive',
+                )}
+              />
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Máx. 255 caracteres</span>
+                <span>{quickExecInput.trim().length}/255</span>
+              </div>
+            </div>
+
+            {quickExecError && (
+              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{quickExecError}</span>
+              </div>
+            )}
+
+            <DialogFooter className="pt-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setQuickExecModalOpen(false)}
+                className="h-9 rounded-xl text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={quickExecSaving}
+                className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
+              >
+                {quickExecSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
                 <span>Salvar e Selecionar</span>
               </Button>
             </DialogFooter>

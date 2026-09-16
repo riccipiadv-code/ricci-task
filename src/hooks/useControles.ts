@@ -1,273 +1,250 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   TaskControleRecord,
+  TaskStatusRecord,
+  TaskStatusProvidenciaRecord,
+  TaskTipoPrazoRecord,
   TaskNomeControleRecord,
   TaskResponsavelControleRecord,
-  TaskStatusRecord,
-  TaskTipoPrazoRecord,
-  TaskResponsavelRecord,
-  LegaldeskUsuarioRecord,
-  ResponsavelOption,
-  SaveControleInput,
-  SavePrazoInput,
-  SaveAndamentoInput,
-  AppSettings,
-  DashboardMetrics,
+  TaskExecutorRecord,
+  ControleMetrics,
+  UserSettings,
 } from '@/types/task'
 import { controleService } from '@/services/controleService'
 import { useAuth } from '@/hooks/use-auth'
 
+const DEFAULT_SETTINGS: UserSettings = {
+  theme: 'claro',
+  defaultView: 'todos',
+  notificationsEnabled: true,
+}
+
 export function useControles() {
   const { user } = useAuth()
+
   const [controles, setControles] = useState<TaskControleRecord[]>([])
+  const [statusList, setStatusList] = useState<TaskStatusRecord[]>([])
+  const [statusProvidenciaList, setStatusProvidenciaList] = useState<TaskStatusProvidenciaRecord[]>(
+    [],
+  )
+  const [tiposPrazoList, setTiposPrazoList] = useState<TaskTipoPrazoRecord[]>([])
   const [nomesControle, setNomesControle] = useState<TaskNomeControleRecord[]>([])
   const [responsaveisControle, setResponsaveisControle] = useState<TaskResponsavelControleRecord[]>(
     [],
   )
-  const [statusList, setStatusList] = useState<TaskStatusRecord[]>([])
-  const [tiposPrazoList, setTiposPrazoList] = useState<TaskTipoPrazoRecord[]>([])
-  const [responsaveisCatalogo, setResponsaveisCatalogo] = useState<TaskResponsavelRecord[]>([])
-  const [usuariosInternos, setUsuariosInternos] = useState<LegaldeskUsuarioRecord[]>([])
-  const [settings, setSettingsState] = useState<AppSettings>(() => controleService.getSettings())
+  const [executores, setExecutores] = useState<TaskExecutorRecord[]>([])
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Carrega metadados (status, tipos de prazo, nomes dos controles e responsáveis pelo controle)
-  const loadMetadata = useCallback(async () => {
+  const [settings, setSettings] = useState<UserSettings>(() => {
     try {
-      const [statuses, tipos, nomes, resps] = await Promise.all([
-        controleService.getStatusList(),
-        controleService.getTiposPrazoList(),
+      const saved = localStorage.getItem('ricci_task_settings')
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS
+    } catch {
+      return DEFAULT_SETTINGS
+    }
+  })
+
+  const updateSettings = useCallback((newSettings: Partial<UserSettings>) => {
+    setSettings((prev) => {
+      const updated = { ...prev, ...newSettings }
+      try {
+        localStorage.setItem('ricci_task_settings', JSON.stringify(updated))
+      } catch (err) {
+        console.error('Erro ao salvar settings no localStorage:', err)
+      }
+      return updated
+    })
+  }, [])
+
+  // Carrega catálogos e controles
+  const carregarDadosCompletos = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [stList, stProvList, tpList, nomes, resps, execs, ctrlList] = await Promise.all([
+        controleService.getStatus(),
+        controleService.getStatusProvidencia(),
+        controleService.getTiposPrazo(),
         controleService.getNomesControle({ incluirInativos: true }),
         controleService.getResponsaveisControle({ incluirInativos: true }),
+        controleService.getExecutores({ incluirInativos: true }),
+        controleService.getControles(),
       ])
-      setStatusList(statuses)
-      setTiposPrazoList(tipos)
+
+      setStatusList(stList)
+      setStatusProvidenciaList(stProvList)
+      setTiposPrazoList(tpList)
       setNomesControle(nomes)
       setResponsaveisControle(resps)
+      setExecutores(execs)
+      setControles(ctrlList)
     } catch (err: any) {
-      console.error('Erro ao carregar metadados:', err)
-      setError(err?.message || 'Falha ao carregar cadastros')
+      console.error('Erro ao carregar dados do Ricci Task:', err)
+      setError(err?.message || 'Falha ao sincronizar dados com o Supabase.')
+    } finally {
+      setLoading(false)
     }
   }, [])
-
-  // Carrega controles ativos (deleted_at is null)
-  const refreshControles = useCallback(async () => {
-    try {
-      setError(null)
-      const data = await controleService.getControles()
-      setControles(data)
-    } catch (err: any) {
-      console.error('Erro ao carregar controles:', err)
-      setError(err?.message || 'Falha ao carregar controles do Supabase')
-    }
-  }, [])
-
-  const refreshAll = useCallback(async () => {
-    setLoading(true)
-    await Promise.all([loadMetadata(), refreshControles()])
-    setLoading(false)
-  }, [loadMetadata, refreshControles])
 
   useEffect(() => {
-    refreshAll()
-  }, [refreshAll])
+    if (user) {
+      carregarDadosCompletos()
+    }
+  }, [user, carregarDadosCompletos])
 
-  // Salvar controle (novo ou edição)
-  const saveControle = useCallback(
-    async (input: SaveControleInput) => {
-      const saved = await controleService.saveControle(input)
-      await refreshControles()
-      return saved
-    },
-    [refreshControles],
-  )
-
-  // Arquivar controle (preencher deleted_at e deleted_by)
-  const arquivarControle = useCallback(
-    async (id: string) => {
-      await controleService.arquivarControle(id, user?.id)
-      await refreshControles()
-    },
-    [user?.id, refreshControles],
-  )
-
-  // Salvar prazo
-  const savePrazo = useCallback(
-    async (input: SavePrazoInput) => {
-      const saved = await controleService.savePrazo(input)
-      await refreshControles()
-      return saved
-    },
-    [refreshControles],
-  )
-
-  const togglePrazoAtivo = useCallback(
-    async (id: string, ativo: boolean) => {
-      await controleService.togglePrazoAtivo(id, ativo)
-      await refreshControles()
-    },
-    [refreshControles],
-  )
-
-  const deletePrazo = useCallback(
-    async (id: string) => {
-      await controleService.deletePrazo(id)
-      await refreshControles()
-    },
-    [refreshControles],
-  )
-
-  // Salvar andamento
-  const saveAndamento = useCallback(
-    async (input: SaveAndamentoInput) => {
-      const saved = await controleService.saveAndamento(input)
-      await refreshControles()
-      return saved
-    },
-    [refreshControles],
-  )
-
-  const deleteAndamento = useCallback(
-    async (id: string) => {
-      await controleService.deleteAndamento(id)
-      await refreshControles()
-    },
-    [refreshControles],
-  )
-
-  // Preferências
-  const updateSettings = useCallback((updates: Partial<AppSettings>) => {
-    const next = controleService.saveSettings(updates)
-    setSettingsState(next)
-    return next
+  const refreshControles = useCallback(async () => {
+    try {
+      const ctrlList = await controleService.getControles()
+      setControles(ctrlList)
+    } catch (err: any) {
+      console.error('Erro ao recarregar controles:', err)
+    }
   }, [])
 
-  // Métricas calculadas para dashboard
-  const metrics: DashboardMetrics = useMemo(() => {
+  const refreshNomesControle = useCallback(async () => {
+    try {
+      const nomes = await controleService.getNomesControle({ incluirInativos: true })
+      setNomesControle(nomes)
+    } catch (err: any) {
+      console.error('Erro ao recarregar nomes de controle:', err)
+    }
+  }, [])
+
+  const refreshResponsaveisControle = useCallback(async () => {
+    try {
+      const resps = await controleService.getResponsaveisControle({ incluirInativos: true })
+      setResponsaveisControle(resps)
+    } catch (err: any) {
+      console.error('Erro ao recarregar responsáveis:', err)
+    }
+  }, [])
+
+  const refreshExecutores = useCallback(async () => {
+    try {
+      const execs = await controleService.getExecutores({ incluirInativos: true })
+      setExecutores(execs)
+    } catch (err: any) {
+      console.error('Erro ao recarregar executores:', err)
+    }
+  }, [])
+
+  const metrics: ControleMetrics = useMemo(() => {
     return controleService.calculateMetrics(controles)
   }, [controles])
 
-  // Lista de opções de responsáveis alimentada EXCLUSIVAMENTE por task_responsaveis_controle
-  const responsaveisOptions = useMemo<ResponsavelOption[]>(() => {
-    return responsaveisControle
-      .filter((r) => r.ativo)
-      .map((r) => ({
-        value: r.id,
-        id: r.id,
-        grupo: 'catalogo',
-        nome: r.nome,
-        detalhe: undefined,
-        tipo: 'equipe',
-      }))
-  }, [responsaveisControle])
-
-  // CRUD Nomes dos Controles
-  const refreshNomesControle = useCallback(async () => {
-    try {
-      const data = await controleService.getNomesControle({ incluirInativos: true })
-      setNomesControle(data)
-    } catch (err: any) {
-      console.error('Erro ao atualizar nomes de controle:', err)
-    }
-  }, [])
-
+  // Ações de cadastro
   const saveNomeControle = useCallback(
     async (input: { id?: string; nome: string; ativo?: boolean }) => {
-      const saved = await controleService.saveNomeControle(input, user?.id)
+      const saved = await controleService.saveNomeControle(input)
       await refreshNomesControle()
-      await refreshControles()
       return saved
     },
-    [user?.id, refreshNomesControle, refreshControles],
+    [refreshNomesControle],
   )
 
   const toggleNomeControleAtivo = useCallback(
     async (id: string, ativo: boolean) => {
-      await controleService.toggleNomeControleAtivo(id, ativo, user?.id)
+      await controleService.toggleNomeControleAtivo(id, ativo)
       await refreshNomesControle()
-      await refreshControles()
     },
-    [user?.id, refreshNomesControle, refreshControles],
+    [refreshNomesControle],
   )
 
   const excluirNomeControle = useCallback(
     async (id: string) => {
-      await controleService.excluirNomeControle(id, user?.id)
+      await controleService.deleteNomeControle(id)
       await refreshNomesControle()
-      await refreshControles()
     },
-    [user?.id, refreshNomesControle, refreshControles],
+    [refreshNomesControle],
   )
-
-  // CRUD Responsáveis pelo Controle
-  const refreshResponsaveisControle = useCallback(async () => {
-    try {
-      const data = await controleService.getResponsaveisControle({ incluirInativos: true })
-      setResponsaveisControle(data)
-    } catch (err: any) {
-      console.error('Erro ao atualizar responsaveis do controle:', err)
-    }
-  }, [])
 
   const saveResponsavelControle = useCallback(
     async (input: { id?: string; nome: string; ativo?: boolean }) => {
-      const saved = await controleService.saveResponsavelControle(input, user?.id)
+      const saved = await controleService.saveResponsavelControle(input)
       await refreshResponsaveisControle()
-      await refreshControles()
       return saved
     },
-    [user?.id, refreshResponsaveisControle, refreshControles],
+    [refreshResponsaveisControle],
   )
 
   const toggleResponsavelControleAtivo = useCallback(
     async (id: string, ativo: boolean) => {
-      await controleService.toggleResponsavelControleAtivo(id, ativo, user?.id)
+      await controleService.toggleResponsavelControleAtivo(id, ativo)
       await refreshResponsaveisControle()
-      await refreshControles()
     },
-    [user?.id, refreshResponsaveisControle, refreshControles],
+    [refreshResponsaveisControle],
   )
 
   const excluirResponsavelControle = useCallback(
     async (id: string) => {
-      await controleService.excluirResponsavelControle(id, user?.id)
+      await controleService.deleteResponsavelControle(id)
       await refreshResponsaveisControle()
+    },
+    [refreshResponsaveisControle],
+  )
+
+  const saveExecutor = useCallback(
+    async (input: { id?: string; nome: string; ativo?: boolean }) => {
+      const saved = await controleService.saveExecutor(input)
+      await refreshExecutores()
+      return saved
+    },
+    [refreshExecutores],
+  )
+
+  const toggleExecutorAtivo = useCallback(
+    async (id: string, ativo: boolean) => {
+      await controleService.toggleExecutorAtivo(id, ativo)
+      await refreshExecutores()
+    },
+    [refreshExecutores],
+  )
+
+  const excluirExecutor = useCallback(
+    async (id: string) => {
+      await controleService.deleteExecutor(id)
+      await refreshExecutores()
+    },
+    [refreshExecutores],
+  )
+
+  const archiveControle = useCallback(
+    async (id: string) => {
+      await controleService.archiveControle(id)
       await refreshControles()
     },
-    [user?.id, refreshResponsaveisControle, refreshControles],
+    [refreshControles],
   )
 
   return {
     controles,
+    statusList,
+    statusProvidenciaList,
+    tiposPrazoList,
     nomesControle,
     responsaveisControle,
-    statusList,
-    tiposPrazoList,
-    responsaveisCatalogo,
-    usuariosInternos,
-    responsaveisOptions,
+    executores,
     metrics,
-    settings,
     loading,
     error,
-    refreshAll,
+    settings,
+    updateSettings,
     refreshControles,
     refreshNomesControle,
     refreshResponsaveisControle,
+    refreshExecutores,
     saveNomeControle,
     toggleNomeControleAtivo,
     excluirNomeControle,
     saveResponsavelControle,
     toggleResponsavelControleAtivo,
     excluirResponsavelControle,
-    saveControle,
-    arquivarControle,
-    savePrazo,
-    togglePrazoAtivo,
-    deletePrazo,
-    saveAndamento,
-    deleteAndamento,
-    updateSettings,
+    saveExecutor,
+    toggleExecutorAtivo,
+    excluirExecutor,
+    archiveControle,
+    recarregarTudo: carregarDadosCompletos,
   }
 }

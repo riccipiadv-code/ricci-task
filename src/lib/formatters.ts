@@ -43,25 +43,17 @@ export function formatDateTimeBR(dateString?: string | null): string {
  * Retorna se uma data YYYY-MM-DD está vencida (estritamente menor que hoje).
  * Regra do spec: "Não considere vencido um controle cujo status tenha finaliza = true."
  */
-export function isPrazoOverdue(dateIso?: string | null, status?: TaskStatusRecord | null): boolean {
-  if (!dateIso || !status) return false
-  if (status.finaliza) return false
-  const cleanDate = dateIso.split('T')[0]
-  const today = new Date().toISOString().split('T')[0]
-  return cleanDate < today
-}
-
-/**
- * Retorna se um follow-up está vencido (estritamente menor que hoje).
- * Regra do spec: Não considera vencido se finaliza = true.
- */
-export function isFollowUpOverdue(
+export function isPrazoOverdue(
   dateIso?: string | null,
-  status?: TaskStatusRecord | null,
+  status?: { finaliza?: boolean | null } | null,
 ): boolean {
-  return isPrazoOverdue(dateIso, status)
+  if (!dateIso) return false
+  if (status?.finaliza) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const d = new Date(dateIso + 'T00:00:00')
+  return d < today
 }
-
 /**
  * Retorna se uma data é exatamente hoje
  */

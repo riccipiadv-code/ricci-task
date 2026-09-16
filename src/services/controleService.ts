@@ -1,94 +1,75 @@
 import { supabase } from '@/lib/supabase/client'
 import {
   TaskControleRecord,
+  TaskStatusRecord,
+  TaskStatusProvidenciaRecord,
+  TaskTipoPrazoRecord,
   TaskNomeControleRecord,
   TaskResponsavelControleRecord,
-  TaskStatusRecord,
-  TaskTipoPrazoRecord,
-  TaskResponsavelRecord,
-  LegaldeskUsuarioRecord,
-  TaskPrazoRecord,
-  TaskAndamentoRecord,
+  TaskExecutorRecord,
+  TaskProvidenciaRecord,
   SaveControleInput,
-  SavePrazoInput,
-  SaveAndamentoInput,
-  AppSettings,
-  DashboardMetrics,
+  SaveProvidenciaInput,
+  SaveNomeControleInput,
+  SaveResponsavelControleInput,
+  SaveExecutorInput,
+  ControleMetrics,
 } from '@/types/task'
-
-const SETTINGS_KEY = 'ricci_app_settings'
-
-const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'claro',
-  defaultView: 'todos',
-  notificationsEnabled: true,
-}
 
 export const controleService = {
   // --------------------------------------------------------------------------
-  // Metadados / Cadastros Auxiliares (somente leitura)
+  // LISTAGEM DE STATUS (task_status)
   // --------------------------------------------------------------------------
-  async getStatusList(): Promise<TaskStatusRecord[]> {
+  async getStatus(): Promise<TaskStatusRecord[]> {
     const { data, error } = await supabase
       .from('task_status')
       .select('*')
       .eq('ativo', true)
       .order('ordem', { ascending: true })
-      .order('nome', { ascending: true })
 
     if (error) {
       console.error('Erro ao buscar task_status:', error)
       throw error
     }
-    return (data as TaskStatusRecord[]) || []
+    return (data || []) as TaskStatusRecord[]
   },
 
-  async getTiposPrazoList(): Promise<TaskTipoPrazoRecord[]> {
+  // --------------------------------------------------------------------------
+  // LISTAGEM DE STATUS DE PROVIDÊNCIA (task_status_providencia)
+  // --------------------------------------------------------------------------
+  async getStatusProvidencia(): Promise<TaskStatusProvidenciaRecord[]> {
+    const { data, error } = await supabase
+      .from('task_status_providencia')
+      .select('*')
+      .eq('ativo', true)
+      .order('ordem', { ascending: true })
+
+    if (error) {
+      console.error('Erro ao buscar task_status_providencia:', error)
+      throw error
+    }
+    return (data || []) as TaskStatusProvidenciaRecord[]
+  },
+
+  // --------------------------------------------------------------------------
+  // LISTAGEM DE TIPOS DE PRAZO (task_tipos_prazo)
+  // --------------------------------------------------------------------------
+  async getTiposPrazo(): Promise<TaskTipoPrazoRecord[]> {
     const { data, error } = await supabase
       .from('task_tipos_prazo')
       .select('*')
       .eq('ativo', true)
       .order('ordem', { ascending: true })
-      .order('nome', { ascending: true })
 
     if (error) {
       console.error('Erro ao buscar task_tipos_prazo:', error)
       throw error
     }
-    return (data as TaskTipoPrazoRecord[]) || []
-  },
-
-  async getResponsaveisCatalogo(): Promise<TaskResponsavelRecord[]> {
-    const { data, error } = await supabase
-      .from('task_responsaveis')
-      .select('*')
-      .eq('ativo', true)
-      .order('ordem', { ascending: true })
-      .order('nome', { ascending: true })
-
-    if (error) {
-      console.error('Erro ao buscar task_responsaveis:', error)
-      throw error
-    }
-    return (data as TaskResponsavelRecord[]) || []
-  },
-
-  async getUsuariosInternosLegaldesk(): Promise<LegaldeskUsuarioRecord[]> {
-    const { data, error } = await supabase
-      .from('legaldesk_usuarios')
-      .select('id, source_id, nome, sigla, email, ativo, tipo_usuario, departamento')
-      .eq('ativo', true)
-      .order('nome', { ascending: true })
-
-    if (error) {
-      console.error('Erro ao buscar legaldesk_usuarios:', error)
-      throw error
-    }
-    return (data as LegaldeskUsuarioRecord[]) || []
+    return (data || []) as TaskTipoPrazoRecord[]
   },
 
   // --------------------------------------------------------------------------
-  // Nomes dos Controles (task_nomes_controle)
+  // GESTÃO DE NOMES DOS CONTROLES (task_nomes_controle)
   // --------------------------------------------------------------------------
   async getNomesControle(options?: {
     incluirInativos?: boolean
@@ -108,123 +89,100 @@ export const controleService = {
       console.error('Erro ao buscar task_nomes_controle:', error)
       throw error
     }
-    return (data as TaskNomeControleRecord[]) || []
+    return (data || []) as TaskNomeControleRecord[]
   },
 
-  async saveNomeControle(
-    input: { id?: string; nome: string; ativo?: boolean },
-    userId?: string | null,
-  ): Promise<TaskNomeControleRecord> {
-    const nomeLimpo = input.nome.trim()
-    if (!nomeLimpo) {
+  async saveNomeControle(input: SaveNomeControleInput): Promise<TaskNomeControleRecord> {
+    const cleanNome = input.nome.trim()
+    if (!cleanNome) {
       throw new Error('O Nome do Controle é obrigatório.')
     }
-    if (nomeLimpo.length > 500) {
-      throw new Error('O Nome do Controle não pode exceder 500 caracteres.')
-    }
-    // Não permitir valor composto apenas por pontuação e espaços
-    // Mantém validação: precisa conter ao menos um caractere alfanumérico
-    if (!/[\p{L}\p{N}]/u.test(nomeLimpo)) {
-      throw new Error(
-        'O Nome do Controle deve conter letras ou números (não apenas pontuação ou espaços).',
-      )
-    }
 
-    const payload: any = {
-      nome: nomeLimpo,
-      ativo: input.ativo !== undefined ? input.ativo : true,
-      updated_at: new Date().toISOString(),
-      updated_by: userId || null,
-    }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const userId = user?.id || null
 
     if (input.id) {
       const { data, error } = await supabase
         .from('task_nomes_controle')
-        .update(payload)
+        .update({
+          nome: cleanNome,
+          ativo: input.ativo !== undefined ? input.ativo : true,
+          updated_at: new Date().toISOString(),
+          updated_by: userId,
+        })
         .eq('id', input.id)
         .select()
         .single()
 
-      if (error) {
-        if (error.code === '23505') {
-          throw new Error('Já existe um Nome do Controle equivalente a este.')
-        }
-        console.error('Erro ao atualizar task_nomes_controle:', error)
-        throw error
-      }
+      if (error) throw error
       return data as TaskNomeControleRecord
     } else {
-      payload.created_by = userId || null
       const { data, error } = await supabase
         .from('task_nomes_controle')
-        .insert(payload)
+        .insert({
+          nome: cleanNome,
+          ativo: input.ativo !== undefined ? input.ativo : true,
+          created_by: userId,
+          updated_by: userId,
+        })
         .select()
         .single()
 
-      if (error) {
-        if (error.code === '23505') {
-          throw new Error('Já existe um Nome do Controle equivalente a este.')
-        }
-        console.error('Erro ao inserir task_nomes_controle:', error)
-        throw error
-      }
+      if (error) throw error
       return data as TaskNomeControleRecord
     }
   },
 
-  async toggleNomeControleAtivo(id: string, ativo: boolean, userId?: string | null): Promise<void> {
+  async toggleNomeControleAtivo(id: string, ativo: boolean): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     const { error } = await supabase
       .from('task_nomes_controle')
       .update({
         ativo,
         updated_at: new Date().toISOString(),
-        updated_by: userId || null,
+        updated_by: user?.id || null,
       })
       .eq('id', id)
 
-    if (error) {
-      console.error('Erro ao alternar status de task_nomes_controle:', error)
-      throw error
-    }
+    if (error) throw error
   },
 
-  async excluirNomeControle(id: string, userId?: string | null): Promise<void> {
-    // 1. Verificação prévia no frontend se está em uso em casos ativos
-    const { count, error: countErr } = await supabase
+  async deleteNomeControle(id: string): Promise<void> {
+    const { count, error: checkError } = await supabase
       .from('task_tarefas')
       .select('id', { count: 'exact', head: true })
       .eq('nome_controle_id', id)
       .is('deleted_at', null)
 
-    if (countErr) {
-      console.error('Erro ao verificar uso de task_nomes_controle:', countErr)
-    }
+    if (checkError) throw checkError
     if (count && count > 0) {
       throw new Error(
-        `Não é possível excluir: este Nome do Controle está vinculado a ${count} caso(s) ativo(s).`,
+        `Este Nome do Controle está associado a ${count} controle(s) de caso ativo(s) e não pode ser excluído.`,
       )
     }
 
-    // 2. Exclusão lógica: preencher deleted_at e deleted_by (trigger do banco também protege)
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
     const { error } = await supabase
       .from('task_nomes_controle')
       .update({
         deleted_at: new Date().toISOString(),
-        deleted_by: userId || null,
+        deleted_by: user?.id || null,
+        ativo: false,
       })
       .eq('id', id)
 
-    if (error) {
-      console.error('Erro ao excluir task_nomes_controle:', error)
-      if (error.message?.includes('vinculado a caso(s) ativo(s)')) {
-        throw new Error('Não é possível excluir: Nome do Controle vinculado a caso(s) ativo(s).')
-      }
-      throw error
-    }
+    if (error) throw error
   },
 
   // --------------------------------------------------------------------------
-  // Responsáveis pelo Controle (task_responsaveis_controle)
+  // GESTÃO DE RESPONSÁVEIS PELO CONTROLE (task_responsaveis_controle)
   // --------------------------------------------------------------------------
   async getResponsaveisControle(options?: {
     incluirInativos?: boolean
@@ -244,264 +202,442 @@ export const controleService = {
       console.error('Erro ao buscar task_responsaveis_controle:', error)
       throw error
     }
-    return (data as TaskResponsavelControleRecord[]) || []
+    return (data || []) as TaskResponsavelControleRecord[]
   },
 
   async saveResponsavelControle(
-    input: { id?: string; nome: string; ativo?: boolean },
-    userId?: string | null,
+    input: SaveResponsavelControleInput,
   ): Promise<TaskResponsavelControleRecord> {
-    const nomeLimpo = input.nome.trim()
-    if (!nomeLimpo) {
+    const cleanNome = input.nome.trim()
+    if (!cleanNome) {
       throw new Error('O nome do responsável é obrigatório.')
     }
-    if (nomeLimpo.length > 255) {
-      throw new Error('O nome do responsável não pode exceder 255 caracteres.')
-    }
-    if (!/[\p{L}\p{N}]/u.test(nomeLimpo)) {
-      throw new Error(
-        'O nome do responsável deve conter letras ou números (não apenas pontuação ou espaços).',
-      )
-    }
 
-    const payload: any = {
-      nome: nomeLimpo,
-      ativo: input.ativo !== undefined ? input.ativo : true,
-      updated_at: new Date().toISOString(),
-      updated_by: userId || null,
-    }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const userId = user?.id || null
 
     if (input.id) {
       const { data, error } = await supabase
         .from('task_responsaveis_controle')
-        .update(payload)
+        .update({
+          nome: cleanNome,
+          ativo: input.ativo !== undefined ? input.ativo : true,
+          updated_at: new Date().toISOString(),
+          updated_by: userId,
+        })
         .eq('id', input.id)
         .select()
         .single()
 
-      if (error) {
-        if (error.code === '23505') {
-          throw new Error('Já existe um Responsável equivalente a este.')
-        }
-        console.error('Erro ao atualizar task_responsaveis_controle:', error)
-        throw error
-      }
+      if (error) throw error
       return data as TaskResponsavelControleRecord
     } else {
-      payload.created_by = userId || null
       const { data, error } = await supabase
         .from('task_responsaveis_controle')
-        .insert(payload)
+        .insert({
+          nome: cleanNome,
+          ativo: input.ativo !== undefined ? input.ativo : true,
+          created_by: userId,
+          updated_by: userId,
+        })
         .select()
         .single()
 
-      if (error) {
-        if (error.code === '23505') {
-          throw new Error('Já existe um Responsável equivalente a este.')
-        }
-        console.error('Erro ao inserir task_responsaveis_controle:', error)
-        throw error
-      }
+      if (error) throw error
       return data as TaskResponsavelControleRecord
     }
   },
 
-  async toggleResponsavelControleAtivo(
-    id: string,
-    ativo: boolean,
-    userId?: string | null,
-  ): Promise<void> {
+  async toggleResponsavelControleAtivo(id: string, ativo: boolean): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     const { error } = await supabase
       .from('task_responsaveis_controle')
       .update({
         ativo,
         updated_at: new Date().toISOString(),
-        updated_by: userId || null,
+        updated_by: user?.id || null,
       })
       .eq('id', id)
 
-    if (error) {
-      console.error('Erro ao alternar status de task_responsaveis_controle:', error)
-      throw error
-    }
+    if (error) throw error
   },
 
-  async excluirResponsavelControle(id: string, userId?: string | null): Promise<void> {
-    // 1. Verificação prévia no frontend se está em uso em casos ativos
-    const { count, error: countErr } = await supabase
+  async deleteResponsavelControle(id: string): Promise<void> {
+    const { count, error: checkError } = await supabase
       .from('task_tarefas')
       .select('id', { count: 'exact', head: true })
       .eq('responsavel_controle_id', id)
       .is('deleted_at', null)
 
-    if (countErr) {
-      console.error('Erro ao verificar uso de task_responsaveis_controle:', countErr)
-    }
+    if (checkError) throw checkError
     if (count && count > 0) {
       throw new Error(
-        `Não é possível excluir: este Responsável está vinculado a ${count} caso(s) ativo(s).`,
+        `Este responsável está vinculado a ${count} controle(s) de caso ativo(s) e não pode ser excluído.`,
       )
     }
 
-    // 2. Exclusão lógica: preencher deleted_at e deleted_by (trigger do banco também protege)
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
     const { error } = await supabase
       .from('task_responsaveis_controle')
       .update({
         deleted_at: new Date().toISOString(),
-        deleted_by: userId || null,
+        deleted_by: user?.id || null,
+        ativo: false,
       })
       .eq('id', id)
 
-    if (error) {
-      console.error('Erro ao excluir task_responsaveis_controle:', error)
-      if (error.message?.includes('vinculado a caso(s) ativo(s)')) {
-        throw new Error('Não é possível excluir: Responsável vinculado a caso(s) ativo(s).')
-      }
-      throw error
-    }
+    if (error) throw error
   },
 
   // --------------------------------------------------------------------------
-  // Controles (task_tarefas)
+  // GESTÃO DE EXECUTORES (task_executores)
   // --------------------------------------------------------------------------
-  async getControles(): Promise<TaskControleRecord[]> {
-    // 1. Busca controles não excluídos
-    const { data: tarefas, error: errTarefas } = await supabase
-      .from('task_tarefas')
+  async getExecutores(options?: { incluirInativos?: boolean }): Promise<TaskExecutorRecord[]> {
+    let query = supabase
+      .from('task_executores')
       .select('*')
       .is('deleted_at', null)
-      .order('updated_at', { ascending: false })
+      .order('nome', { ascending: true })
 
-    if (errTarefas) {
-      console.error('Erro ao listar task_tarefas:', errTarefas)
-      throw errTarefas
+    if (!options?.incluirInativos) {
+      query = query.eq('ativo', true)
     }
-    if (!tarefas || tarefas.length === 0) {
+
+    const { data, error } = await query
+    if (error) {
+      console.error('Erro ao buscar task_executores:', error)
+      throw error
+    }
+    return (data || []) as TaskExecutorRecord[]
+  },
+
+  async saveExecutor(input: SaveExecutorInput): Promise<TaskExecutorRecord> {
+    const cleanNome = input.nome.trim()
+    if (!cleanNome) {
+      throw new Error('O nome do executor é obrigatório.')
+    }
+    if (cleanNome.length > 255) {
+      throw new Error('O nome deve ter no máximo 255 caracteres.')
+    }
+    if (!/[\p{L}\p{N}]/u.test(cleanNome)) {
+      throw new Error('O nome não pode ser composto apenas por espaços ou pontuação.')
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const userId = user?.id || null
+
+    if (input.id) {
+      const { data, error } = await supabase
+        .from('task_executores')
+        .update({
+          nome: cleanNome,
+          ativo: input.ativo !== undefined ? input.ativo : true,
+          updated_at: new Date().toISOString(),
+          updated_by: userId,
+        })
+        .eq('id', input.id)
+        .select()
+        .single()
+
+      if (error) {
+        if (error.code === '23505' || error.message.includes('23505')) {
+          throw new Error('Já existe um Executor equivalente a este.')
+        }
+        throw error
+      }
+      return data as TaskExecutorRecord
+    } else {
+      const { data, error } = await supabase
+        .from('task_executores')
+        .insert({
+          nome: cleanNome,
+          ativo: input.ativo !== undefined ? input.ativo : true,
+          created_by: userId,
+          updated_by: userId,
+        })
+        .select()
+        .single()
+
+      if (error) {
+        if (error.code === '23505' || error.message.includes('23505')) {
+          throw new Error('Já existe um Executor equivalente a este.')
+        }
+        throw error
+      }
+      return data as TaskExecutorRecord
+    }
+  },
+
+  async toggleExecutorAtivo(id: string, ativo: boolean): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const { error } = await supabase
+      .from('task_executores')
+      .update({
+        ativo,
+        updated_at: new Date().toISOString(),
+        updated_by: user?.id || null,
+      })
+      .eq('id', id)
+
+    if (error) throw error
+  },
+
+  async deleteExecutor(id: string): Promise<void> {
+    const { count, error: checkError } = await supabase
+      .from('task_tarefas')
+      .select('id', { count: 'exact', head: true })
+      .eq('executor_id', id)
+      .is('deleted_at', null)
+
+    if (checkError) throw checkError
+    if (count && count > 0) {
+      throw new Error(
+        `Este executor está vinculado a ${count} controle(s) de caso ativo(s) e não pode ser excluído.`,
+      )
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { error } = await supabase
+      .from('task_executores')
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: user?.id || null,
+        ativo: false,
+      })
+      .eq('id', id)
+
+    if (error) throw error
+  },
+
+  // --------------------------------------------------------------------------
+  // GESTÃO DE PROVIDÊNCIAS (task_providencias)
+  // --------------------------------------------------------------------------
+  async getProvidencias(tarefaId: string): Promise<TaskProvidenciaRecord[]> {
+    const { data, error } = await supabase
+      .from('task_providencias')
+      .select(`
+        *,
+        tipo_prazo:task_tipos_prazo(*),
+        status:task_status_providencia(*)
+      `)
+      .eq('tarefa_id', tarefaId)
+      .is('deleted_at', null)
+      .order('prazo_conclusao', { ascending: true })
+      .order('ordem', { ascending: true })
+
+    if (error) {
+      console.error('Erro ao buscar task_providencias:', error)
+      throw error
+    }
+
+    return (data || []) as unknown as TaskProvidenciaRecord[]
+  },
+
+  async saveProvidencia(input: SaveProvidenciaInput): Promise<TaskProvidenciaRecord> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const userId = user?.id || null
+
+    if (input.id) {
+      const { data, error } = await supabase
+        .from('task_providencias')
+        .update({
+          providencia: input.providencia.trim(),
+          prazo_conclusao: input.prazo_conclusao,
+          tipo_prazo_id: input.tipo_prazo_id,
+          status_id: input.status_id,
+          ordem: input.ordem ?? 0,
+          updated_at: new Date().toISOString(),
+          updated_by: userId,
+        })
+        .eq('id', input.id)
+        .select(`
+          *,
+          tipo_prazo:task_tipos_prazo(*),
+          status:task_status_providencia(*)
+        `)
+        .single()
+
+      if (error) throw error
+      return data as unknown as TaskProvidenciaRecord
+    } else {
+      const { data, error } = await supabase
+        .from('task_providencias')
+        .insert({
+          tarefa_id: input.tarefa_id,
+          providencia: input.providencia.trim(),
+          prazo_conclusao: input.prazo_conclusao,
+          tipo_prazo_id: input.tipo_prazo_id,
+          status_id: input.status_id,
+          ordem: input.ordem ?? 0,
+          created_by: userId,
+          updated_by: userId,
+        })
+        .select(`
+          *,
+          tipo_prazo:task_tipos_prazo(*),
+          status:task_status_providencia(*)
+        `)
+        .single()
+
+      if (error) throw error
+      return data as unknown as TaskProvidenciaRecord
+    }
+  },
+
+  async deleteProvidencia(id: string): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { error } = await supabase
+      .from('task_providencias')
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: user?.id || null,
+      })
+      .eq('id', id)
+
+    if (error) throw error
+  },
+
+  // --------------------------------------------------------------------------
+  // LISTAGEM PRINCIPAL DE CONTROLES (task_tarefas)
+  // --------------------------------------------------------------------------
+  async getControles(): Promise<TaskControleRecord[]> {
+    // 1. Busca os controles ativos com joins nas tabelas auxiliares
+    const { data: tarefasRaw, error: tarefasError } = await supabase
+      .from('task_tarefas')
+      .select(`
+        *,
+        nome_controle_obj:task_nomes_controle(id, nome),
+        responsavel_obj:task_responsaveis_controle(id, nome),
+        executor_obj:task_executores(id, nome),
+        status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
+      `)
+      .is('deleted_at', null)
+
+    if (tarefasError) {
+      console.error('Erro ao buscar task_tarefas:', tarefasError)
+      throw tarefasError
+    }
+
+    if (!tarefasRaw || tarefasRaw.length === 0) {
       return []
     }
 
-    const tarefaIds = tarefas.map((t) => t.id)
+    const tarefaIds = tarefasRaw.map((t) => t.id)
 
-    // 2. Busca dependências em paralelo: status, nomes_controle, responsaveis_controle, prazos
-    const [statusRes, nomesRes, respCtrlRes, prazosRes] = await Promise.all([
-      supabase.from('task_status').select('*'),
-      supabase.from('task_nomes_controle').select('*'),
-      supabase.from('task_responsaveis_controle').select('*'),
-      supabase
-        .from('task_prazos')
-        .select('*, task_tipos_prazo (*)')
-        .in('tarefa_id', tarefaIds)
-        .eq('ativo', true)
-        .order('data_prazo', { ascending: true }),
-    ])
+    // 2. Busca todas as providências ativas desses controles
+    const { data: providenciasRaw, error: provError } = await supabase
+      .from('task_providencias')
+      .select(`
+        *,
+        tipo_prazo:task_tipos_prazo(*),
+        status:task_status_providencia(*)
+      `)
+      .in('tarefa_id', tarefaIds)
+      .is('deleted_at', null)
+      .order('prazo_conclusao', { ascending: true })
+      .order('ordem', { ascending: true })
 
-    const statusMap = new Map<string, TaskStatusRecord>()
-    ;(statusRes.data || []).forEach((s) => statusMap.set(s.id, s as TaskStatusRecord))
+    if (provError) {
+      console.error('Erro ao buscar providências dos controles:', provError)
+      throw provError
+    }
 
-    const nomesMap = new Map<string, TaskNomeControleRecord>()
-    ;(nomesRes.data || []).forEach((n) => nomesMap.set(n.id, n as TaskNomeControleRecord))
-
-    const respCtrlMap = new Map<string, TaskResponsavelControleRecord>()
-    ;(respCtrlRes.data || []).forEach((r) =>
-      respCtrlMap.set(r.id, r as TaskResponsavelControleRecord),
-    )
-
-    const prazosByTarefa = new Map<string, TaskPrazoRecord[]>()
-    ;(prazosRes.data || []).forEach((raw: any) => {
-      const p: TaskPrazoRecord = {
-        id: raw.id,
-        tarefa_id: raw.tarefa_id,
-        data_prazo: raw.data_prazo,
-        tipo_prazo_id: raw.tipo_prazo_id,
-        descricao: raw.descricao,
-        principal: raw.principal,
-        ativo: raw.ativo,
-        created_at: raw.created_at,
-        created_by: raw.created_by,
-        updated_at: raw.updated_at,
-        updated_by: raw.updated_by,
-        tipo_prazo: raw.task_tipos_prazo || null,
+    // Agrupa providências por tarefa_id
+    const provsByTarefa: Record<string, TaskProvidenciaRecord[]> = {}
+    for (const p of (providenciasRaw || []) as unknown as TaskProvidenciaRecord[]) {
+      if (!provsByTarefa[p.tarefa_id]) {
+        provsByTarefa[p.tarefa_id] = []
       }
-      const existing = prazosByTarefa.get(p.tarefa_id) || []
-      existing.push(p)
-      prazosByTarefa.set(p.tarefa_id, existing)
-    })
+      provsByTarefa[p.tarefa_id].push(p)
+    }
 
-    // 3. Monta os objetos de controles completos
-    const controles: TaskControleRecord[] = tarefas.map((t) => {
-      const status = statusMap.get(t.status_id) || null
-      const nomeControleRel = t.nome_controle_id ? nomesMap.get(t.nome_controle_id) || null : null
-      const respControleRel = t.responsavel_controle_id
-        ? respCtrlMap.get(t.responsavel_controle_id) || null
-        : null
-      const prazos = prazosByTarefa.get(t.id) || []
+    // 3. Monta o modelo hidratado
+    const controles: TaskControleRecord[] = tarefasRaw.map((t: any) => {
+      const provs = provsByTarefa[t.id] || []
 
-      // Prazo destaque: principal ativo ou próximo ativo mais próximo
-      const principalPrazo = prazos.find((p) => p.principal && p.ativo)
-      const proximoPrazo = prazos.length > 0 ? prazos[0] : null
-      const prazoDestaque = principalPrazo || proximoPrazo || null
+      // Ordena providências: abertas primeiro por prazo crescente, depois finalizadas
+      const provsOrdenadas = [...provs].sort((a, b) => {
+        const aFinaliza = Boolean(a.status?.finaliza)
+        const bFinaliza = Boolean(b.status?.finaliza)
+        if (aFinaliza !== bFinaliza) {
+          return aFinaliza ? 1 : -1
+        }
+        return (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || '')
+      })
 
-      const nomeExibicao = nomeControleRel?.nome || t.nome_controle || ''
-      const responsavelNome = respControleRel?.nome || 'Não atribuído'
-      const responsavelTipoBadge = respControleRel ? 'Controle' : '—'
+      // Próxima providência aberta (finaliza !== true)
+      const provAbertas = provs.filter((p) => !p.status?.finaliza)
+      // Ordena abertas por prazo_conclusao crescente
+      provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
+      const proximaProvAberta = provAbertas[0] || null
 
       return {
         id: t.id,
-        nome_controle: nomeExibicao,
         nome_controle_id: t.nome_controle_id,
-        responsavel_controle_id: t.responsavel_controle_id,
-        controle_cliente: t.controle_cliente,
-        controle_ricci: t.controle_ricci,
         identificacao_caso: t.identificacao_caso,
         status_id: t.status_id,
-        descricao_status: t.descricao_status,
-        proximas_providencias: t.proximas_providencias,
-        responsavel_legaldesk_id: t.responsavel_legaldesk_id,
-        responsavel_id: t.responsavel_id,
-        follow_up: t.follow_up,
-        data_referencia: t.data_referencia,
+        data_autorizacao: t.data_autorizacao,
+        prazo_conclusao: t.prazo_conclusao,
+        responsavel_controle_id: t.responsavel_controle_id,
+        executor_id: t.executor_id,
+        pasta_cliente: t.pasta_cliente,
+        pasta_ricci: t.pasta_ricci,
         created_at: t.created_at,
         created_by: t.created_by,
         updated_at: t.updated_at,
         updated_by: t.updated_by,
         deleted_at: t.deleted_at,
         deleted_by: t.deleted_by,
-        status,
-        nome_controle_rel: nomeControleRel,
-        responsavel_controle_rel: respControleRel,
-        responsavel_interno: null,
-        responsavel_catalogo: null,
-        prazos,
-        responsavel_nome: responsavelNome,
-        responsavel_tipo_badge: responsavelTipoBadge,
-        prazo_destaque: prazoDestaque,
+
+        nome_controle: t.nome_controle_obj?.nome || null,
+        responsavel_nome: t.responsavel_obj?.nome || null,
+        executor_nome: t.executor_obj?.nome || null,
+        status: t.status_obj || null,
+        responsavel_controle: t.responsavel_obj || null,
+        executor: t.executor_obj || null,
+
+        providencias: provsOrdenadas,
+        proxima_providencia: proximaProvAberta,
       }
     })
 
-    // 4. Ordenação especificada:
-    // "por prazo principal ou próximo prazo ativo, depois follow-up e, por fim, updated_at decrescente."
+    // 4. Ordenação padrão: data da próxima providência aberta em ordem crescente.
+    // Casos sem providência aberta ficam por último; desempate por updated_at decrescente.
     controles.sort((a, b) => {
-      const datePrazoA = a.prazo_destaque?.data_prazo
-      const datePrazoB = b.prazo_destaque?.data_prazo
+      const aData = a.proxima_providencia?.prazo_conclusao || null
+      const bData = b.proxima_providencia?.prazo_conclusao || null
 
-      if (datePrazoA && datePrazoB) {
-        if (datePrazoA !== datePrazoB) return datePrazoA.localeCompare(datePrazoB)
-      } else if (datePrazoA && !datePrazoB) {
-        return -1
-      } else if (!datePrazoA && datePrazoB) {
-        return 1
+      if (aData && bData) {
+        if (aData !== bData) {
+          return aData.localeCompare(bData)
+        }
+        // Desempate
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
       }
 
-      // Desempate por follow-up
-      if (a.follow_up && b.follow_up) {
-        if (a.follow_up !== b.follow_up) return a.follow_up.localeCompare(b.follow_up)
-      } else if (a.follow_up && !b.follow_up) {
-        return -1
-      } else if (!a.follow_up && b.follow_up) {
-        return 1
-      }
+      if (aData && !bData) return -1
+      if (!aData && bData) return 1
 
-      // Desempate final por updated_at decrescente
+      // Nenhum tem providência aberta: updated_at decrescente
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
     })
 
@@ -511,119 +647,82 @@ export const controleService = {
   async getControleById(id: string): Promise<TaskControleRecord | null> {
     const { data: t, error } = await supabase
       .from('task_tarefas')
-      .select('*')
+      .select(`
+        *,
+        nome_controle_obj:task_nomes_controle(id, nome),
+        responsavel_obj:task_responsaveis_controle(id, nome),
+        executor_obj:task_executores(id, nome),
+        status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
+      `)
       .eq('id', id)
-      .maybeSingle()
+      .single()
 
     if (error || !t) {
-      if (error) console.error('Erro ao buscar controle por ID:', error)
+      console.error('Erro ao buscar task_tarefas por id:', error)
       return null
     }
 
-    const [statusRes, nomeRes, respCtrlRes, prazosRes, andamentosRes] = await Promise.all([
-      t.status_id
-        ? supabase.from('task_status').select('*').eq('id', t.status_id).maybeSingle()
-        : Promise.resolve({ data: null }),
-      t.nome_controle_id
-        ? supabase
-            .from('task_nomes_controle')
-            .select('*')
-            .eq('id', t.nome_controle_id)
-            .maybeSingle()
-        : Promise.resolve({ data: null }),
-      t.responsavel_controle_id
-        ? supabase
-            .from('task_responsaveis_controle')
-            .select('*')
-            .eq('id', t.responsavel_controle_id)
-            .maybeSingle()
-        : Promise.resolve({ data: null }),
-      supabase
-        .from('task_prazos')
-        .select('*, task_tipos_prazo (*)')
-        .eq('tarefa_id', t.id)
-        .order('data_prazo', { ascending: true }),
-      supabase
-        .from('task_andamentos')
-        .select('*')
-        .eq('tarefa_id', t.id)
-        .order('data_andamento', { ascending: false })
-        .order('created_at', { ascending: false }),
-    ])
+    const provs = await this.getProvidencias(id)
+    const provsOrdenadas = [...provs].sort((a, b) => {
+      const aFinaliza = Boolean(a.status?.finaliza)
+      const bFinaliza = Boolean(b.status?.finaliza)
+      if (aFinaliza !== bFinaliza) {
+        return aFinaliza ? 1 : -1
+      }
+      return (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || '')
+    })
+    const provAbertas = provs.filter((p) => !p.status?.finaliza)
+    provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
 
-    const prazos: TaskPrazoRecord[] = (prazosRes.data || []).map((raw: any) => ({
+    const raw: any = t
+    return {
       id: raw.id,
-      tarefa_id: raw.tarefa_id,
-      data_prazo: raw.data_prazo,
-      tipo_prazo_id: raw.tipo_prazo_id,
-      descricao: raw.descricao,
-      principal: raw.principal,
-      ativo: raw.ativo,
+      nome_controle_id: raw.nome_controle_id,
+      identificacao_caso: raw.identificacao_caso,
+      status_id: raw.status_id,
+      data_autorizacao: raw.data_autorizacao,
+      prazo_conclusao: raw.prazo_conclusao,
+      responsavel_controle_id: raw.responsavel_controle_id,
+      executor_id: raw.executor_id,
+      pasta_cliente: raw.pasta_cliente,
+      pasta_ricci: raw.pasta_ricci,
       created_at: raw.created_at,
       created_by: raw.created_by,
       updated_at: raw.updated_at,
       updated_by: raw.updated_by,
-      tipo_prazo: raw.task_tipos_prazo || null,
-    }))
+      deleted_at: raw.deleted_at,
+      deleted_by: raw.deleted_by,
 
-    const andamentos: TaskAndamentoRecord[] = (andamentosRes.data || []).map((a: any) => ({
-      id: a.id,
-      tarefa_id: a.tarefa_id,
-      data_andamento: a.data_andamento,
-      descricao: a.descricao,
-      created_at: a.created_at,
-      created_by: a.created_by,
-      updated_at: a.updated_at,
-      updated_by: a.updated_by,
-    }))
+      nome_controle: raw.nome_controle_obj?.nome || null,
+      responsavel_nome: raw.responsavel_obj?.nome || null,
+      executor_nome: raw.executor_obj?.nome || null,
+      status: raw.status_obj || null,
+      responsavel_controle: raw.responsavel_obj || null,
+      executor: raw.executor_obj || null,
 
-    const principalPrazo = prazos.find((p) => p.principal && p.ativo)
-    const proximoPrazo = prazos.filter((p) => p.ativo)[0] || null
-
-    const nomeRel = nomeRes.data as TaskNomeControleRecord | null
-    const respRel = respCtrlRes.data as TaskResponsavelControleRecord | null
-
-    return {
-      ...t,
-      nome_controle: nomeRel?.nome || t.nome_controle || '',
-      status: (statusRes.data as TaskStatusRecord) || null,
-      nome_controle_rel: nomeRel,
-      responsavel_controle_rel: respRel,
-      responsavel_interno: null,
-      responsavel_catalogo: null,
-      prazos,
-      andamentos,
-      responsavel_nome: respRel?.nome || 'Não atribuído',
-      responsavel_tipo_badge: respRel ? 'Controle' : '—',
-      prazo_destaque: principalPrazo || proximoPrazo,
+      providencias: provsOrdenadas,
+      proxima_providencia: provAbertas[0] || null,
     }
   },
 
   async saveControle(input: SaveControleInput): Promise<TaskControleRecord> {
-    if (!input.nome_controle_id) {
-      throw new Error('O campo Nome do Controle é obrigatório.')
-    }
-    if (!input.responsavel_controle_id) {
-      throw new Error('O campo Responsável pelo Controle é obrigatório.')
-    }
-    if (!input.identificacao_caso.trim()) {
-      throw new Error('Identificação do Caso é obrigatória.')
-    }
-    if (!input.status_id) {
-      throw new Error('Status é obrigatório.')
-    }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const userId = user?.id || null
 
-    const payload: any = {
+    const payload = {
       nome_controle_id: input.nome_controle_id,
-      responsavel_controle_id: input.responsavel_controle_id,
-      controle_cliente: input.controle_cliente?.trim() || null,
-      controle_ricci: input.controle_ricci?.trim() || null,
       identificacao_caso: input.identificacao_caso.trim(),
       status_id: input.status_id,
-      descricao_status: input.descricao_status?.trim() || null,
-      proximas_providencias: input.proximas_providencias?.trim() || null,
-      follow_up: input.follow_up || null,
-      data_referencia: input.data_referencia || new Date().toISOString().split('T')[0],
+      data_autorizacao: input.data_autorizacao || null,
+      prazo_conclusao: input.prazo_conclusao || null,
+      responsavel_controle_id: input.responsavel_controle_id,
+      executor_id: input.executor_id,
+      pasta_cliente: input.pasta_cliente?.trim() || null,
+      pasta_ricci: input.pasta_ricci?.trim() || null,
+      updated_at: new Date().toISOString(),
+      updated_by: userId,
     }
 
     if (input.id) {
@@ -639,260 +738,92 @@ export const controleService = {
         throw error
       }
       const loaded = await this.getControleById(data.id)
-      return loaded!
+      return (loaded || data) as TaskControleRecord
     } else {
-      const { data, error } = await supabase.from('task_tarefas').insert(payload).select().single()
+      const { data, error } = await supabase
+        .from('task_tarefas')
+        .insert({
+          ...payload,
+          created_by: userId,
+        })
+        .select()
+        .single()
 
       if (error) {
-        console.error('Erro ao inserir task_tarefas:', error)
+        console.error('Erro ao criar task_tarefas:', error)
         throw error
       }
       const loaded = await this.getControleById(data.id)
-      return loaded!
+      return (loaded || data) as TaskControleRecord
     }
   },
 
-  /**
-   * Arquivamento de controle: regra obrigatória:
-   * "NUNCA faça delete() em task_tarefas. Apenas preencher deleted_at e deleted_by com o usuário autenticado."
-   */
-  async arquivarControle(id: string, userId?: string | null): Promise<void> {
+  async archiveControle(id: string): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
     const { error } = await supabase
       .from('task_tarefas')
       .update({
         deleted_at: new Date().toISOString(),
-        deleted_by: userId || null,
+        deleted_by: user?.id || null,
       })
       .eq('id', id)
 
     if (error) {
-      console.error('Erro ao arquivar task_tarefas:', error)
+      console.error('Erro ao arquivar controle:', error)
       throw error
     }
   },
 
-  // --------------------------------------------------------------------------
-  // Prazos (task_prazos)
-  // --------------------------------------------------------------------------
-  async savePrazo(input: SavePrazoInput): Promise<TaskPrazoRecord> {
-    if (!input.tarefa_id) throw new Error('ID do controle é obrigatório para o prazo.')
-    if (!input.data_prazo) throw new Error('A data do prazo é obrigatória.')
-
-    // Se marcado como principal, desmarca qualquer outro prazo principal da mesma tarefa
-    if (input.principal) {
-      await supabase
-        .from('task_prazos')
-        .update({ principal: false })
-        .eq('tarefa_id', input.tarefa_id)
-        .eq('principal', true)
-    }
-
-    const payload: any = {
-      tarefa_id: input.tarefa_id,
-      data_prazo: input.data_prazo,
-      tipo_prazo_id: input.tipo_prazo_id || null,
-      descricao: input.descricao?.trim() || null,
-      principal: Boolean(input.principal),
-      ativo: input.ativo !== undefined ? input.ativo : true,
-    }
-
-    if (input.id) {
-      const { data, error } = await supabase
-        .from('task_prazos')
-        .update(payload)
-        .eq('id', input.id)
-        .select('*, task_tipos_prazo (*)')
-        .single()
-
-      if (error) {
-        console.error('Erro ao atualizar task_prazos:', error)
-        throw error
-      }
-      return {
-        ...data,
-        tipo_prazo: (data as any).task_tipos_prazo || null,
-      } as TaskPrazoRecord
-    } else {
-      const { data, error } = await supabase
-        .from('task_prazos')
-        .insert(payload)
-        .select('*, task_tipos_prazo (*)')
-        .single()
-
-      if (error) {
-        console.error('Erro ao inserir task_prazos:', error)
-        throw error
-      }
-      return {
-        ...data,
-        tipo_prazo: (data as any).task_tipos_prazo || null,
-      } as TaskPrazoRecord
-    }
-  },
-
-  async togglePrazoAtivo(id: string, ativo: boolean): Promise<void> {
-    const { error } = await supabase.from('task_prazos').update({ ativo }).eq('id', id)
-    if (error) {
-      console.error('Erro ao atualizar status do prazo:', error)
-      throw error
-    }
-  },
-
-  async deletePrazo(id: string): Promise<void> {
-    const { error } = await supabase.from('task_prazos').delete().eq('id', id)
-    if (error) {
-      console.error('Erro ao excluir task_prazos:', error)
-      throw error
-    }
-  },
-
-  // --------------------------------------------------------------------------
-  // Andamentos (task_andamentos)
-  // --------------------------------------------------------------------------
-  async getAndamentos(tarefaId: string): Promise<TaskAndamentoRecord[]> {
-    const { data, error } = await supabase
-      .from('task_andamentos')
-      .select('*')
-      .eq('tarefa_id', tarefaId)
-      .order('data_andamento', { ascending: false })
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Erro ao buscar task_andamentos:', error)
-      throw error
-    }
-    return (data as TaskAndamentoRecord[]) || []
-  },
-
-  async saveAndamento(input: SaveAndamentoInput): Promise<TaskAndamentoRecord> {
-    if (!input.tarefa_id) throw new Error('ID do controle é obrigatório para o andamento.')
-    if (!input.data_andamento) throw new Error('A data do andamento é obrigatória.')
-    if (!input.descricao.trim()) throw new Error('A descrição do andamento é obrigatória.')
-
-    const payload = {
-      tarefa_id: input.tarefa_id,
-      data_andamento: input.data_andamento,
-      descricao: input.descricao.trim(),
-    }
-
-    if (input.id) {
-      const { data, error } = await supabase
-        .from('task_andamentos')
-        .update(payload)
-        .eq('id', input.id)
-        .select()
-        .single()
-
-      if (error) {
-        console.error('Erro ao atualizar task_andamentos:', error)
-        throw error
-      }
-      return data as TaskAndamentoRecord
-    } else {
-      const { data, error } = await supabase
-        .from('task_andamentos')
-        .insert(payload)
-        .select()
-        .single()
-
-      if (error) {
-        console.error('Erro ao criar task_andamentos:', error)
-        throw error
-      }
-      return data as TaskAndamentoRecord
-    }
-  },
-
-  async deleteAndamento(id: string): Promise<void> {
-    const { error } = await supabase.from('task_andamentos').delete().eq('id', id)
-    if (error) {
-      console.error('Erro ao excluir task_andamentos:', error)
-      throw error
-    }
-  },
-
-  // --------------------------------------------------------------------------
-  // Recarregar timestamp de última atualização do controle
-  // --------------------------------------------------------------------------
   async getControleUpdatedAt(id: string): Promise<string | null> {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('task_tarefas')
       .select('updated_at')
       .eq('id', id)
-      .maybeSingle()
+      .single()
 
-    return data?.updated_at || null
+    if (error || !data) return null
+    return data.updated_at
   },
 
-  // --------------------------------------------------------------------------
-  // Métricas do Dashboard
-  // --------------------------------------------------------------------------
-  calculateMetrics(controles: TaskControleRecord[]): DashboardMetrics {
-    const today = new Date().toISOString().split('T')[0]
+  calculateMetrics(controles: TaskControleRecord[]): ControleMetrics {
+    const total = controles.length
     let emAndamento = 0
     let aguardandoAutorizacao = 0
     let prazosVencidos = 0
-    let followUpsVencidos = 0
     let concluidos = 0
 
-    for (const c of controles) {
-      const isFinalizado = Boolean(c.status?.finaliza)
-      const statusCodigo = c.status?.codigo
+    const todayStr = new Date().toISOString().split('T')[0]
 
-      if (isFinalizado) {
+    for (const c of controles) {
+      const codigo = c.status?.codigo || ''
+      const finaliza = Boolean(c.status?.finaliza)
+
+      if (finaliza) {
         concluidos++
       } else {
-        if (statusCodigo === 'em_andamento') {
+        if (codigo === 'em_andamento') {
           emAndamento++
-        } else if (statusCodigo === 'aguardando_autorizacao') {
+        } else if (codigo === 'aguardando_autorizacao') {
           aguardandoAutorizacao++
         }
 
-        // Prazos vencidos: controles NÃO finalizados com prazo de destaque antes de hoje
-        if (c.prazo_destaque?.data_prazo && c.prazo_destaque.data_prazo < today) {
+        // Verifica se há providência aberta vencida
+        const provData = c.proxima_providencia?.prazo_conclusao
+        if (provData && provData < todayStr) {
           prazosVencidos++
-        }
-
-        // Follow-ups vencidos: controles NÃO finalizados com follow_up antes de hoje
-        if (c.follow_up && c.follow_up < today) {
-          followUpsVencidos++
         }
       }
     }
 
     return {
+      total,
       emAndamento,
       aguardandoAutorizacao,
       prazosVencidos,
-      followUpsVencidos,
       concluidos,
-      total: controles.length,
-    }
-  },
-
-  // --------------------------------------------------------------------------
-  // Preferências locais do usuário (apenas tema e visualização da tela)
-  // --------------------------------------------------------------------------
-  getSettings(): AppSettings {
-    if (typeof window === 'undefined') return DEFAULT_SETTINGS
-    try {
-      const raw = localStorage.getItem(SETTINGS_KEY)
-      if (!raw) return DEFAULT_SETTINGS
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
-    } catch {
-      return DEFAULT_SETTINGS
-    }
-  },
-
-  saveSettings(updates: Partial<AppSettings>): AppSettings {
-    if (typeof window === 'undefined') return DEFAULT_SETTINGS
-    try {
-      const current = this.getSettings()
-      const merged = { ...current, ...updates }
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged))
-      return merged
-    } catch {
-      return DEFAULT_SETTINGS
     }
   },
 }
