@@ -275,6 +275,33 @@ export const controleService = {
     }
   },
 
+  async updateProvidenciaStatus(id: string, statusId: string): Promise<TaskProvidenciaRecord> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { data, error } = await supabase
+      .from('task_providencias')
+      .update({
+        status_id: statusId,
+        updated_at: new Date().toISOString(),
+        updated_by: user?.id || null,
+      })
+      .eq('id', id)
+      .select(`
+        *,
+        tipo_prazo:task_tipos_prazo(*),
+        status:task_status_providencia(*)
+      `)
+      .single()
+
+    if (error) {
+      console.error('Erro ao atualizar status da providência:', error)
+      throw error
+    }
+    return data as unknown as TaskProvidenciaRecord
+  },
+
   async deleteProvidencia(id: string): Promise<void> {
     const {
       data: { user },

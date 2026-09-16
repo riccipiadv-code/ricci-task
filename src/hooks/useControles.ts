@@ -174,6 +174,11 @@ export function useControles() {
     saveNomeControle,
     toggleNomeControleAtivo,
     excluirNomeControle,
+    updateProvidenciaStatus: async (id: string, statusId: string) => {
+      const updated = await controleService.updateProvidenciaStatus(id, statusId)
+      await refreshControles()
+      return updated
+    },
     archiveControle,
     recarregarTudo: carregarDadosCompletos,
   }

@@ -88,7 +88,37 @@ export default function TarefasPage() {
     loading,
     refreshControles,
     archiveControle,
+    updateProvidenciaStatus,
   } = useControles()
+
+  // Estado de salvamento por id de providência
+  const [updatingProvidenciaIds, setUpdatingProvidenciaIds] = useState<Record<string, boolean>>({})
+
+  const handleUpdateProvidenciaStatus = async (providenciaId: string, novoStatusId: string) => {
+    if (!providenciaId || !novoStatusId) return
+    if (updatingProvidenciaIds[providenciaId]) return
+
+    setUpdatingProvidenciaIds((prev) => ({ ...prev, [providenciaId]: true }))
+    try {
+      await updateProvidenciaStatus(providenciaId, novoStatusId)
+      toast({
+        title: 'Status atualizado com sucesso',
+        description: 'A providência foi atualizada e os dados recarregados.',
+      })
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao atualizar status',
+        description: err?.message || 'Falha ao salvar novo status da providência.',
+      })
+    } finally {
+      setUpdatingProvidenciaIds((prev) => {
+        const next = { ...prev }
+        delete next[providenciaId]
+        return next
+      })
+    }
+  }
 
   const { toast } = useToast()
 
@@ -1592,8 +1622,8 @@ export default function TarefasPage() {
                                         </TooltipContent>
                                       </Tooltip>
                                     ) : (
-                                      <span className="text-muted-foreground/50 italic text-[11px]">
-                                        Nenhuma aberta
+                                      <span className="text-muted-foreground/60 italic text-xs">
+                                        Sem providência pendente
                                       </span>
                                     )}
                                   </td>
@@ -1777,11 +1807,18 @@ export default function TarefasPage() {
                                           </div>
                                           <div>
                                             <span className="text-[10px] font-bold uppercase text-muted-foreground block">
-                                              Responsável / Executor
+                                              Responsável
                                             </span>
                                             <span className="font-medium text-foreground">
-                                              {c.responsavel_nome || '—'}{' '}
-                                              {c.executor_nome && `(Exec: ${c.executor_nome})`}
+                                              {c.responsavel_nome || '—'}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                                              Executor
+                                            </span>
+                                            <span className="font-medium text-foreground">
+                                              {c.executor_nome || '—'}
                                             </span>
                                           </div>
                                           <div className="sm:col-span-2 flex items-center gap-4 text-xs font-mono">
@@ -1822,6 +1859,7 @@ export default function TarefasPage() {
                                           ) : (
                                             <div className="space-y-2">
                                               {c.providencias.map((p, idx) => {
+                                                const pFinalizada = Boolean(p.status?.finaliza)
                                                 const pVencida = isPrazoOverdue(
                                                   p.prazo_conclusao,
                                                   p.status,
@@ -1834,22 +1872,36 @@ export default function TarefasPage() {
                                                 return (
                                                   <div
                                                     key={p.id || idx}
-                                                    className="p-3 rounded-xl bg-card border border-border/70 space-y-2"
+                                                    className={cn(
+                                                      'p-3 rounded-xl border space-y-2 transition-all',
+                                                      pFinalizada
+                                                        ? 'bg-muted/25 border-border/40 opacity-75'
+                                                        : 'bg-card border-border/70 shadow-xs',
+                                                    )}
                                                   >
                                                     <div className="flex items-center justify-between gap-2 flex-wrap">
                                                       <div className="flex items-center gap-2">
-                                                        <span className="text-[11px] font-bold text-primary">
+                                                        <span
+                                                          className={cn(
+                                                            'text-[11px] font-bold',
+                                                            pFinalizada
+                                                              ? 'text-muted-foreground'
+                                                              : 'text-primary',
+                                                          )}
+                                                        >
                                                           #{idx + 1}
                                                         </span>
                                                         <span
                                                           className={cn(
                                                             'font-bold inline-flex items-center gap-1',
-                                                            pVencida
-                                                              ? 'text-destructive'
-                                                              : 'text-foreground',
+                                                            pFinalizada
+                                                              ? 'text-muted-foreground line-through decoration-muted-foreground/60'
+                                                              : pVencida
+                                                                ? 'text-destructive'
+                                                                : 'text-foreground',
                                                           )}
                                                         >
-                                                          {pVencida && (
+                                                          {pVencida && !pFinalizada && (
                                                             <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
                                                           )}
                                                           <span>
@@ -1859,35 +1911,89 @@ export default function TarefasPage() {
                                                         {p.tipo_prazo && (
                                                           <Badge
                                                             variant="outline"
-                                                            className="text-[10px] font-normal"
+                                                            className={cn(
+                                                              'text-[10px] font-normal',
+                                                              pFinalizada &&
+                                                                'text-muted-foreground border-border/50 bg-transparent',
+                                                            )}
                                                           >
                                                             {p.tipo_prazo.nome}
                                                           </Badge>
                                                         )}
                                                       </div>
 
-                                                      {p.status && (
-                                                        <span
-                                                          className={cn(
-                                                            'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border',
-                                                            pStatusBadge.bg,
-                                                            pStatusBadge.text,
-                                                            pStatusBadge.border,
+                                                      {/* Seletor rápido de Status da Providência */}
+                                                      <div className="flex items-center gap-1.5">
+                                                        {updatingProvidenciaIds[p.id] && (
+                                                          <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                                                        )}
+                                                        <Select
+                                                          value={p.status_id}
+                                                          disabled={Boolean(
+                                                            updatingProvidenciaIds[p.id],
                                                           )}
+                                                          onValueChange={(novoStatusId) => {
+                                                            if (
+                                                              novoStatusId &&
+                                                              novoStatusId !== p.status_id
+                                                            ) {
+                                                              handleUpdateProvidenciaStatus(
+                                                                p.id,
+                                                                novoStatusId,
+                                                              )
+                                                            }
+                                                          }}
                                                         >
-                                                          <span
+                                                          <SelectTrigger
                                                             className={cn(
-                                                              'w-1.5 h-1.5 rounded-full',
-                                                              pStatusBadge.dot,
+                                                              'h-7 px-2 py-0 rounded-md text-[10px] font-semibold border inline-flex items-center gap-1 shadow-none transition-colors w-auto min-w-[120px]',
+                                                              pStatusBadge.bg,
+                                                              pStatusBadge.text,
+                                                              pStatusBadge.border,
+                                                              pFinalizada && 'opacity-80',
+                                                              updatingProvidenciaIds[p.id] &&
+                                                                'opacity-60 cursor-not-allowed',
                                                             )}
-                                                          />
-                                                          <span>{p.status.nome}</span>
-                                                        </span>
-                                                      )}
+                                                          >
+                                                            <span
+                                                              className={cn(
+                                                                'w-1.5 h-1.5 rounded-full shrink-0',
+                                                                pStatusBadge.dot,
+                                                              )}
+                                                            />
+                                                            <SelectValue placeholder="Status">
+                                                              {p.status?.nome || 'Selecionar'}
+                                                            </SelectValue>
+                                                          </SelectTrigger>
+                                                          <SelectContent className="rounded-xl">
+                                                            {[...statusProvidenciaList]
+                                                              .sort(
+                                                                (a, b) =>
+                                                                  (a.ordem ?? 0) - (b.ordem ?? 0),
+                                                              )
+                                                              .map((sp) => (
+                                                                <SelectItem
+                                                                  key={sp.id}
+                                                                  value={sp.id}
+                                                                  className="text-xs"
+                                                                >
+                                                                  {sp.nome}
+                                                                </SelectItem>
+                                                              ))}
+                                                          </SelectContent>
+                                                        </Select>
+                                                      </div>
                                                     </div>
 
                                                     {/* Texto Integral da Providência sem corte */}
-                                                    <div className="p-2.5 rounded-lg bg-muted/30 border border-border/50 text-foreground text-xs leading-relaxed whitespace-pre-wrap">
+                                                    <div
+                                                      className={cn(
+                                                        'p-2.5 rounded-lg text-xs leading-relaxed whitespace-pre-wrap',
+                                                        pFinalizada
+                                                          ? 'bg-muted/15 border border-border/30 line-through text-muted-foreground/80 decoration-muted-foreground/60'
+                                                          : 'bg-muted/30 border border-border/50 text-foreground',
+                                                      )}
+                                                    >
                                                       {p.providencia}
                                                     </div>
                                                   </div>
@@ -1968,9 +2074,13 @@ export default function TarefasPage() {
                               <h4 className="text-sm font-bold text-foreground group-hover:text-primary transition-colors leading-snug">
                                 {c.identificacao_caso}
                               </h4>
-                              {proxProv?.providencia && (
+                              {proxProv?.providencia ? (
                                 <p className="text-xs text-muted-foreground line-clamp-2 mt-1 leading-relaxed">
                                   <strong>Próxima Providência:</strong> {proxProv.providencia}
+                                </p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground/60 italic mt-1 leading-relaxed">
+                                  Sem providência pendente
                                 </p>
                               )}
                             </div>
@@ -2080,6 +2190,20 @@ export default function TarefasPage() {
                                   </div>
                                   <div>
                                     <span className="text-[10px] font-bold text-muted-foreground block">
+                                      Prazo do Controle
+                                    </span>
+                                    <span>
+                                      {c.prazo_conclusao ? formatDateBR(c.prazo_conclusao) : '—'}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] font-bold text-muted-foreground block">
+                                      Responsável
+                                    </span>
+                                    <span>{c.responsavel_nome || '—'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] font-bold text-muted-foreground block">
                                       Executor
                                     </span>
                                     <span>{c.executor_nome || '—'}</span>
@@ -2091,6 +2215,7 @@ export default function TarefasPage() {
                                     Providências ({c.providencias?.length || 0})
                                   </span>
                                   {c.providencias?.map((p, idx) => {
+                                    const pFinalizadaMobile = Boolean(p.status?.finaliza)
                                     const pStatusBadgeMobile = getStatusBadgeStyle(
                                       p.status?.codigo,
                                       p.status?.finaliza,
@@ -2098,32 +2223,83 @@ export default function TarefasPage() {
                                     return (
                                       <div
                                         key={p.id || idx}
-                                        className="p-2.5 rounded-lg bg-background border border-border/40 space-y-1"
+                                        className={cn(
+                                          'p-2.5 rounded-lg border space-y-1.5 transition-opacity',
+                                          pFinalizadaMobile
+                                            ? 'bg-muted/30 border-border/30 opacity-75'
+                                            : 'bg-background border-border/40',
+                                        )}
                                       >
                                         <div className="flex items-center justify-between text-[11px] gap-2 flex-wrap">
-                                          <span className="font-semibold text-primary">
+                                          <span
+                                            className={cn(
+                                              'font-semibold',
+                                              pFinalizadaMobile
+                                                ? 'text-muted-foreground line-through decoration-muted-foreground/60'
+                                                : 'text-primary',
+                                            )}
+                                          >
                                             Prazo: {formatDateBR(p.prazo_conclusao)}
                                           </span>
-                                          {p.status && (
-                                            <span
-                                              className={cn(
-                                                'inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-medium border',
-                                                pStatusBadgeMobile.bg,
-                                                pStatusBadgeMobile.text,
-                                                pStatusBadgeMobile.border,
-                                              )}
+
+                                          {/* Seletor rápido de Status da Providência no mobile */}
+                                          <div className="flex items-center gap-1.5 ml-auto">
+                                            {updatingProvidenciaIds[p.id] && (
+                                              <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                                            )}
+                                            <Select
+                                              value={p.status_id}
+                                              disabled={Boolean(updatingProvidenciaIds[p.id])}
+                                              onValueChange={(novoStatusId) => {
+                                                if (novoStatusId && novoStatusId !== p.status_id) {
+                                                  handleUpdateProvidenciaStatus(p.id, novoStatusId)
+                                                }
+                                              }}
                                             >
-                                              <span
+                                              <SelectTrigger
                                                 className={cn(
-                                                  'w-1.5 h-1.5 rounded-full',
-                                                  pStatusBadgeMobile.dot,
+                                                  'h-6 px-1.5 py-0 rounded text-[10px] font-medium border inline-flex items-center gap-1 shadow-none transition-colors w-auto min-w-[110px]',
+                                                  pStatusBadgeMobile.bg,
+                                                  pStatusBadgeMobile.text,
+                                                  pStatusBadgeMobile.border,
+                                                  updatingProvidenciaIds[p.id] &&
+                                                    'opacity-60 cursor-not-allowed',
                                                 )}
-                                              />
-                                              <span>{p.status.nome}</span>
-                                            </span>
-                                          )}
+                                              >
+                                                <span
+                                                  className={cn(
+                                                    'w-1.5 h-1.5 rounded-full shrink-0',
+                                                    pStatusBadgeMobile.dot,
+                                                  )}
+                                                />
+                                                <SelectValue placeholder="Status">
+                                                  {p.status?.nome || 'Selecionar'}
+                                                </SelectValue>
+                                              </SelectTrigger>
+                                              <SelectContent className="rounded-xl">
+                                                {[...statusProvidenciaList]
+                                                  .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                                                  .map((sp) => (
+                                                    <SelectItem
+                                                      key={sp.id}
+                                                      value={sp.id}
+                                                      className="text-xs"
+                                                    >
+                                                      {sp.nome}
+                                                    </SelectItem>
+                                                  ))}
+                                              </SelectContent>
+                                            </Select>
+                                          </div>
                                         </div>
-                                        <p className="text-foreground whitespace-pre-wrap">
+                                        <p
+                                          className={cn(
+                                            'whitespace-pre-wrap text-xs',
+                                            pFinalizadaMobile
+                                              ? 'line-through text-muted-foreground/75 decoration-muted-foreground/60'
+                                              : 'text-foreground',
+                                          )}
+                                        >
                                           {p.providencia}
                                         </p>
                                       </div>

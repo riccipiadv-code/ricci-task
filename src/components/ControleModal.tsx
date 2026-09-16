@@ -742,9 +742,6 @@ export function ControleModal({
                                     Inativo
                                   </span>
                                 )}
-                                {st.finaliza && (
-                                  <span className="text-[10px] text-muted-foreground">(Final)</span>
-                                )}
                               </div>
                             </SelectItem>
                           ))}
@@ -1125,11 +1122,6 @@ export function ControleModal({
                                       <SelectItem key={sp.id} value={sp.id}>
                                         <div className="flex items-center gap-1.5">
                                           <span>{sp.nome}</span>
-                                          {sp.finaliza && (
-                                            <span className="text-[10px] text-muted-foreground">
-                                              (Finaliza)
-                                            </span>
-                                          )}
                                         </div>
                                       </SelectItem>
                                     ))}
