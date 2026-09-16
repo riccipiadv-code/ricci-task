@@ -29,7 +29,14 @@ import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
 export default function ExecutoresPage() {
-  const { executores, loading, refreshCadastros } = useControles()
+  const {
+    executores,
+    loading,
+    refreshExecutores,
+    saveExecutor,
+    toggleExecutorAtivo,
+    excluirExecutor,
+  } = useControles()
   const { toast } = useToast()
 
   const [search, setSearch] = useState('')
@@ -104,7 +111,7 @@ export default function ExecutoresPage() {
 
     setSaving(true)
     try {
-      await controleService.saveExecutor({
+      await saveExecutor({
         id: editingItem?.id,
         nome: trimmed,
         ativo: editingItem ? editingItem.ativo : true,
@@ -116,7 +123,6 @@ export default function ExecutoresPage() {
       })
 
       setModalOpen(false)
-      await refreshCadastros()
     } catch (err: any) {
       console.error('Erro ao salvar executor:', err)
       const isUniqueError =
@@ -139,12 +145,11 @@ export default function ExecutoresPage() {
   const handleToggleAtivo = async (item: TaskExecutorRecord) => {
     setTogglingId(item.id)
     try {
-      await controleService.toggleAtivoExecutor(item.id, !item.ativo)
+      await toggleExecutorAtivo(item.id, !item.ativo)
       toast({
         title: item.ativo ? 'Executor desativado' : 'Executor ativado',
         description: `"${item.nome}" foi ${item.ativo ? 'desativado' : 'ativado'} com sucesso.`,
       })
-      await refreshCadastros()
     } catch (err: any) {
       toast({
         variant: 'destructive',
@@ -156,22 +161,7 @@ export default function ExecutoresPage() {
     }
   }
 
-  const handleOpenDelete = async (item: TaskExecutorRecord) => {
-    // Validação preventiva: verificar se há controles ativos associados
-    try {
-      const emUso = await controleService.isExecutorInUse(item.id)
-      if (emUso) {
-        toast({
-          variant: 'destructive',
-          title: 'Executor em uso',
-          description: `O executor "${item.nome}" está associado a controles de casos ativos e não pode ser excluído. Você pode desativá-lo para impedir novas atribuições.`,
-        })
-        return
-      }
-    } catch (err) {
-      console.warn('Não foi possível verificar uso prévio do executor:', err)
-    }
-
+  const handleOpenDelete = (item: TaskExecutorRecord) => {
     setItemToDelete(item)
     setDeleteConfirmOpen(true)
   }
@@ -180,14 +170,13 @@ export default function ExecutoresPage() {
     if (!itemToDelete) return
     setDeleting(true)
     try {
-      await controleService.softDeleteExecutor(itemToDelete.id)
+      await excluirExecutor(itemToDelete.id)
       toast({
         title: 'Executor excluído',
         description: `"${itemToDelete.nome}" foi removido com sucesso.`,
       })
       setDeleteConfirmOpen(false)
       setItemToDelete(null)
-      await refreshCadastros()
     } catch (err: any) {
       toast({
         variant: 'destructive',

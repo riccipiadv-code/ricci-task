@@ -39,10 +39,7 @@ export function useTheme() {
       localStorage.setItem(THEME_STORAGE_KEY, newTheme)
       const rawSettings = localStorage.getItem('ricci_task_settings')
       const current = rawSettings ? JSON.parse(rawSettings) : {}
-      localStorage.setItem(
-        'ricci_task_settings',
-        JSON.stringify({ ...current, theme: newTheme }),
-      )
+      localStorage.setItem('ricci_task_settings', JSON.stringify({ ...current, theme: newTheme }))
     } catch (err) {
       console.warn('Erro ao salvar tema:', err)
     }
