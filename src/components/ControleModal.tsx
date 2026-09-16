@@ -31,6 +31,7 @@ import {
   UserCheck,
   AlertCircle,
   Search,
+  FolderKanban,
 } from 'lucide-react'
 import {
   TaskControleRecord,
@@ -1185,7 +1186,7 @@ export function ControleModal({
         onOpenChange={setDeleteProvConfirmOpen}
         title="Excluir providência"
         description="Tem certeza de que deseja remover esta providência salva no banco de dados? A alteração é imediata."
-        confirmLabel="Sim, excluir providência"
+        confirmButtonText="Sim, excluir providência"
         onConfirm={handleConfirmarExclusaoProvidencia}
       />
 
