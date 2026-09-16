@@ -138,16 +138,20 @@ export function ControleModal({
   const [executorError, setExecutorError] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Status de providência padrão
+  // Status de providência padrão: providência nova deve iniciar como "Em andamento"
   const statusProvPadraoId = useMemo(() => {
-    const pendente = statusProvLista.find((s) => s.codigo === 'pendente')
-    return pendente?.id || statusProvLista[0]?.id || ''
+    const emAndamento = statusProvLista.find(
+      (s) => s.codigo === 'em_andamento' || s.nome.toLowerCase() === 'em andamento',
+    )
+    return emAndamento?.id || statusProvLista[0]?.id || ''
   }, [statusProvLista])
 
-  // Status geral do controle padrão
+  // Status geral do controle padrão: controle novo inicia como "Pendente" ou primeiro por ordem
   const statusPadraoId = useMemo(() => {
-    const emAndamento = statusList.find((s) => s.codigo === 'em_andamento')
-    return emAndamento?.id || statusList[0]?.id || ''
+    const pendente = statusList.find(
+      (s) => s.codigo === 'pendente' || s.nome.toLowerCase() === 'pendente',
+    )
+    return pendente?.id || statusList[0]?.id || ''
   }, [statusList])
 
   // Tipo de prazo padrão
@@ -245,6 +249,23 @@ export function ControleModal({
     statusProvPadraoId,
     carregarListasAuxiliares,
   ])
+
+  // Opções de Status do Controle: ordenadas por ordem crescente, ativas ou o registro atualmente selecionado
+  const opcoesStatusControle = useMemo(() => {
+    return statusList
+      .filter((st) => st.ativo || st.id === statusId)
+      .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+  }, [statusList, statusId])
+
+  // Opções de Status da Providência: ordenadas por ordem crescente
+  const getOpcoesStatusProvidencia = useCallback(
+    (currentStatusId?: string) => {
+      return statusProvLista
+        .filter((st) => st.ativo || st.id === currentStatusId)
+        .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+    },
+    [statusProvLista],
+  )
 
   // Opções de Nomes dos Controles
   const opcoesNomes = useMemo(() => {
@@ -812,14 +833,17 @@ export function ControleModal({
                           <SelectValue placeholder="Selecione o status" />
                         </SelectTrigger>
                         <SelectContent className="rounded-xl">
-                          {statusList.map((st) => (
+                          {opcoesStatusControle.map((st) => (
                             <SelectItem key={st.id} value={st.id}>
                               <div className="flex items-center gap-2">
                                 <span>{st.nome}</span>
-                                {st.finaliza && (
-                                  <span className="text-[10px] text-muted-foreground">
-                                    (Conclui)
+                                {!st.ativo && (
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                    Inativo
                                   </span>
+                                )}
+                                {st.finaliza && (
+                                  <span className="text-[10px] text-muted-foreground">(Final)</span>
                                 )}
                               </div>
                             </SelectItem>
@@ -1253,13 +1277,18 @@ export function ControleModal({
                                     <SelectValue placeholder="Selecione o status..." />
                                   </SelectTrigger>
                                   <SelectContent className="rounded-xl">
-                                    {statusProvLista.map((st) => (
+                                    {getOpcoesStatusProvidencia(item.status_id).map((st) => (
                                       <SelectItem key={st.id} value={st.id}>
                                         <div className="flex items-center gap-1.5">
                                           <span>{st.nome}</span>
+                                          {!st.ativo && (
+                                            <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                              Inativo
+                                            </span>
+                                          )}
                                           {st.finaliza && (
                                             <span className="text-[10px] text-muted-foreground">
-                                              (Finaliza)
+                                              (Final)
                                             </span>
                                           )}
                                         </div>

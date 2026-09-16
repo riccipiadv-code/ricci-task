@@ -115,6 +115,13 @@ export function getStatusBadgeStyle(
   }
 
   switch (codigo) {
+    case 'pendente':
+      return {
+        bg: 'bg-amber-50 dark:bg-amber-950/40',
+        text: 'text-amber-700 dark:text-amber-300',
+        border: 'border-amber-200 dark:border-amber-800/60',
+        dot: 'bg-amber-500',
+      }
     case 'em_andamento':
       return {
         bg: 'bg-blue-50 dark:bg-blue-950/40',
@@ -152,6 +159,12 @@ export function getStatusBadgeStyle(
         dot: 'bg-slate-400',
       }
     case 'acompanhamento':
+      return {
+        bg: 'bg-cyan-50 dark:bg-cyan-950/40',
+        text: 'text-cyan-700 dark:text-cyan-300',
+        border: 'border-cyan-200 dark:border-cyan-800/60',
+        dot: 'bg-cyan-500',
+      }
     default:
       return {
         bg: 'bg-sky-50 dark:bg-sky-950/40',

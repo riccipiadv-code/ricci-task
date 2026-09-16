@@ -790,8 +790,8 @@ export const controleService = {
 
   calculateMetrics(controles: TaskControleRecord[]): ControleMetrics {
     const total = controles.length
+    let pendentes = 0
     let emAndamento = 0
-    let aguardandoAutorizacao = 0
     let prazosVencidos = 0
     let concluidos = 0
 
@@ -802,17 +802,26 @@ export const controleService = {
       const finaliza = Boolean(c.status?.finaliza)
 
       if (finaliza) {
+        // Status final do Controle: Concluído (ordem 90) e Cancelado (ordem 99)
         concluidos++
       } else {
-        if (codigo === 'em_andamento') {
+        // Controles abertos (não finalizados)
+        if (codigo === 'pendente' || c.status?.nome?.toLowerCase() === 'pendente') {
+          pendentes++
+        } else if (codigo === 'em_andamento' || c.status?.nome?.toLowerCase() === 'em andamento') {
           emAndamento++
-        } else if (codigo === 'aguardando_autorizacao') {
-          aguardandoAutorizacao++
         }
 
-        // Verifica se há providência aberta vencida
+        // Verifica se há prazo geral vencido ou providência aberta vencida
+        const prazoGeral = c.prazo_conclusao ? c.prazo_conclusao.split('T')[0] : null
         const provData = c.proxima_providencia?.prazo_conclusao
-        if (provData && provData < todayStr) {
+          ? c.proxima_providencia.prazo_conclusao.split('T')[0]
+          : null
+
+        const prazoGeralVencido = prazoGeral ? prazoGeral < todayStr : false
+        const provVencida = provData ? provData < todayStr : false
+
+        if (prazoGeralVencido || provVencida) {
           prazosVencidos++
         }
       }
@@ -820,8 +829,8 @@ export const controleService = {
 
     return {
       total,
+      pendentes,
       emAndamento,
-      aguardandoAutorizacao,
       prazosVencidos,
       concluidos,
     }

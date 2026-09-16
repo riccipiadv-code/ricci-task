@@ -236,8 +236,8 @@ export default function ConfiguracoesPage() {
                 </SelectTrigger>
                 <SelectContent className="rounded-xl">
                   <SelectItem value="todos">Todos os controles</SelectItem>
+                  <SelectItem value="pendente">Pendente</SelectItem>
                   <SelectItem value="em_andamento">Em Andamento</SelectItem>
-                  <SelectItem value="aguardando_autorizacao">Aguardando Autorização</SelectItem>
                   <SelectItem value="vencidos">Prazos Vencidos</SelectItem>
                   <SelectItem value="concluidos">Concluídos</SelectItem>
                 </SelectContent>

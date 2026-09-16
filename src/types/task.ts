@@ -126,7 +126,7 @@ export interface TaskControleRecord {
 
   // Providências vinculadas
   providencias?: TaskProvidenciaRecord[]
-  // Próxima providência aberta calculada para a listagem
+  // Próxima providência aberta calculada para a listagem (status com finaliza = false)
   proxima_providencia?: TaskProvidenciaRecord | null
 }
 
@@ -184,16 +184,16 @@ export interface SaveExecutorInput {
 
 export interface ControleMetrics {
   total: number
+  pendentes: number
   emAndamento: number
-  aguardandoAutorizacao: number
   prazosVencidos: number
   concluidos: number
 }
 
 export type DefaultControleViewFilter =
   | 'todos'
+  | 'pendente'
   | 'em_andamento'
-  | 'aguardando_autorizacao'
   | 'vencidos'
   | 'concluidos'
 

@@ -761,11 +761,13 @@ export default function TarefasPage() {
               </SelectTrigger>
               <SelectContent className="rounded-xl">
                 <SelectItem value="todos">Todos os status</SelectItem>
-                {statusList.map((st) => (
-                  <SelectItem key={st.id} value={st.id}>
-                    {st.nome}
-                  </SelectItem>
-                ))}
+                {[...statusList]
+                  .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                  .map((st) => (
+                    <SelectItem key={st.id} value={st.id}>
+                      {st.nome}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
 
@@ -892,11 +894,13 @@ export default function TarefasPage() {
                     </SelectTrigger>
                     <SelectContent className="rounded-xl">
                       <SelectItem value="todos">Todos os status de providência</SelectItem>
-                      {statusProvidenciaList.map((sp) => (
-                        <SelectItem key={sp.id} value={sp.id}>
-                          {sp.nome}
-                        </SelectItem>
-                      ))}
+                      {[...statusProvidenciaList]
+                        .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                        .map((sp) => (
+                          <SelectItem key={sp.id} value={sp.id}>
+                            {sp.nome}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1010,11 +1014,13 @@ export default function TarefasPage() {
                       </SelectTrigger>
                       <SelectContent className="rounded-xl">
                         <SelectItem value="todos">Todos os status</SelectItem>
-                        {statusList.map((st) => (
-                          <SelectItem key={st.id} value={st.id}>
-                            {st.nome}
-                          </SelectItem>
-                        ))}
+                        {[...statusList]
+                          .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                          .map((st) => (
+                            <SelectItem key={st.id} value={st.id}>
+                              {st.nome}
+                            </SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1085,11 +1091,13 @@ export default function TarefasPage() {
                       </SelectTrigger>
                       <SelectContent className="rounded-xl">
                         <SelectItem value="todos">Todos os status de providência</SelectItem>
-                        {statusProvidenciaList.map((sp) => (
-                          <SelectItem key={sp.id} value={sp.id}>
-                            {sp.nome}
-                          </SelectItem>
-                        ))}
+                        {[...statusProvidenciaList]
+                          .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                          .map((sp) => (
+                            <SelectItem key={sp.id} value={sp.id}>
+                              {sp.nome}
+                            </SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -2252,24 +2260,45 @@ export default function TarefasPage() {
                                   <span className="text-[10px] font-bold uppercase text-muted-foreground block">
                                     Providências ({c.providencias?.length || 0})
                                   </span>
-                                  {c.providencias?.map((p, idx) => (
-                                    <div
-                                      key={p.id || idx}
-                                      className="p-2.5 rounded-lg bg-background border border-border/40 space-y-1"
-                                    >
-                                      <div className="flex items-center justify-between text-[11px]">
-                                        <span className="font-semibold text-primary">
-                                          Prazo: {formatDateBR(p.prazo_conclusao)}
-                                        </span>
-                                        <span className="text-muted-foreground">
-                                          {p.status?.nome}
-                                        </span>
+                                  {c.providencias?.map((p, idx) => {
+                                    const pStatusBadgeMobile = getStatusBadgeStyle(
+                                      p.status?.codigo,
+                                      p.status?.finaliza,
+                                    )
+                                    return (
+                                      <div
+                                        key={p.id || idx}
+                                        className="p-2.5 rounded-lg bg-background border border-border/40 space-y-1"
+                                      >
+                                        <div className="flex items-center justify-between text-[11px] gap-2 flex-wrap">
+                                          <span className="font-semibold text-primary">
+                                            Prazo: {formatDateBR(p.prazo_conclusao)}
+                                          </span>
+                                          {p.status && (
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-medium border',
+                                                pStatusBadgeMobile.bg,
+                                                pStatusBadgeMobile.text,
+                                                pStatusBadgeMobile.border,
+                                              )}
+                                            >
+                                              <span
+                                                className={cn(
+                                                  'w-1.5 h-1.5 rounded-full',
+                                                  pStatusBadgeMobile.dot,
+                                                )}
+                                              />
+                                              <span>{p.status.nome}</span>
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-foreground whitespace-pre-wrap">
+                                          {p.providencia}
+                                        </p>
                                       </div>
-                                      <p className="text-foreground whitespace-pre-wrap">
-                                        {p.providencia}
-                                      </p>
-                                    </div>
-                                  ))}
+                                    )
+                                  })}
                                 </div>
                               </div>
                             )}

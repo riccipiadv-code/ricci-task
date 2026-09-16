@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   PlayCircle,
   Clock,
+  AlertCircle,
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
@@ -29,8 +30,15 @@ import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
 
 export default function Index() {
-  const { controles, metrics, statusList, tiposPrazoList, loading, refreshControles } =
-    useControles()
+  const {
+    controles,
+    metrics,
+    statusList,
+    statusProvidenciaList,
+    tiposPrazoList,
+    loading,
+    refreshControles,
+  } = useControles()
 
   const { user } = useAuth()
   const [modalOpen, setModalOpen] = useState(false)
@@ -125,13 +133,29 @@ export default function Index() {
       </div>
 
       {/* 4 Indicadores Estratégicos do Dashboard:
-          1. Controles em andamento
-          2. Aguardando autorização
-          3. Prazos vencidos (geral ou providência)
-          4. Controles concluídos
+          1. Controles Pendentes (task_status ordem 10)
+          2. Controles Em Andamento (task_status ordem 20)
+          3. Prazos Vencidos (geral ou providência aberta)
+          4. Controles Finalizados (Concluído/Cancelado, finaliza = true)
       */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-        {/* Card 1: Em Andamento */}
+        {/* Card 1: Pendentes */}
+        <div className="group relative bg-card border border-border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Controles Pendentes</span>
+            <div className="h-9 w-9 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center transition-transform group-hover:scale-110">
+              <Clock className="w-5 h-5 stroke-[2.2]" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-1.5">
+            <span className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
+              {metrics.pendentes}
+            </span>
+            <span className="text-[11px] text-muted-foreground font-medium">a iniciar</span>
+          </div>
+        </div>
+
+        {/* Card 2: Em Andamento */}
         <div className="group relative bg-card border border-border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-muted-foreground">Em Andamento</span>
@@ -144,24 +168,6 @@ export default function Index() {
               {metrics.emAndamento}
             </span>
             <span className="text-[11px] text-muted-foreground font-medium">casos ativos</span>
-          </div>
-        </div>
-
-        {/* Card 2: Aguardando Autorização */}
-        <div className="group relative bg-card border border-border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-muted-foreground">
-              Aguardando Autorização
-            </span>
-            <div className="h-9 w-9 rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400 flex items-center justify-center transition-transform group-hover:scale-110">
-              <Clock className="w-5 h-5 stroke-[2.2]" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-1.5">
-            <span className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
-              {metrics.aguardandoAutorizacao}
-            </span>
-            <span className="text-[11px] text-muted-foreground font-medium">pendentes</span>
           </div>
         </div>
 
@@ -186,10 +192,10 @@ export default function Index() {
           </div>
         </div>
 
-        {/* Card 4: Controles Concluídos */}
+        {/* Card 4: Controles Finalizados */}
         <div className="group relative bg-card border border-border rounded-2xl p-4 shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-muted-foreground">Concluídos</span>
+            <span className="text-xs font-semibold text-muted-foreground">Finalizados</span>
             <div className="h-9 w-9 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center transition-transform group-hover:scale-110">
               <CheckCircle2 className="w-5 h-5 stroke-[2.2]" />
             </div>
@@ -198,7 +204,7 @@ export default function Index() {
             <span className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
               {metrics.concluidos}
             </span>
-            <span className="text-[11px] text-muted-foreground font-medium">finalizados</span>
+            <span className="text-[11px] text-muted-foreground font-medium">concluídos/canc.</span>
           </div>
         </div>
       </div>
@@ -459,6 +465,7 @@ export default function Index() {
         onOpenChange={setModalOpen}
         controleToEdit={controleToEdit}
         statusList={statusList}
+        statusProvidenciaList={statusProvidenciaList}
         tiposPrazoList={tiposPrazoList}
         onSaved={() => {
           refreshControles()
