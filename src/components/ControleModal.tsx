@@ -117,6 +117,14 @@ export function ControleModal({
   const [nomeControleId, setNomeControleId] = useState('')
   const [identificacaoCaso, setIdentificacaoCaso] = useState('')
   const [statusId, setStatusId] = useState('')
+  const getTodayLocalDate = () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
   const [dataAutorizacao, setDataAutorizacao] = useState('')
   const [prazoConclusao, setPrazoConclusao] = useState('')
   const [responsavelControleId, setResponsavelControleId] = useState('')
@@ -232,7 +240,7 @@ export function ControleModal({
       setNomeControleId('')
       setIdentificacaoCaso('')
       setStatusId(statusPadraoId)
-      setDataAutorizacao('')
+      setDataAutorizacao(getTodayLocalDate())
       setPrazoConclusao('')
       setResponsavelControleId('')
       setExecutorId('')
@@ -783,7 +791,6 @@ export function ControleModal({
                     </Label>
                     <Input
                       id="ident-caso"
-                      placeholder="Ex: Ação Anulatória de Marca X - 1ª Vara Empresarial"
                       value={identificacaoCaso}
                       onChange={(e) => {
                         setIdentificacaoCaso(e.target.value)
@@ -855,11 +862,10 @@ export function ControleModal({
                       )}
                     </div>
 
-                    {/* Data de Autorização (opcional) */}
+                    {/* Data de Autorização */}
                     <div className="space-y-1.5">
                       <Label htmlFor="data-autorizacao" className="text-xs font-semibold">
-                        Data de Autorização{' '}
-                        <span className="text-muted-foreground">(opcional)</span>
+                        Data de Autorização
                       </Label>
                       <Input
                         id="data-autorizacao"
@@ -870,10 +876,10 @@ export function ControleModal({
                       />
                     </div>
 
-                    {/* Prazo de Conclusão (opcional) */}
+                    {/* Prazo de Conclusão */}
                     <div className="space-y-1.5">
                       <Label htmlFor="prazo-conclusao" className="text-xs font-semibold">
-                        Prazo de Conclusão <span className="text-muted-foreground">(opcional)</span>
+                        Prazo de Conclusão
                       </Label>
                       <Input
                         id="prazo-conclusao"
@@ -894,7 +900,7 @@ export function ControleModal({
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
                         <User className="w-4 h-4 text-primary" />
                         <span>
-                          Responsável pelo Controle <span className="text-destructive">*</span>
+                          Responsável <span className="text-destructive">*</span>
                         </span>
                       </div>
                     </div>
@@ -989,7 +995,7 @@ export function ControleModal({
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
                         <UserCheck className="w-4 h-4 text-primary" />
                         <span>
-                          Executor do Controle <span className="text-destructive">*</span>
+                          Executor <span className="text-destructive">*</span>
                         </span>
                       </div>
                     </div>
@@ -1085,7 +1091,7 @@ export function ControleModal({
                       htmlFor="pasta-cliente"
                       className="text-xs font-semibold text-foreground"
                     >
-                      Pasta Cliente <span className="text-muted-foreground">(opcional)</span>
+                      Pasta Cliente
                     </Label>
                     <Input
                       id="pasta-cliente"
@@ -1098,7 +1104,7 @@ export function ControleModal({
 
                   <div className="space-y-1.5">
                     <Label htmlFor="pasta-ricci" className="text-xs font-semibold text-foreground">
-                      Pasta Ricci <span className="text-muted-foreground">(opcional)</span>
+                      Pasta Ricci
                     </Label>
                     <Input
                       id="pasta-ricci"
@@ -1368,7 +1374,6 @@ export function ControleModal({
               <Input
                 id="quick-nome-input"
                 autoFocus
-                placeholder="Ex: Ricci Advogados PI e Natura (Contencioso) - Controle Ações Estratégicas"
                 value={quickNomeInput}
                 onChange={(e) => {
                   setQuickNomeInput(e.target.value)
