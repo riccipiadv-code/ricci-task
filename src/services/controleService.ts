@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase/client'
+import { getLocalDateStr } from '@/lib/formatters'
 import {
   TaskControleRecord,
   TaskStatusRecord,
@@ -599,7 +600,7 @@ export const controleService = {
     let prazosVencidos = 0
     let concluidos = 0
 
-    const todayStr = new Date().toISOString().split('T')[0]
+    const todayStr = getLocalDateStr()
 
     for (const c of controles) {
       const codigo = c.status?.codigo || ''

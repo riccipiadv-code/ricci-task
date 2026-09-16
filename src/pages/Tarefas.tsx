@@ -1285,16 +1285,16 @@ export default function TarefasPage() {
                 {/* Conteúdo do Grupo quando não recolhido */}
                 {!isGroupCollapsed && (
                   <>
-                    {/* VISUALIZAÇÃO DESKTOP / TABLET (Tabela com 15 colunas na ordem obrigatória) */}
+                    {/* VISUALIZAÇÃO DESKTOP / TABLET (Tabela com 11 colunas na ordem obrigatória) */}
                     <div className="hidden md:block overflow-x-auto w-full">
-                      <table className="w-full text-left border-collapse table-fixed min-w-[1500px]">
+                      <table className="w-full text-left border-collapse table-fixed min-w-[1100px]">
                         <thead>
                           <tr className="border-b border-border/80 bg-muted/20 text-[11px] font-bold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur-md select-none">
                             {/* Expandir */}
                             <th className="py-2.5 px-2 w-9 text-center" aria-label="Expandir"></th>
 
                             {/* 1. Nome do Controle */}
-                            <th className="py-2.5 px-3 w-44">
+                            <th className="py-2.5 px-3 w-[200px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('nome_controle', e)}
@@ -1317,7 +1317,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 2. Identificação do Caso */}
-                            <th className="py-2.5 px-3 w-[240px]">
+                            <th className="py-2.5 px-3 w-[280px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('identificacao_caso', e)}
@@ -1340,77 +1340,8 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 3. Status do Controle */}
-                            <th className="py-2.5 px-3 w-36">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('status_controle', e)}
-                                className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
-                                  sortField === 'status_controle' && 'text-primary font-extrabold',
-                                )}
-                              >
-                                <span>Status do Controle</span>
-                                {sortField === 'status_controle' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
-                              </button>
-                            </th>
-
-                            {/* 4. Data de Autorização */}
-                            <th className="py-2.5 px-3 w-32">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('data_autorizacao', e)}
-                                className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
-                                  sortField === 'data_autorizacao' && 'text-primary font-extrabold',
-                                )}
-                              >
-                                <span>Autorização</span>
-                                {sortField === 'data_autorizacao' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
-                              </button>
-                            </th>
-
-                            {/* 5. Prazo de Conclusão */}
-                            <th className="py-2.5 px-3 w-32">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('prazo_conclusao', e)}
-                                className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
-                                  sortField === 'prazo_conclusao' && 'text-primary font-extrabold',
-                                )}
-                              >
-                                <span>Prazo Controle</span>
-                                {sortField === 'prazo_conclusao' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
-                              </button>
-                            </th>
-
-                            {/* 6. Próxima Providência */}
-                            <th className="py-2.5 px-3 w-[260px]">
+                            {/* 3. Próxima Providência */}
+                            <th className="py-2.5 px-3 w-[300px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('providencia', e)}
@@ -1432,7 +1363,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 7. Prazo da Providência */}
+                            {/* 4. Prazo da Providência */}
                             <th className="py-2.5 px-3 w-32">
                               <button
                                 type="button"
@@ -1456,7 +1387,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 8. Tipo de Prazo */}
+                            {/* 5. Tipo de Prazo */}
                             <th className="py-2.5 px-3 w-28">
                               <button
                                 type="button"
@@ -1479,7 +1410,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 9. Status da Providência */}
+                            {/* 6. Status da Providência */}
                             <th className="py-2.5 px-3 w-36">
                               <button
                                 type="button"
@@ -1503,7 +1434,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 10. Responsável */}
+                            {/* 7. Responsável */}
                             <th className="py-2.5 px-3 w-36">
                               <button
                                 type="button"
@@ -1526,7 +1457,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 11. Executor */}
+                            {/* 8. Executor */}
                             <th className="py-2.5 px-3 w-36">
                               <button
                                 type="button"
@@ -1549,7 +1480,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 12. Pasta Cliente (no final antes de atualização/ações) */}
+                            {/* 9. Pasta Cliente */}
                             <th className="py-2.5 px-3 w-32">
                               <button
                                 type="button"
@@ -1572,7 +1503,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 13. Pasta Ricci (no final antes de atualização/ações) */}
+                            {/* 10. Pasta Ricci */}
                             <th className="py-2.5 px-3 w-32">
                               <button
                                 type="button"
@@ -1595,30 +1526,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 14. Última Atualização */}
-                            <th className="py-2.5 px-3 w-36">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('updated_at', e)}
-                                className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
-                                  sortField === 'updated_at' && 'text-primary font-extrabold',
-                                )}
-                              >
-                                <span>Última Atualização</span>
-                                {sortField === 'updated_at' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
-                              </button>
-                            </th>
-
-                            {/* 15. Ações (fixa à direita) */}
+                            {/* 11. Ações (fixa à direita) */}
                             <th className="py-2.5 px-3 w-20 text-right sticky right-0 bg-muted/30 backdrop-blur-md z-20">
                               Ações
                             </th>
@@ -1632,10 +1540,6 @@ export default function TarefasPage() {
                             const proxVencida = isPrazoOverdue(
                               proxProv?.prazo_conclusao,
                               proxProv?.status,
-                            )
-                            const statusBadge = getStatusBadgeStyle(
-                              c.status?.codigo,
-                              c.status?.finaliza,
                             )
                             const provStatusBadge = getStatusBadgeStyle(
                               proxProv?.status?.codigo,
@@ -1698,44 +1602,7 @@ export default function TarefasPage() {
                                     </Tooltip>
                                   </td>
 
-                                  {/* 3. Status do Controle */}
-                                  <td className="py-2.5 px-3">
-                                    <span
-                                      className={cn(
-                                        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border',
-                                        statusBadge.bg,
-                                        statusBadge.text,
-                                        statusBadge.border,
-                                      )}
-                                    >
-                                      <span
-                                        className={cn('w-1.5 h-1.5 rounded-full', statusBadge.dot)}
-                                      />
-                                      <span className="truncate max-w-[110px]">
-                                        {c.status?.nome || '—'}
-                                      </span>
-                                    </span>
-                                  </td>
-
-                                  {/* 4. Data de Autorização */}
-                                  <td className="py-2.5 px-3 text-muted-foreground">
-                                    {c.data_autorizacao ? (
-                                      formatDateBR(c.data_autorizacao)
-                                    ) : (
-                                      <span className="text-muted-foreground/60">—</span>
-                                    )}
-                                  </td>
-
-                                  {/* 5. Prazo de Conclusão (do controle) */}
-                                  <td className="py-2.5 px-3 text-foreground font-medium">
-                                    {c.prazo_conclusao ? (
-                                      formatDateBR(c.prazo_conclusao)
-                                    ) : (
-                                      <span className="text-muted-foreground/60">—</span>
-                                    )}
-                                  </td>
-
-                                  {/* 6. Próxima Providência */}
+                                  {/* 3. Próxima Providência */}
                                   <td className="py-2.5 px-3">
                                     {proxProv?.providencia ? (
                                       <Tooltip>
@@ -1761,7 +1628,7 @@ export default function TarefasPage() {
                                     )}
                                   </td>
 
-                                  {/* 7. Prazo da Providência (vermelho se vencido) */}
+                                  {/* 4. Prazo da Providência (vermelho se vencido) */}
                                   <td className="py-2.5 px-3">
                                     {proxProv?.prazo_conclusao ? (
                                       <span
@@ -1780,12 +1647,12 @@ export default function TarefasPage() {
                                     )}
                                   </td>
 
-                                  {/* 8. Tipo de Prazo */}
+                                  {/* 5. Tipo de Prazo */}
                                   <td className="py-2.5 px-3 text-muted-foreground truncate">
                                     {proxProv?.tipo_prazo?.nome || '—'}
                                   </td>
 
-                                  {/* 9. Status da Providência */}
+                                  {/* 6. Status da Providência */}
                                   <td className="py-2.5 px-3">
                                     {proxProv?.status ? (
                                       <span
@@ -1811,21 +1678,21 @@ export default function TarefasPage() {
                                     )}
                                   </td>
 
-                                  {/* 10. Responsável */}
+                                  {/* 7. Responsável */}
                                   <td className="py-2.5 px-3 font-semibold text-foreground truncate">
                                     <span title={c.responsavel_nome || ''}>
                                       {c.responsavel_nome || '—'}
                                     </span>
                                   </td>
 
-                                  {/* 11. Executor */}
+                                  {/* 8. Executor */}
                                   <td className="py-2.5 px-3 font-medium text-foreground truncate">
                                     <span title={c.executor_nome || ''}>
                                       {c.executor_nome || '—'}
                                     </span>
                                   </td>
 
-                                  {/* 12. Pasta Cliente */}
+                                  {/* 9. Pasta Cliente */}
                                   <td className="py-2.5 px-3 font-mono font-medium text-foreground">
                                     {c.pasta_cliente ? (
                                       <span
@@ -1839,7 +1706,7 @@ export default function TarefasPage() {
                                     )}
                                   </td>
 
-                                  {/* 13. Pasta Ricci */}
+                                  {/* 10. Pasta Ricci */}
                                   <td className="py-2.5 px-3 font-mono font-medium text-foreground">
                                     {c.pasta_ricci ? (
                                       <span
@@ -1853,12 +1720,7 @@ export default function TarefasPage() {
                                     )}
                                   </td>
 
-                                  {/* 14. Última Atualização */}
-                                  <td className="py-2.5 px-3 text-muted-foreground text-[11px]">
-                                    {formatDateTimeBR(c.updated_at)}
-                                  </td>
-
-                                  {/* 15. Ações (fixa à direita) */}
+                                  {/* 11. Ações (fixa à direita) */}
                                   <td className="py-2.5 px-3 text-right sticky right-0 bg-card/90 backdrop-blur-md z-10 group-hover:bg-muted/40 transition-colors">
                                     <div className="flex items-center justify-end gap-1">
                                       <Button
@@ -1889,7 +1751,7 @@ export default function TarefasPage() {
                                 {/* DETALHE RÁPIDO EXPANDIDO */}
                                 {isExpanded && (
                                   <tr className="bg-muted/15 border-b border-border/80">
-                                    <td colSpan={15} className="py-4 px-5">
+                                    <td colSpan={11} className="py-4 px-5">
                                       <div className="bg-card border border-border/80 rounded-xl p-4 shadow-xs space-y-4 text-xs">
                                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-3">
                                           <div>

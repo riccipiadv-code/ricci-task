@@ -309,8 +309,14 @@ export default function ConfiguracoesPage() {
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
-              <span className="font-medium text-foreground">Cadastros Operacionais:</span>
-              <span className="text-foreground">task_responsaveis_controle e task_executores</span>
+              <span className="font-medium text-foreground">Responsável e Executor:</span>
+              <span className="text-foreground">usuários ativos do sistema</span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground text-[11px]">
+              <span className="text-muted-foreground">Fonte:</span>
+              <span className="text-muted-foreground">
+                task_listar_usuarios_ativos (somente leitura).
+              </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Controles Ativos Carregados:</span>

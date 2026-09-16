@@ -55,12 +55,23 @@ export function isPrazoOverdue(
   return d < today
 }
 /**
+ * Retorna a data local atual no formato YYYY-MM-DD
+ * usando getFullYear(), getMonth() + 1 e getDate() com padding zero.
+ */
+export function getLocalDateStr(date: Date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+/**
  * Retorna se uma data é exatamente hoje
  */
 export function isToday(dateIso?: string | null): boolean {
   if (!dateIso) return false
   const cleanDate = dateIso.split('T')[0]
-  const today = new Date().toISOString().split('T')[0]
+  const today = getLocalDateStr()
   return cleanDate === today
 }
 
