@@ -11,8 +11,6 @@ import {
   Loader2,
   LogOut,
   FolderKanban,
-  UserCheck,
-  Users,
 } from 'lucide-react'
 import { useTheme } from '@/hooks/useTheme'
 import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
@@ -36,11 +34,8 @@ export default function Layout({ children }: LayoutProps) {
   const [loggingOut, setLoggingOut] = useState(false)
 
   // Submenu Tabelas expansível:
-  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes, /tabelas/responsaveis ou /tabelas/executores)
-  const isTabelasChildActive =
-    location.pathname.startsWith('/tabelas/nomes') ||
-    location.pathname.startsWith('/tabelas/responsaveis') ||
-    location.pathname.startsWith('/tabelas/executores')
+  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes)
+  const isTabelasChildActive = location.pathname.startsWith('/tabelas/nomes')
 
   const [tabelasExpanded, setTabelasExpanded] = useState(isTabelasChildActive)
 
@@ -202,36 +197,6 @@ export default function Layout({ children }: LayoutProps) {
                   <FolderKanban className="w-4 h-4 shrink-0" />
                   <span className="hidden lg:inline-block truncate">Nomes dos Controles</span>
                 </NavLink>
-
-                <NavLink
-                  to="/tabelas/responsaveis"
-                  className={cn(
-                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
-                    location.pathname === '/tabelas/responsaveis'
-                      ? 'bg-primary/15 text-primary font-semibold'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-                  )}
-                  title="Responsáveis pelo Controle"
-                >
-                  <UserCheck className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline-block truncate">
-                    Responsáveis pelo Controle
-                  </span>
-                </NavLink>
-
-                <NavLink
-                  to="/tabelas/executores"
-                  className={cn(
-                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
-                    location.pathname === '/tabelas/executores'
-                      ? 'bg-primary/15 text-primary font-semibold'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-                  )}
-                  title="Executores do Controle"
-                >
-                  <Users className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline-block truncate">Executores</span>
-                </NavLink>
               </div>
             )}
           </div>
@@ -384,7 +349,7 @@ export default function Layout({ children }: LayoutProps) {
           <span>Controles</span>
         </NavLink>
 
-        {/* Tabelas (Navega para a primeira subpágina ou ativa com destaque) */}
+        {/* Tabelas */}
         <NavLink
           to="/tabelas/nomes"
           className={cn(

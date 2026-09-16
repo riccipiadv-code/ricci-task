@@ -199,7 +199,6 @@ export default function LoginPage() {
                   type="email"
                   autoComplete="email"
                   required
-                  placeholder="nome@riccipi.com.br"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   disabled={submitting || authLoading}
@@ -327,7 +326,6 @@ export default function LoginPage() {
                     id="reset-email"
                     type="email"
                     required
-                    placeholder="nome@riccipi.com.br"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
                     disabled={resetting}

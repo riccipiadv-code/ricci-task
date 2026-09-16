@@ -1,5 +1,5 @@
 // Tipos do Domínio Ricci Task — Fase Controles de Casos
-// Alinhado exclusivamente com as tabelas task_* no Supabase
+// Alinhado exclusivamente com as tabelas task_* no Supabase e RPC task_listar_usuarios_ativos
 
 export interface TaskStatusRecord {
   id: string
@@ -52,30 +52,9 @@ export interface TaskNomeControleRecord {
   deleted_by?: string | null
 }
 
-export interface TaskResponsavelControleRecord {
+export interface TaskUsuarioAtivoRecord {
   id: string
   nome: string
-  nome_normalizado?: string
-  ativo: boolean
-  created_at?: string
-  created_by?: string | null
-  updated_at?: string
-  updated_by?: string | null
-  deleted_at?: string | null
-  deleted_by?: string | null
-}
-
-export interface TaskExecutorRecord {
-  id: string
-  nome: string
-  nome_normalizado?: string
-  ativo: boolean
-  created_at?: string
-  created_by?: string | null
-  updated_at?: string
-  updated_by?: string | null
-  deleted_at?: string | null
-  deleted_by?: string | null
 }
 
 export interface TaskProvidenciaRecord {
@@ -105,8 +84,8 @@ export interface TaskControleRecord {
   status_id: string
   data_autorizacao: string | null
   prazo_conclusao: string | null
-  responsavel_controle_id: string
-  executor_id: string | null
+  responsavel_usuario_id: string
+  executor_usuario_id: string
   pasta_cliente: string | null
   pasta_ricci: string | null
   created_at: string
@@ -116,13 +95,13 @@ export interface TaskControleRecord {
   deleted_at: string | null
   deleted_by: string | null
 
-  // Joins hidratados para a UI
+  // Hidratados para a UI
   nome_controle?: string | null
   responsavel_nome?: string | null
   executor_nome?: string | null
   status?: TaskStatusRecord | null
-  responsavel_controle?: TaskResponsavelControleRecord | null
-  executor?: TaskExecutorRecord | null
+  responsavel_usuario?: TaskUsuarioAtivoRecord | null
+  executor_usuario?: TaskUsuarioAtivoRecord | null
 
   // Providências vinculadas
   providencias?: TaskProvidenciaRecord[]
@@ -137,8 +116,8 @@ export interface SaveControleInput {
   status_id: string
   data_autorizacao?: string | null
   prazo_conclusao?: string | null
-  responsavel_controle_id: string
-  executor_id: string
+  responsavel_usuario_id: string
+  executor_usuario_id: string
   pasta_cliente?: string | null
   pasta_ricci?: string | null
 }
@@ -165,18 +144,6 @@ export interface DraftProvidencia {
 }
 
 export interface SaveNomeControleInput {
-  id?: string
-  nome: string
-  ativo?: boolean
-}
-
-export interface SaveResponsavelControleInput {
-  id?: string
-  nome: string
-  ativo?: boolean
-}
-
-export interface SaveExecutorInput {
   id?: string
   nome: string
   ativo?: boolean

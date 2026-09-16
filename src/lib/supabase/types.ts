@@ -1811,45 +1811,6 @@ export type Database = {
           },
         ]
       }
-      task_executores: {
-        Row: {
-          ativo: boolean
-          created_at: string
-          created_by: string | null
-          deleted_at: string | null
-          deleted_by: string | null
-          id: string
-          nome: string
-          nome_normalizado: string | null
-          updated_at: string
-          updated_by: string | null
-        }
-        Insert: {
-          ativo?: boolean
-          created_at?: string
-          created_by?: string | null
-          deleted_at?: string | null
-          deleted_by?: string | null
-          id?: string
-          nome: string
-          nome_normalizado?: string | null
-          updated_at?: string
-          updated_by?: string | null
-        }
-        Update: {
-          ativo?: boolean
-          created_at?: string
-          created_by?: string | null
-          deleted_at?: string | null
-          deleted_by?: string | null
-          id?: string
-          nome?: string
-          nome_normalizado?: string | null
-          updated_at?: string
-          updated_by?: string | null
-        }
-        Relationships: []
-      }
       task_nomes_controle: {
         Row: {
           ativo: boolean
@@ -1959,45 +1920,6 @@ export type Database = {
           },
         ]
       }
-      task_responsaveis_controle: {
-        Row: {
-          ativo: boolean
-          created_at: string
-          created_by: string | null
-          deleted_at: string | null
-          deleted_by: string | null
-          id: string
-          nome: string
-          nome_normalizado: string | null
-          updated_at: string
-          updated_by: string | null
-        }
-        Insert: {
-          ativo?: boolean
-          created_at?: string
-          created_by?: string | null
-          deleted_at?: string | null
-          deleted_by?: string | null
-          id?: string
-          nome: string
-          nome_normalizado?: string | null
-          updated_at?: string
-          updated_by?: string | null
-        }
-        Update: {
-          ativo?: boolean
-          created_at?: string
-          created_by?: string | null
-          deleted_at?: string | null
-          deleted_by?: string | null
-          id?: string
-          nome?: string
-          nome_normalizado?: string | null
-          updated_at?: string
-          updated_by?: string | null
-        }
-        Relationships: []
-      }
       task_status: {
         Row: {
           ativo: boolean
@@ -2083,14 +2005,14 @@ export type Database = {
           data_autorizacao: string | null
           deleted_at: string | null
           deleted_by: string | null
-          executor_id: string | null
+          executor_usuario_id: string
           id: string
           identificacao_caso: string
           nome_controle_id: string
           pasta_cliente: string | null
           pasta_ricci: string | null
           prazo_conclusao: string | null
-          responsavel_controle_id: string
+          responsavel_usuario_id: string
           status_id: string
           updated_at: string
           updated_by: string | null
@@ -2101,14 +2023,14 @@ export type Database = {
           data_autorizacao?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
-          executor_id?: string | null
+          executor_usuario_id: string
           id?: string
           identificacao_caso: string
           nome_controle_id: string
           pasta_cliente?: string | null
           pasta_ricci?: string | null
           prazo_conclusao?: string | null
-          responsavel_controle_id: string
+          responsavel_usuario_id: string
           status_id?: string
           updated_at?: string
           updated_by?: string | null
@@ -2119,38 +2041,24 @@ export type Database = {
           data_autorizacao?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
-          executor_id?: string | null
+          executor_usuario_id?: string
           id?: string
           identificacao_caso?: string
           nome_controle_id?: string
           pasta_cliente?: string | null
           pasta_ricci?: string | null
           prazo_conclusao?: string | null
-          responsavel_controle_id?: string
+          responsavel_usuario_id?: string
           status_id?: string
           updated_at?: string
           updated_by?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: 'task_tarefas_executor_id_fkey'
-            columns: ['executor_id']
-            isOneToOne: false
-            referencedRelation: 'task_executores'
-            referencedColumns: ['id']
-          },
-          {
             foreignKeyName: 'task_tarefas_nome_controle_id_fkey'
             columns: ['nome_controle_id']
             isOneToOne: false
             referencedRelation: 'task_nomes_controle'
-            referencedColumns: ['id']
-          },
-          {
-            foreignKeyName: 'task_tarefas_responsavel_controle_id_fkey'
-            columns: ['responsavel_controle_id']
-            isOneToOne: false
-            referencedRelation: 'task_responsaveis_controle'
             referencedColumns: ['id']
           },
           {
@@ -2211,6 +2119,13 @@ export type Database = {
       soft_delete_manychat_contato: {
         Args: { p_contato_id: string }
         Returns: undefined
+      }
+      task_listar_usuarios_ativos: {
+        Args: never
+        Returns: {
+          id: string
+          nome: string
+        }[]
       }
       task_normalizar_nome: { Args: { p_valor: string }; Returns: string }
       task_status_padrao_id: { Args: never; Returns: string }

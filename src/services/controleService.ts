@@ -5,14 +5,11 @@ import {
   TaskStatusProvidenciaRecord,
   TaskTipoPrazoRecord,
   TaskNomeControleRecord,
-  TaskResponsavelControleRecord,
-  TaskExecutorRecord,
+  TaskUsuarioAtivoRecord,
   TaskProvidenciaRecord,
   SaveControleInput,
   SaveProvidenciaInput,
   SaveNomeControleInput,
-  SaveResponsavelControleInput,
-  SaveExecutorInput,
   ControleMetrics,
 } from '@/types/task'
 
@@ -182,245 +179,22 @@ export const controleService = {
   },
 
   // --------------------------------------------------------------------------
-  // GESTÃO DE RESPONSÁVEIS PELO CONTROLE (task_responsaveis_controle)
+  // LISTAGEM DE USUÁRIOS ATIVOS VIA RPC (task_listar_usuarios_ativos)
+  // Única fonte para Responsável e Executor (Profiles do Conectaí)
   // --------------------------------------------------------------------------
-  async getResponsaveisControle(options?: {
-    incluirInativos?: boolean
-  }): Promise<TaskResponsavelControleRecord[]> {
-    let query = supabase
-      .from('task_responsaveis_controle')
-      .select('*')
-      .is('deleted_at', null)
-      .order('nome', { ascending: true })
+  async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
+    const { data, error } = await supabase.rpc('task_listar_usuarios_ativos')
 
-    if (!options?.incluirInativos) {
-      query = query.eq('ativo', true)
-    }
-
-    const { data, error } = await query
     if (error) {
-      console.error('Erro ao buscar task_responsaveis_controle:', error)
-      throw error
-    }
-    return (data || []) as TaskResponsavelControleRecord[]
-  },
-
-  async saveResponsavelControle(
-    input: SaveResponsavelControleInput,
-  ): Promise<TaskResponsavelControleRecord> {
-    const cleanNome = input.nome.trim()
-    if (!cleanNome) {
-      throw new Error('O nome do responsável é obrigatório.')
-    }
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    const userId = user?.id || null
-
-    if (input.id) {
-      const { data, error } = await supabase
-        .from('task_responsaveis_controle')
-        .update({
-          nome: cleanNome,
-          ativo: input.ativo !== undefined ? input.ativo : true,
-          updated_at: new Date().toISOString(),
-          updated_by: userId,
-        })
-        .eq('id', input.id)
-        .select()
-        .single()
-
-      if (error) throw error
-      return data as TaskResponsavelControleRecord
-    } else {
-      const { data, error } = await supabase
-        .from('task_responsaveis_controle')
-        .insert({
-          nome: cleanNome,
-          ativo: input.ativo !== undefined ? input.ativo : true,
-          created_by: userId,
-          updated_by: userId,
-        })
-        .select()
-        .single()
-
-      if (error) throw error
-      return data as TaskResponsavelControleRecord
-    }
-  },
-
-  async toggleResponsavelControleAtivo(id: string, ativo: boolean): Promise<void> {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    const { error } = await supabase
-      .from('task_responsaveis_controle')
-      .update({
-        ativo,
-        updated_at: new Date().toISOString(),
-        updated_by: user?.id || null,
-      })
-      .eq('id', id)
-
-    if (error) throw error
-  },
-
-  async deleteResponsavelControle(id: string): Promise<void> {
-    const { count, error: checkError } = await supabase
-      .from('task_tarefas')
-      .select('id', { count: 'exact', head: true })
-      .eq('responsavel_controle_id', id)
-      .is('deleted_at', null)
-
-    if (checkError) throw checkError
-    if (count && count > 0) {
+      console.error('Erro ao executar RPC task_listar_usuarios_ativos:', error)
       throw new Error(
-        `Este responsável está vinculado a ${count} controle(s) de caso ativo(s) e não pode ser excluído.`,
+        'Não foi possível carregar a lista de usuários ativos. Verifique sua conexão.',
       )
     }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    const { error } = await supabase
-      .from('task_responsaveis_controle')
-      .update({
-        deleted_at: new Date().toISOString(),
-        deleted_by: user?.id || null,
-        ativo: false,
-      })
-      .eq('id', id)
-
-    if (error) throw error
-  },
-
-  // --------------------------------------------------------------------------
-  // GESTÃO DE EXECUTORES (task_executores)
-  // --------------------------------------------------------------------------
-  async getExecutores(options?: { incluirInativos?: boolean }): Promise<TaskExecutorRecord[]> {
-    let query = supabase
-      .from('task_executores')
-      .select('*')
-      .is('deleted_at', null)
-      .order('nome', { ascending: true })
-
-    if (!options?.incluirInativos) {
-      query = query.eq('ativo', true)
-    }
-
-    const { data, error } = await query
-    if (error) {
-      console.error('Erro ao buscar task_executores:', error)
-      throw error
-    }
-    return (data || []) as TaskExecutorRecord[]
-  },
-
-  async saveExecutor(input: SaveExecutorInput): Promise<TaskExecutorRecord> {
-    const cleanNome = input.nome.trim()
-    if (!cleanNome) {
-      throw new Error('O nome do executor é obrigatório.')
-    }
-    if (cleanNome.length > 255) {
-      throw new Error('O nome deve ter no máximo 255 caracteres.')
-    }
-    if (!/[\p{L}\p{N}]/u.test(cleanNome)) {
-      throw new Error('O nome não pode ser composto apenas por espaços ou pontuação.')
-    }
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    const userId = user?.id || null
-
-    if (input.id) {
-      const { data, error } = await supabase
-        .from('task_executores')
-        .update({
-          nome: cleanNome,
-          ativo: input.ativo !== undefined ? input.ativo : true,
-          updated_at: new Date().toISOString(),
-          updated_by: userId,
-        })
-        .eq('id', input.id)
-        .select()
-        .single()
-
-      if (error) {
-        if (error.code === '23505' || error.message.includes('23505')) {
-          throw new Error('Já existe um Executor equivalente a este.')
-        }
-        throw error
-      }
-      return data as TaskExecutorRecord
-    } else {
-      const { data, error } = await supabase
-        .from('task_executores')
-        .insert({
-          nome: cleanNome,
-          ativo: input.ativo !== undefined ? input.ativo : true,
-          created_by: userId,
-          updated_by: userId,
-        })
-        .select()
-        .single()
-
-      if (error) {
-        if (error.code === '23505' || error.message.includes('23505')) {
-          throw new Error('Já existe um Executor equivalente a este.')
-        }
-        throw error
-      }
-      return data as TaskExecutorRecord
-    }
-  },
-
-  async toggleExecutorAtivo(id: string, ativo: boolean): Promise<void> {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    const { error } = await supabase
-      .from('task_executores')
-      .update({
-        ativo,
-        updated_at: new Date().toISOString(),
-        updated_by: user?.id || null,
-      })
-      .eq('id', id)
-
-    if (error) throw error
-  },
-
-  async deleteExecutor(id: string): Promise<void> {
-    const { count, error: checkError } = await supabase
-      .from('task_tarefas')
-      .select('id', { count: 'exact', head: true })
-      .eq('executor_id', id)
-      .is('deleted_at', null)
-
-    if (checkError) throw checkError
-    if (count && count > 0) {
-      throw new Error(
-        `Este executor está vinculado a ${count} controle(s) de caso ativo(s) e não pode ser excluído.`,
-      )
-    }
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    const { error } = await supabase
-      .from('task_executores')
-      .update({
-        deleted_at: new Date().toISOString(),
-        deleted_by: user?.id || null,
-        ativo: false,
-      })
-      .eq('id', id)
-
-    if (error) throw error
+    const lista = (data || []) as TaskUsuarioAtivoRecord[]
+    // Ordenar alfabeticamente por nome
+    return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   },
 
   // --------------------------------------------------------------------------
@@ -518,16 +292,28 @@ export const controleService = {
 
   // --------------------------------------------------------------------------
   // LISTAGEM PRINCIPAL DE CONTROLES (task_tarefas)
+  // Resolvendo responsáveis e executores a partir dos usuários ativos da RPC
   // --------------------------------------------------------------------------
-  async getControles(): Promise<TaskControleRecord[]> {
-    // 1. Busca os controles ativos com joins nas tabelas auxiliares
+  async getControles(usuariosParam?: TaskUsuarioAtivoRecord[]): Promise<TaskControleRecord[]> {
+    // 1. Garante que temos a lista de usuários para resolver os nomes
+    let usuariosMap = new Map<string, TaskUsuarioAtivoRecord>()
+    if (usuariosParam && usuariosParam.length > 0) {
+      usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
+    } else {
+      try {
+        const users = await this.getUsuariosAtivos()
+        users.forEach((u) => usuariosMap.set(u.id, u))
+      } catch (err) {
+        console.error('Aviso ao obter usuários para resolução de controles:', err)
+      }
+    }
+
+    // 2. Busca os controles ativos com joins nas tabelas auxiliares próprias
     const { data: tarefasRaw, error: tarefasError } = await supabase
       .from('task_tarefas')
       .select(`
         *,
         nome_controle_obj:task_nomes_controle(id, nome),
-        responsavel_obj:task_responsaveis_controle(id, nome),
-        executor_obj:task_executores(id, nome),
         status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
       `)
       .is('deleted_at', null)
@@ -543,7 +329,7 @@ export const controleService = {
 
     const tarefaIds = tarefasRaw.map((t) => t.id)
 
-    // 2. Busca todas as providências ativas desses controles
+    // 3. Busca todas as providências ativas desses controles
     const { data: providenciasRaw, error: provError } = await supabase
       .from('task_providencias')
       .select(`
@@ -570,7 +356,7 @@ export const controleService = {
       provsByTarefa[p.tarefa_id].push(p)
     }
 
-    // 3. Monta o modelo hidratado
+    // 4. Monta o modelo hidratado
     const controles: TaskControleRecord[] = tarefasRaw.map((t: any) => {
       const provs = provsByTarefa[t.id] || []
 
@@ -586,9 +372,11 @@ export const controleService = {
 
       // Próxima providência aberta (finaliza !== true)
       const provAbertas = provs.filter((p) => !p.status?.finaliza)
-      // Ordena abertas por prazo_conclusao crescente
       provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
       const proximaProvAberta = provAbertas[0] || null
+
+      const respUsuario = usuariosMap.get(t.responsavel_usuario_id) || null
+      const execUsuario = usuariosMap.get(t.executor_usuario_id) || null
 
       return {
         id: t.id,
@@ -597,8 +385,8 @@ export const controleService = {
         status_id: t.status_id,
         data_autorizacao: t.data_autorizacao,
         prazo_conclusao: t.prazo_conclusao,
-        responsavel_controle_id: t.responsavel_controle_id,
-        executor_id: t.executor_id,
+        responsavel_usuario_id: t.responsavel_usuario_id,
+        executor_usuario_id: t.executor_usuario_id,
         pasta_cliente: t.pasta_cliente,
         pasta_ricci: t.pasta_ricci,
         created_at: t.created_at,
@@ -609,19 +397,18 @@ export const controleService = {
         deleted_by: t.deleted_by,
 
         nome_controle: t.nome_controle_obj?.nome || null,
-        responsavel_nome: t.responsavel_obj?.nome || null,
-        executor_nome: t.executor_obj?.nome || null,
+        responsavel_nome: respUsuario?.nome || null,
+        executor_nome: execUsuario?.nome || null,
         status: t.status_obj || null,
-        responsavel_controle: t.responsavel_obj || null,
-        executor: t.executor_obj || null,
+        responsavel_usuario: respUsuario,
+        executor_usuario: execUsuario,
 
         providencias: provsOrdenadas,
         proxima_providencia: proximaProvAberta,
       }
     })
 
-    // 4. Ordenação padrão: data da próxima providência aberta em ordem crescente.
-    // Casos sem providência aberta ficam por último; desempate por updated_at decrescente.
+    // 5. Ordenação padrão: data da próxima providência aberta em ordem crescente.
     controles.sort((a, b) => {
       const aData = a.proxima_providencia?.prazo_conclusao || null
       const bData = b.proxima_providencia?.prazo_conclusao || null
@@ -630,28 +417,27 @@ export const controleService = {
         if (aData !== bData) {
           return aData.localeCompare(bData)
         }
-        // Desempate
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
       }
 
       if (aData && !bData) return -1
       if (!aData && bData) return 1
 
-      // Nenhum tem providência aberta: updated_at decrescente
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
     })
 
     return controles
   },
 
-  async getControleById(id: string): Promise<TaskControleRecord | null> {
+  async getControleById(
+    id: string,
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+  ): Promise<TaskControleRecord | null> {
     const { data: t, error } = await supabase
       .from('task_tarefas')
       .select(`
         *,
         nome_controle_obj:task_nomes_controle(id, nome),
-        responsavel_obj:task_responsaveis_controle(id, nome),
-        executor_obj:task_executores(id, nome),
         status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
       `)
       .eq('id', id)
@@ -660,6 +446,18 @@ export const controleService = {
     if (error || !t) {
       console.error('Erro ao buscar task_tarefas por id:', error)
       return null
+    }
+
+    let usuariosMap = new Map<string, TaskUsuarioAtivoRecord>()
+    if (usuariosParam && usuariosParam.length > 0) {
+      usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
+    } else {
+      try {
+        const users = await this.getUsuariosAtivos()
+        users.forEach((u) => usuariosMap.set(u.id, u))
+      } catch (err) {
+        console.error('Aviso ao obter usuários para resolução de controle:', err)
+      }
     }
 
     const provs = await this.getProvidencias(id)
@@ -675,6 +473,9 @@ export const controleService = {
     provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
 
     const raw: any = t
+    const respUsuario = usuariosMap.get(raw.responsavel_usuario_id) || null
+    const execUsuario = usuariosMap.get(raw.executor_usuario_id) || null
+
     return {
       id: raw.id,
       nome_controle_id: raw.nome_controle_id,
@@ -682,8 +483,8 @@ export const controleService = {
       status_id: raw.status_id,
       data_autorizacao: raw.data_autorizacao,
       prazo_conclusao: raw.prazo_conclusao,
-      responsavel_controle_id: raw.responsavel_controle_id,
-      executor_id: raw.executor_id,
+      responsavel_usuario_id: raw.responsavel_usuario_id,
+      executor_usuario_id: raw.executor_usuario_id,
       pasta_cliente: raw.pasta_cliente,
       pasta_ricci: raw.pasta_ricci,
       created_at: raw.created_at,
@@ -694,18 +495,21 @@ export const controleService = {
       deleted_by: raw.deleted_by,
 
       nome_controle: raw.nome_controle_obj?.nome || null,
-      responsavel_nome: raw.responsavel_obj?.nome || null,
-      executor_nome: raw.executor_obj?.nome || null,
+      responsavel_nome: respUsuario?.nome || null,
+      executor_nome: execUsuario?.nome || null,
       status: raw.status_obj || null,
-      responsavel_controle: raw.responsavel_obj || null,
-      executor: raw.executor_obj || null,
+      responsavel_usuario: respUsuario,
+      executor_usuario: execUsuario,
 
       providencias: provsOrdenadas,
       proxima_providencia: provAbertas[0] || null,
     }
   },
 
-  async saveControle(input: SaveControleInput): Promise<TaskControleRecord> {
+  async saveControle(
+    input: SaveControleInput,
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+  ): Promise<TaskControleRecord> {
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -717,8 +521,8 @@ export const controleService = {
       status_id: input.status_id,
       data_autorizacao: input.data_autorizacao || null,
       prazo_conclusao: input.prazo_conclusao || null,
-      responsavel_controle_id: input.responsavel_controle_id,
-      executor_id: input.executor_id,
+      responsavel_usuario_id: input.responsavel_usuario_id,
+      executor_usuario_id: input.executor_usuario_id,
       pasta_cliente: input.pasta_cliente?.trim() || null,
       pasta_ricci: input.pasta_ricci?.trim() || null,
       updated_at: new Date().toISOString(),
@@ -737,7 +541,7 @@ export const controleService = {
         console.error('Erro ao atualizar task_tarefas:', error)
         throw error
       }
-      const loaded = await this.getControleById(data.id)
+      const loaded = await this.getControleById(data.id, usuariosParam)
       return (loaded || data) as TaskControleRecord
     } else {
       const { data, error } = await supabase
@@ -753,7 +557,7 @@ export const controleService = {
         console.error('Erro ao criar task_tarefas:', error)
         throw error
       }
-      const loaded = await this.getControleById(data.id)
+      const loaded = await this.getControleById(data.id, usuariosParam)
       return (loaded || data) as TaskControleRecord
     }
   },

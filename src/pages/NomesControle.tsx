@@ -377,7 +377,6 @@ export default function NomesControlePage() {
               <Input
                 id="nome-controle-input"
                 autoFocus
-                placeholder="Ex: Ricci Advogados PI e Natura (Contencioso) - Controle Ações Estratégicas"
                 value={nomeForm}
                 onChange={(e) => {
                   setNomeForm(e.target.value)

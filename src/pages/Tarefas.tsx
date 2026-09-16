@@ -84,8 +84,7 @@ export default function TarefasPage() {
     statusList,
     statusProvidenciaList,
     tiposPrazoList,
-    responsaveisControle,
-    executores,
+    usuariosAtivos,
     loading,
     refreshControles,
     archiveControle,
@@ -240,12 +239,12 @@ export default function TarefasPage() {
 
     // 4. Filtro por Responsável (ID)
     if (responsavelFilter !== 'todos') {
-      list = list.filter((c) => c.responsavel_controle_id === responsavelFilter)
+      list = list.filter((c) => c.responsavel_usuario_id === responsavelFilter)
     }
 
     // 5. Filtro por Executor (ID)
     if (executorFilter !== 'todos') {
-      list = list.filter((c) => c.executor_id === executorFilter)
+      list = list.filter((c) => c.executor_usuario_id === executorFilter)
     }
 
     // 6. Filtro por Tipo de Prazo (ID em providências)
@@ -524,7 +523,7 @@ export default function TarefasPage() {
     }
 
     if (responsavelFilter !== 'todos') {
-      const resp = responsaveisControle.find((r) => r.id === responsavelFilter)
+      const resp = usuariosAtivos.find((u) => u.id === responsavelFilter)
       chips.push({
         id: 'responsavel',
         label: `Resp.: ${resp?.nome || responsavelFilter}`,
@@ -533,7 +532,7 @@ export default function TarefasPage() {
     }
 
     if (executorFilter !== 'todos') {
-      const exec = executores.find((e) => e.id === executorFilter)
+      const exec = usuariosAtivos.find((u) => u.id === executorFilter)
       chips.push({
         id: 'executor',
         label: `Exec.: ${exec?.nome || executorFilter}`,
@@ -570,8 +569,7 @@ export default function TarefasPage() {
     statusProvidenciaFilter,
     allNomesControle,
     statusList,
-    responsaveisControle,
-    executores,
+    usuariosAtivos,
     tiposPrazoList,
     statusProvidenciaList,
   ])
@@ -784,9 +782,9 @@ export default function TarefasPage() {
               </SelectTrigger>
               <SelectContent className="rounded-xl max-h-72">
                 <SelectItem value="todos">Todos os responsáveis</SelectItem>
-                {responsaveisControle.map((r) => (
-                  <SelectItem key={r.id} value={r.id}>
-                    {r.nome}
+                {usuariosAtivos.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>
+                    {u.nome}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -805,9 +803,9 @@ export default function TarefasPage() {
               </SelectTrigger>
               <SelectContent className="rounded-xl max-h-72">
                 <SelectItem value="todos">Todos os executores</SelectItem>
-                {executores.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.nome}
+                {usuariosAtivos.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>
+                    {u.nome}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1034,9 +1032,9 @@ export default function TarefasPage() {
                       </SelectTrigger>
                       <SelectContent className="rounded-xl max-h-60">
                         <SelectItem value="todos">Todos os responsáveis</SelectItem>
-                        {responsaveisControle.map((r) => (
-                          <SelectItem key={r.id} value={r.id}>
-                            {r.nome}
+                        {usuariosAtivos.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {u.nome}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1052,13 +1050,13 @@ export default function TarefasPage() {
                       </SelectTrigger>
                       <SelectContent className="rounded-xl max-h-60">
                         <SelectItem value="todos">Todos os executores</SelectItem>
-                        {executores.map((e) => (
-                          <SelectItem key={e.id} value={e.id}>
-                            {e.nome}
+                        {usuariosAtivos.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {u.nome}
                           </SelectItem>
                         ))}
                       </SelectContent>
-                    </Select>
+                    </Select>{' '}
                   </div>
 
                   {/* Tipo de Prazo */}
@@ -2322,6 +2320,7 @@ export default function TarefasPage() {
         statusList={statusList}
         statusProvidenciaList={statusProvidenciaList}
         tiposPrazoList={tiposPrazoList}
+        usuariosAtivos={usuariosAtivos}
         onSaved={() => {
           refreshControles()
         }}

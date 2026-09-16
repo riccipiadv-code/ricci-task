@@ -28,7 +28,6 @@ import {
   CheckCircle2,
   FileText,
   Loader2,
-  FolderKanban,
   UserCheck,
   AlertCircle,
   Search,
@@ -36,8 +35,7 @@ import {
 import {
   TaskControleRecord,
   TaskNomeControleRecord,
-  TaskResponsavelControleRecord,
-  TaskExecutorRecord,
+  TaskUsuarioAtivoRecord,
   TaskStatusRecord,
   TaskStatusProvidenciaRecord,
   TaskTipoPrazoRecord,
@@ -56,6 +54,7 @@ interface ControleModalProps {
   statusList: TaskStatusRecord[]
   statusProvidenciaList?: TaskStatusProvidenciaRecord[]
   tiposPrazoList: TaskTipoPrazoRecord[]
+  usuariosAtivos?: TaskUsuarioAtivoRecord[]
   onSaved: (controle: TaskControleRecord) => void
 }
 
@@ -77,33 +76,23 @@ export function ControleModal({
   statusList,
   statusProvidenciaList = [],
   tiposPrazoList,
+  usuariosAtivos: usuariosProp,
   onSaved,
 }: ControleModalProps) {
   const { toast } = useToast()
 
-  // Listas auxiliares (Nomes, Responsáveis, Executores, Status Providência)
+  // Listas auxiliares (Nomes, Usuários Ativos da RPC, Status Providência)
   const [nomesLista, setNomesLista] = useState<TaskNomeControleRecord[]>([])
-  const [respsLista, setRespsLista] = useState<TaskResponsavelControleRecord[]>([])
-  const [execsLista, setExecsLista] = useState<TaskExecutorRecord[]>([])
+  const [usuariosLista, setUsuariosLista] = useState<TaskUsuarioAtivoRecord[]>(usuariosProp || [])
   const [statusProvLista, setStatusProvLista] =
     useState<TaskStatusProvidenciaRecord[]>(statusProvidenciaList)
   const [loadingListas, setLoadingListas] = useState(false)
 
-  // Modais de cadastro rápido (+)
+  // Modal de cadastro rápido (+) exclusivo para Nome do Controle
   const [quickNomeModalOpen, setQuickNomeModalOpen] = useState(false)
   const [quickNomeInput, setQuickNomeInput] = useState('')
   const [quickNomeError, setQuickNomeError] = useState<string | null>(null)
   const [quickNomeSaving, setQuickNomeSaving] = useState(false)
-
-  const [quickRespModalOpen, setQuickRespModalOpen] = useState(false)
-  const [quickRespInput, setQuickRespInput] = useState('')
-  const [quickRespError, setQuickRespError] = useState<string | null>(null)
-  const [quickRespSaving, setQuickRespSaving] = useState(false)
-
-  const [quickExecModalOpen, setQuickExecModalOpen] = useState(false)
-  const [quickExecInput, setQuickExecInput] = useState('')
-  const [quickExecError, setQuickExecError] = useState<string | null>(null)
-  const [quickExecSaving, setQuickExecSaving] = useState(false)
 
   // Filtros de busca inline para os seletores
   const [buscaNomeSelect, setBuscaNomeSelect] = useState('')
@@ -127,8 +116,8 @@ export function ControleModal({
 
   const [dataAutorizacao, setDataAutorizacao] = useState('')
   const [prazoConclusao, setPrazoConclusao] = useState('')
-  const [responsavelControleId, setResponsavelControleId] = useState('')
-  const [executorId, setExecutorId] = useState('')
+  const [responsavelUsuarioId, setResponsavelUsuarioId] = useState('')
+  const [executorUsuarioId, setExecutorUsuarioId] = useState('')
   const [pastaCliente, setPastaCliente] = useState('')
   const [pastaRicci, setPastaRicci] = useState('')
   const [updatedAtDisplay, setUpdatedAtDisplay] = useState<string | null>(null)
@@ -171,24 +160,30 @@ export function ControleModal({
   const carregarListasAuxiliares = useCallback(async () => {
     setLoadingListas(true)
     try {
-      const [nomes, resps, execs, stProv] = await Promise.all([
+      const [nomes, users, stProv] = await Promise.all([
         controleService.getNomesControle({ incluirInativos: true }),
-        controleService.getResponsaveisControle({ incluirInativos: true }),
-        controleService.getExecutores({ incluirInativos: true }),
+        controleService.getUsuariosAtivos().catch((rpcErr) => {
+          console.error('Falha na RPC task_listar_usuarios_ativos:', rpcErr)
+          toast({
+            variant: 'destructive',
+            title: 'Erro ao carregar usuários',
+            description: 'Não foi possível obter a lista de usuários ativos. Verifique a conexão.',
+          })
+          return [] as TaskUsuarioAtivoRecord[]
+        }),
         statusProvidenciaList.length > 0
           ? Promise.resolve(statusProvidenciaList)
           : controleService.getStatusProvidencia(),
       ])
       setNomesLista(nomes)
-      setRespsLista(resps)
-      setExecsLista(execs)
+      setUsuariosLista(users)
       setStatusProvLista(stProv)
     } catch (err) {
       console.error('Erro ao carregar listas auxiliares no ControleModal:', err)
     } finally {
       setLoadingListas(false)
     }
-  }, [statusProvidenciaList])
+  }, [statusProvidenciaList, toast])
 
   // Popula o formulário ao abrir
   useEffect(() => {
@@ -215,8 +210,8 @@ export function ControleModal({
       setPrazoConclusao(
         controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
       )
-      setResponsavelControleId(controleToEdit.responsavel_controle_id || '')
-      setExecutorId(controleToEdit.executor_id || '')
+      setResponsavelUsuarioId(controleToEdit.responsavel_usuario_id || '')
+      setExecutorUsuarioId(controleToEdit.executor_usuario_id || '')
       setPastaCliente(controleToEdit.pasta_cliente || '')
       setPastaRicci(controleToEdit.pasta_ricci || '')
       setUpdatedAtDisplay(controleToEdit.updated_at || null)
@@ -242,8 +237,8 @@ export function ControleModal({
       setStatusId(statusPadraoId)
       setDataAutorizacao(getTodayLocalDate())
       setPrazoConclusao('')
-      setResponsavelControleId('')
-      setExecutorId('')
+      setResponsavelUsuarioId('')
+      setExecutorUsuarioId('')
       setPastaCliente('')
       setPastaRicci('')
       setUpdatedAtDisplay(null)
@@ -258,22 +253,12 @@ export function ControleModal({
     carregarListasAuxiliares,
   ])
 
-  // Opções de Status do Controle: ordenadas por ordem crescente, ativas ou o registro atualmente selecionado
+  // Opções de Status do Controle
   const opcoesStatusControle = useMemo(() => {
     return statusList
       .filter((st) => st.ativo || st.id === statusId)
       .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
   }, [statusList, statusId])
-
-  // Opções de Status da Providência: ordenadas por ordem crescente
-  const getOpcoesStatusProvidencia = useCallback(
-    (currentStatusId?: string) => {
-      return statusProvLista
-        .filter((st) => st.ativo || st.id === currentStatusId)
-        .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
-    },
-    [statusProvLista],
-  )
 
   // Opções de Nomes dos Controles
   const opcoesNomes = useMemo(() => {
@@ -285,28 +270,27 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
-  // Opções de Responsáveis pelo Controle
+  // Opções de Responsáveis (mesma lista de usuários ativos da RPC)
   const opcoesResponsaveis = useMemo(() => {
-    let list = respsLista.filter((r) => r.ativo || r.id === responsavelControleId)
+    let list = [...usuariosLista]
     if (buscaRespSelect.trim()) {
       const q = buscaRespSelect.trim().toLowerCase()
-      list = list.filter((r) => r.nome.toLowerCase().includes(q))
+      list = list.filter((u) => u.nome.toLowerCase().includes(q))
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [respsLista, responsavelControleId, buscaRespSelect])
+  }, [usuariosLista, buscaRespSelect])
 
-  // Opções de Executores do Controle
+  // Opções de Executores (mesma lista de usuários ativos da RPC)
   const opcoesExecutores = useMemo(() => {
-    let list = execsLista.filter((e) => e.ativo || e.id === executorId)
+    let list = [...usuariosLista]
     if (buscaExecSelect.trim()) {
       const q = buscaExecSelect.trim().toLowerCase()
-      list = list.filter((e) => e.nome.toLowerCase().includes(q))
+      list = list.filter((u) => u.nome.toLowerCase().includes(q))
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [execsLista, executorId, buscaExecSelect])
+  }, [usuariosLista, buscaExecSelect])
 
   // Ordenação visual dos cards de providências pelo prazo de conclusão crescente.
-  // Itens sem prazo ficam ao final. Mantém chave estável com tempId.
   const providenciasExibicao = useMemo(() => {
     return [...providencias].sort((a, b) => {
       if (!a.prazo_conclusao && !b.prazo_conclusao) return a.ordem - b.ordem
@@ -319,7 +303,7 @@ export function ControleModal({
     })
   }, [providencias])
 
-  // Adicionar nova providência (posiciona ao final)
+  // Adicionar nova providência
   const handleAdicionarProvidencia = () => {
     const novoItem: DraftProvidenciaItem = {
       tempId: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -350,7 +334,6 @@ export function ControleModal({
       setProvidenciaToDelete(item)
       setDeleteProvConfirmOpen(true)
     } else {
-      // Item ainda não salvo no banco, remove diretamente do estado
       setProvidencias((prev) => prev.filter((p) => p.tempId !== item.tempId))
       toast({ title: 'Providência removida' })
     }
@@ -379,11 +362,10 @@ export function ControleModal({
     }
   }
 
-  // --------------------------------------------------------------------------
-  // CADASTROS RÁPIDOS (+)
-  // --------------------------------------------------------------------------
+  // Cadastro rápido de Nome do Controle
   const handleSalvarQuickNome = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (quickNomeSaving) return
     setQuickNomeError(null)
     const clean = quickNomeInput.trim()
     if (!clean) {
@@ -426,97 +408,7 @@ export function ControleModal({
     }
   }
 
-  const handleSalvarQuickResp = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setQuickRespError(null)
-    const clean = quickRespInput.trim()
-    if (!clean) {
-      setQuickRespError('O nome do responsável é obrigatório.')
-      return
-    }
-    if (clean.length > 255) {
-      setQuickRespError('Máximo de 255 caracteres.')
-      return
-    }
-    if (!/[\p{L}\p{N}]/u.test(clean)) {
-      setQuickRespError('Deve conter letras ou números.')
-      return
-    }
-
-    setQuickRespSaving(true)
-    try {
-      const saved = await controleService.saveResponsavelControle({ nome: clean, ativo: true })
-      await carregarListasAuxiliares()
-      setResponsavelControleId(saved.id)
-      setResponsavelError(false)
-      setQuickRespModalOpen(false)
-      setQuickRespInput('')
-      toast({
-        title: 'Responsável cadastrado',
-        description: `"${saved.nome}" foi selecionado automaticamente.`,
-      })
-    } catch (err: any) {
-      if (
-        err?.code === '23505' ||
-        err?.message?.includes('23505') ||
-        err?.message?.includes('Já existe um Responsável equivalente')
-      ) {
-        setQuickRespError('Já existe um Responsável equivalente a este.')
-      } else {
-        setQuickRespError(err?.message || 'Erro ao cadastrar responsável.')
-      }
-    } finally {
-      setQuickRespSaving(false)
-    }
-  }
-
-  const handleSalvarQuickExec = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setQuickExecError(null)
-    const clean = quickExecInput.trim()
-    if (!clean) {
-      setQuickExecError('O nome do executor é obrigatório.')
-      return
-    }
-    if (clean.length > 255) {
-      setQuickExecError('Máximo de 255 caracteres.')
-      return
-    }
-    if (!/[\p{L}\p{N}]/u.test(clean)) {
-      setQuickExecError('Deve conter letras ou números.')
-      return
-    }
-
-    setQuickExecSaving(true)
-    try {
-      const saved = await controleService.saveExecutor({ nome: clean, ativo: true })
-      await carregarListasAuxiliares()
-      setExecutorId(saved.id)
-      setExecutorError(false)
-      setQuickExecModalOpen(false)
-      setQuickExecInput('')
-      toast({
-        title: 'Executor cadastrado',
-        description: `"${saved.nome}" foi selecionado automaticamente.`,
-      })
-    } catch (err: any) {
-      if (
-        err?.code === '23505' ||
-        err?.message?.includes('23505') ||
-        err?.message?.includes('Já existe um Executor equivalente')
-      ) {
-        setQuickExecError('Já existe um Executor equivalente a este.')
-      } else {
-        setQuickExecError(err?.message || 'Erro ao cadastrar executor.')
-      }
-    } finally {
-      setQuickExecSaving(false)
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // SUBMIT PRINCIPAL DO CONTROLE
-  // --------------------------------------------------------------------------
+  // Submit principal do controle (impede duplo envio com flag saving)
   const handleSubmitControle = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if (saving) return
@@ -534,11 +426,11 @@ export function ControleModal({
       setStatusError(true)
       hasError = true
     }
-    if (!responsavelControleId) {
+    if (!responsavelUsuarioId) {
       setResponsavelError(true)
       hasError = true
     }
-    if (!executorId) {
+    if (!executorUsuarioId) {
       setExecutorError(true)
       hasError = true
     }
@@ -554,7 +446,7 @@ export function ControleModal({
       return
     }
 
-    // Validação das providências incluídas: todos os 4 campos são obrigatórios
+    // Validação das providências incluídas
     for (let i = 0; i < providencias.length; i++) {
       const p = providencias[i]
       if (!p.providencia.trim() || !p.prazo_conclusao || !p.tipo_prazo_id || !p.status_id) {
@@ -575,8 +467,8 @@ export function ControleModal({
       status_id: statusId,
       data_autorizacao: dataAutorizacao || null,
       prazo_conclusao: prazoConclusao || null,
-      responsavel_controle_id: responsavelControleId,
-      executor_id: executorId,
+      responsavel_usuario_id: responsavelUsuarioId,
+      executor_usuario_id: executorUsuarioId,
       pasta_cliente: pastaCliente.trim() || null,
       pasta_ricci: pastaRicci.trim() || null,
     }
@@ -584,7 +476,7 @@ export function ControleModal({
     setSaving(true)
     try {
       // 1. Salva o controle principal em task_tarefas
-      const savedControle = await controleService.saveControle(payload)
+      const savedControle = await controleService.saveControle(payload, usuariosLista)
 
       // 2. Salva as providências (inserção ou atualização individual)
       if (providencias.length > 0) {
@@ -603,7 +495,7 @@ export function ControleModal({
       }
 
       // 3. Recarrega controle completo com relacionamentos hidratados
-      const fullyLoaded = await controleService.getControleById(savedControle.id)
+      const fullyLoaded = await controleService.getControleById(savedControle.id, usuariosLista)
       onSaved(fullyLoaded || savedControle)
 
       toast({
@@ -755,7 +647,7 @@ export function ControleModal({
                         </Select>
                       </div>
 
-                      {/* Botão + compacto */}
+                      {/* Botão + compacto mantido para Nomes de Controles */}
                       <Button
                         type="button"
                         variant="outline"
@@ -892,9 +784,9 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Bloco 3: Responsável pelo Controle e Executor do Controle (duas seções independentes e obrigatórias) */}
+                {/* Bloco 3: Responsável e Executor (única fonte: RPC task_listar_usuarios_ativos, sem botões +) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Responsável pelo Controle (task_responsaveis_controle) */}
+                  {/* Responsável */}
                   <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
@@ -905,91 +797,67 @@ export function ControleModal({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Select
-                          value={responsavelControleId}
-                          onValueChange={(val) => {
-                            setResponsavelControleId(val)
-                            if (responsavelError) setResponsavelError(false)
-                          }}
-                        >
-                          <SelectTrigger
-                            className={cn(
-                              'h-11 rounded-xl bg-background text-sm font-medium',
-                              responsavelError &&
-                                'border-destructive focus-visible:ring-destructive',
-                            )}
-                          >
-                            <SelectValue placeholder="Selecione o responsável..." />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
-                            <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                              <div className="relative">
-                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                                <Input
-                                  placeholder="Filtrar responsáveis..."
-                                  value={buscaRespSelect}
-                                  onChange={(e) => setBuscaRespSelect(e.target.value)}
-                                  className="h-8 pl-8 pr-2 text-xs rounded-lg"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onKeyDown={(e) => e.stopPropagation()}
-                                />
-                              </div>
-                            </div>
-
-                            {loadingListas ? (
-                              <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                                <span>Carregando responsáveis...</span>
-                              </div>
-                            ) : opcoesResponsaveis.length === 0 ? (
-                              <div className="p-4 text-center text-xs text-muted-foreground">
-                                Nenhum responsável encontrado.
-                              </div>
-                            ) : (
-                              opcoesResponsaveis.map((r) => (
-                                <SelectItem key={r.id} value={r.id} className="py-2.5">
-                                  <div className="flex items-center justify-between w-full gap-2">
-                                    <span className="font-semibold text-foreground text-xs">
-                                      {r.nome}
-                                    </span>
-                                    {!r.ativo && (
-                                      <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
-                                        Inativo
-                                      </span>
-                                    )}
-                                  </div>
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => {
-                          setQuickRespInput('')
-                          setQuickRespError(null)
-                          setQuickRespModalOpen(true)
+                    <div className="relative">
+                      <Select
+                        value={responsavelUsuarioId}
+                        onValueChange={(val) => {
+                          setResponsavelUsuarioId(val)
+                          if (responsavelError) setResponsavelError(false)
                         }}
-                        className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
-                        title="Cadastrar novo Responsável"
                       >
-                        <Plus className="w-5 h-5 stroke-[2.5]" />
-                      </Button>
+                        <SelectTrigger
+                          className={cn(
+                            'h-11 rounded-xl bg-background text-sm font-medium',
+                            responsavelError && 'border-destructive focus-visible:ring-destructive',
+                          )}
+                        >
+                          <SelectValue placeholder="Selecione o responsável..." />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                          <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                            <div className="relative">
+                              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                              <Input
+                                placeholder="Filtrar responsáveis..."
+                                value={buscaRespSelect}
+                                onChange={(e) => setBuscaRespSelect(e.target.value)}
+                                className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                          </div>
+
+                          {loadingListas ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                              <span>Carregando responsáveis...</span>
+                            </div>
+                          ) : opcoesResponsaveis.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground">
+                              Nenhum responsável encontrado.
+                            </div>
+                          ) : (
+                            opcoesResponsaveis.map((r) => (
+                              <SelectItem key={r.id} value={r.id} className="py-2.5">
+                                <span className="font-semibold text-foreground text-xs">
+                                  {r.nome}
+                                </span>
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     {responsavelError && (
                       <p className="text-xs text-destructive font-medium">
-                        O Responsável pelo Controle é obrigatório.
+                        O Responsável é obrigatório.
                       </p>
                     )}
                   </div>
 
-                  {/* Executor do Controle (task_executores) */}
+                  {/* Executor */}
                   <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
@@ -1000,91 +868,68 @@ export function ControleModal({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Select
-                          value={executorId}
-                          onValueChange={(val) => {
-                            setExecutorId(val)
-                            if (executorError) setExecutorError(false)
-                          }}
-                        >
-                          <SelectTrigger
-                            className={cn(
-                              'h-11 rounded-xl bg-background text-sm font-medium',
-                              executorError && 'border-destructive focus-visible:ring-destructive',
-                            )}
-                          >
-                            <SelectValue placeholder="Selecione o executor..." />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
-                            <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                              <div className="relative">
-                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                                <Input
-                                  placeholder="Filtrar executores..."
-                                  value={buscaExecSelect}
-                                  onChange={(e) => setBuscaExecSelect(e.target.value)}
-                                  className="h-8 pl-8 pr-2 text-xs rounded-lg"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onKeyDown={(e) => e.stopPropagation()}
-                                />
-                              </div>
-                            </div>
-
-                            {loadingListas ? (
-                              <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                                <span>Carregando executores...</span>
-                              </div>
-                            ) : opcoesExecutores.length === 0 ? (
-                              <div className="p-4 text-center text-xs text-muted-foreground">
-                                Nenhum executor encontrado.
-                              </div>
-                            ) : (
-                              opcoesExecutores.map((e) => (
-                                <SelectItem key={e.id} value={e.id} className="py-2.5">
-                                  <div className="flex items-center justify-between w-full gap-2">
-                                    <span className="font-semibold text-foreground text-xs">
-                                      {e.nome}
-                                    </span>
-                                    {!e.ativo && (
-                                      <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
-                                        Inativo
-                                      </span>
-                                    )}
-                                  </div>
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => {
-                          setQuickExecInput('')
-                          setQuickExecError(null)
-                          setQuickExecModalOpen(true)
+                    <div className="relative">
+                      <Select
+                        value={executorUsuarioId}
+                        onValueChange={(val) => {
+                          setExecutorUsuarioId(val)
+                          if (executorError) setExecutorError(false)
                         }}
-                        className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
-                        title="Cadastrar novo Executor"
                       >
-                        <Plus className="w-5 h-5 stroke-[2.5]" />
-                      </Button>
+                        <SelectTrigger
+                          className={cn(
+                            'h-11 rounded-xl bg-background text-sm font-medium',
+                            executorError && 'border-destructive focus-visible:ring-destructive',
+                          )}
+                        >
+                          <SelectValue placeholder="Selecione o executor..." />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                          <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                            <div className="relative">
+                              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                              <Input
+                                placeholder="Filtrar executores..."
+                                value={buscaExecSelect}
+                                onChange={(e) => setBuscaExecSelect(e.target.value)}
+                                className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                          </div>
+
+                          {loadingListas ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                              <span>Carregando executores...</span>
+                            </div>
+                          ) : opcoesExecutores.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground">
+                              Nenhum executor encontrado.
+                            </div>
+                          ) : (
+                            opcoesExecutores.map((e) => (
+                              <SelectItem key={e.id} value={e.id} className="py-2.5">
+                                <span className="font-semibold text-foreground text-xs">
+                                  {e.nome}
+                                </span>
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     {executorError && (
                       <p className="text-xs text-destructive font-medium">
-                        O Executor do Controle é obrigatório.
+                        O Executor é obrigatório.
                       </p>
                     )}
                   </div>
                 </div>
 
-                {/* Bloco 4: Pasta Cliente e Pasta Ricci (lado a lado no final de Dados do Caso) */}
+                {/* Bloco 4: Pasta Cliente e Pasta Ricci (sem placeholders demonstrativos) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                   <div className="space-y-1.5">
                     <Label
@@ -1095,7 +940,6 @@ export function ControleModal({
                     </Label>
                     <Input
                       id="pasta-cliente"
-                      placeholder="Ex.: CC-2025-081"
                       value={pastaCliente}
                       onChange={(e) => setPastaCliente(e.target.value)}
                       className="h-10 rounded-xl bg-background"
@@ -1108,7 +952,6 @@ export function ControleModal({
                     </Label>
                     <Input
                       id="pasta-ricci"
-                      placeholder="Ex.: RICCI-9941"
                       value={pastaRicci}
                       onChange={(e) => setPastaRicci(e.target.value)}
                       className="h-10 rounded-xl bg-background"
@@ -1191,12 +1034,7 @@ export function ControleModal({
                             </Button>
                           </div>
 
-                          {/* Campos da providência na ordem obrigatória:
-                              1. Providência (textarea/descrição)
-                              2. Prazo de Conclusão (date)
-                              3. Tipo de Prazo (seletor)
-                              4. Status (seletor)
-                          */}
+                          {/* Campos da providência */}
                           <div className="space-y-3">
                             {/* Campo 1: Providência (textarea) */}
                             <div className="space-y-1">
@@ -1210,7 +1048,6 @@ export function ControleModal({
                               </Label>
                               <Textarea
                                 rows={2}
-                                placeholder="Descreva a providência a ser tomada..."
                                 value={item.providencia}
                                 onChange={(e) =>
                                   handleUpdateProvidencia(
@@ -1283,18 +1120,13 @@ export function ControleModal({
                                     <SelectValue placeholder="Selecione o status..." />
                                   </SelectTrigger>
                                   <SelectContent className="rounded-xl">
-                                    {getOpcoesStatusProvidencia(item.status_id).map((st) => (
-                                      <SelectItem key={st.id} value={st.id}>
+                                    {statusProvLista.map((sp) => (
+                                      <SelectItem key={sp.id} value={sp.id}>
                                         <div className="flex items-center gap-1.5">
-                                          <span>{st.nome}</span>
-                                          {!st.ativo && (
-                                            <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
-                                              Inativo
-                                            </span>
-                                          )}
-                                          {st.finaliza && (
+                                          <span>{sp.nome}</span>
+                                          {sp.finaliza && (
                                             <span className="text-[10px] text-muted-foreground">
-                                              (Final)
+                                              (Finaliza)
                                             </span>
                                           )}
                                         </div>
@@ -1314,28 +1146,32 @@ export function ControleModal({
             )}
           </div>
 
-          {/* Footer Principal */}
-          <DialogFooter className="px-6 py-4 border-t border-border/70 shrink-0 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="text-xs text-muted-foreground text-left w-full sm:w-auto">
-              <span>{providencias.length} providência(s) vinculada(s)</span>
+          {/* Footer fixo */}
+          <DialogFooter className="px-6 py-4 border-t border-border/70 shrink-0 bg-muted/20 flex flex-row items-center justify-between gap-3">
+            <div className="text-xs text-muted-foreground hidden sm:block">
+              Campos marcados com <span className="text-destructive">*</span> são obrigatórios.
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <div className="flex items-center gap-2 ml-auto">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
+                disabled={saving}
                 onClick={() => onOpenChange(false)}
-                className="h-10 rounded-xl px-4"
+                className="h-10 px-4 rounded-xl text-xs"
               >
                 Cancelar
               </Button>
+
               <Button
                 type="button"
+                size="sm"
                 disabled={saving}
-                onClick={handleSubmitControle}
-                className="h-10 rounded-xl px-5 bg-primary text-primary-foreground hover:bg-[#4A4AC2] font-semibold shadow-sm flex items-center gap-2"
+                onClick={() => handleSubmitControle()}
+                className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary text-primary-foreground shadow-sm hover:bg-[#4A4AC2]"
               >
-                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 <span>{controleToEdit ? 'Salvar Alterações' : 'Criar Controle'}</span>
               </Button>
             </div>
@@ -1343,14 +1179,14 @@ export function ControleModal({
         </DialogContent>
       </Dialog>
 
-      {/* Confirmação de Exclusão Lógica de Providência persistida */}
+      {/* Confirmação de Exclusão de Providência */}
       <DeleteConfirmDialog
         open={deleteProvConfirmOpen}
         onOpenChange={setDeleteProvConfirmOpen}
+        title="Excluir providência"
+        description="Tem certeza de que deseja remover esta providência salva no banco de dados? A alteração é imediata."
+        confirmLabel="Sim, excluir providência"
         onConfirm={handleConfirmarExclusaoProvidencia}
-        title="Excluir providência?"
-        description="Deseja excluir logicamente esta providência salva no banco de dados? As demais providências e o caso serão preservados."
-        confirmButtonText="Excluir Providência"
       />
 
       {/* Modal Compacto (+) para cadastrar novo Nome do Controle */}
@@ -1362,7 +1198,7 @@ export function ControleModal({
               <span>Novo Nome do Controle</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              Cadastre um novo título oficial para vinculá-lo imediatamente a este caso.
+              Cadastre um novo nome do controle para selecioná-lo imediatamente neste caso.
             </DialogDescription>
           </DialogHeader>
 
@@ -1415,146 +1251,6 @@ export function ControleModal({
                 className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
               >
                 {quickNomeSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
-                <span>Salvar e Selecionar</span>
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modal Compacto (+) para cadastrar novo Responsável pelo Controle */}
-      <Dialog open={quickRespModalOpen} onOpenChange={setQuickRespModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <User className="w-4 h-4 text-primary" />
-              <span>Novo Responsável pelo Controle</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
-              Cadastre um novo responsável para selecioná-lo imediatamente neste caso.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSalvarQuickResp} className="space-y-3.5 py-1">
-            <div className="space-y-1.5">
-              <Label htmlFor="quick-resp-input" className="text-xs font-semibold text-foreground">
-                Nome do Responsável <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="quick-resp-input"
-                autoFocus
-                placeholder="Ex: RICCI, NATURA, DANNEMANN e MARCELO MAZZOLA"
-                value={quickRespInput}
-                onChange={(e) => {
-                  setQuickRespInput(e.target.value)
-                  if (quickRespError) setQuickRespError(null)
-                }}
-                maxLength={255}
-                className={cn(
-                  'h-10 rounded-xl bg-background text-sm',
-                  quickRespError && 'border-destructive focus-visible:ring-destructive',
-                )}
-              />
-              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                <span>Máx. 255 caracteres</span>
-                <span>{quickRespInput.trim().length}/255</span>
-              </div>
-            </div>
-
-            {quickRespError && (
-              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{quickRespError}</span>
-              </div>
-            )}
-
-            <DialogFooter className="pt-2 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setQuickRespModalOpen(false)}
-                className="h-9 rounded-xl text-xs"
-              >
-                Cancelar
-              </Button>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={quickRespSaving}
-                className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
-              >
-                {quickRespSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
-                <span>Salvar e Selecionar</span>
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modal Compacto (+) para cadastrar novo Executor do Controle */}
-      <Dialog open={quickExecModalOpen} onOpenChange={setQuickExecModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <UserCheck className="w-4 h-4 text-primary" />
-              <span>Novo Executor do Controle</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
-              Cadastre um novo executor para selecioná-lo imediatamente neste caso.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSalvarQuickExec} className="space-y-3.5 py-1">
-            <div className="space-y-1.5">
-              <Label htmlFor="quick-exec-input" className="text-xs font-semibold text-foreground">
-                Nome do Executor <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="quick-exec-input"
-                autoFocus
-                placeholder="Ex: Dra. Mariana Costa"
-                value={quickExecInput}
-                onChange={(e) => {
-                  setQuickExecInput(e.target.value)
-                  if (quickExecError) setQuickExecError(null)
-                }}
-                maxLength={255}
-                className={cn(
-                  'h-10 rounded-xl bg-background text-sm',
-                  quickExecError && 'border-destructive focus-visible:ring-destructive',
-                )}
-              />
-              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                <span>Máx. 255 caracteres</span>
-                <span>{quickExecInput.trim().length}/255</span>
-              </div>
-            </div>
-
-            {quickExecError && (
-              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{quickExecError}</span>
-              </div>
-            )}
-
-            <DialogFooter className="pt-2 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setQuickExecModalOpen(false)}
-                className="h-9 rounded-xl text-xs"
-              >
-                Cancelar
-              </Button>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={quickExecSaving}
-                className="h-9 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
-              >
-                {quickExecSaving && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
                 <span>Salvar e Selecionar</span>
               </Button>
             </DialogFooter>

@@ -8,8 +8,6 @@ import { ProtectedLayout, PublicRoute } from './components/ProtectedRoute'
 import Index from './pages/Index'
 import TarefasPage from './pages/Tarefas'
 import NomesControlePage from './pages/NomesControle'
-import ResponsaveisControlePage from './pages/ResponsaveisControle'
-import ExecutoresPage from './pages/Executores'
 import ConfiguracoesPage from './pages/Configuracoes'
 import LoginPage from './pages/Login'
 import NotFound from './pages/NotFound'
@@ -39,9 +37,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/tarefas" element={<TarefasPage />} />
             <Route path="/tabelas/nomes" element={<NomesControlePage />} />
-            <Route path="/tabelas/responsaveis" element={<ResponsaveisControlePage />} />
-            <Route path="/tabelas/executores" element={<ExecutoresPage />} />
-            <Route path="/configuracoes" element={<ConfiguracoesPage />} />{' '}
+            <Route path="/configuracoes" element={<ConfiguracoesPage />} />
           </Route>
 
           <Route path="*" element={<NotFound />} />

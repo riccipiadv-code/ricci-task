@@ -5,8 +5,7 @@ import {
   TaskStatusProvidenciaRecord,
   TaskTipoPrazoRecord,
   TaskNomeControleRecord,
-  TaskResponsavelControleRecord,
-  TaskExecutorRecord,
+  TaskUsuarioAtivoRecord,
   ControleMetrics,
   UserSettings,
 } from '@/types/task'
@@ -29,10 +28,7 @@ export function useControles() {
   )
   const [tiposPrazoList, setTiposPrazoList] = useState<TaskTipoPrazoRecord[]>([])
   const [nomesControle, setNomesControle] = useState<TaskNomeControleRecord[]>([])
-  const [responsaveisControle, setResponsaveisControle] = useState<TaskResponsavelControleRecord[]>(
-    [],
-  )
-  const [executores, setExecutores] = useState<TaskExecutorRecord[]>([])
+  const [usuariosAtivos, setUsuariosAtivos] = useState<TaskUsuarioAtivoRecord[]>([])
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -58,27 +54,26 @@ export function useControles() {
     })
   }, [])
 
-  // Carrega catálogos e controles
+  // Carrega catálogos, usuários ativos via RPC e controles
   const carregarDadosCompletos = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [stList, stProvList, tpList, nomes, resps, execs, ctrlList] = await Promise.all([
+      const [stList, stProvList, tpList, nomes, users] = await Promise.all([
         controleService.getStatus(),
         controleService.getStatusProvidencia(),
         controleService.getTiposPrazo(),
         controleService.getNomesControle({ incluirInativos: true }),
-        controleService.getResponsaveisControle({ incluirInativos: true }),
-        controleService.getExecutores({ incluirInativos: true }),
-        controleService.getControles(),
+        controleService.getUsuariosAtivos(),
       ])
+
+      const ctrlList = await controleService.getControles(users)
 
       setStatusList(stList)
       setStatusProvidenciaList(stProvList)
       setTiposPrazoList(tpList)
       setNomesControle(nomes)
-      setResponsaveisControle(resps)
-      setExecutores(execs)
+      setUsuariosAtivos(users)
       setControles(ctrlList)
     } catch (err: any) {
       console.error('Erro ao carregar dados do Ricci Task:', err)
@@ -94,14 +89,25 @@ export function useControles() {
     }
   }, [user, carregarDadosCompletos])
 
+  const refreshUsuariosAtivos = useCallback(async () => {
+    try {
+      const users = await controleService.getUsuariosAtivos()
+      setUsuariosAtivos(users)
+      return users
+    } catch (err: any) {
+      console.error('Erro ao recarregar usuários ativos:', err)
+      return []
+    }
+  }, [])
+
   const refreshControles = useCallback(async () => {
     try {
-      const ctrlList = await controleService.getControles()
+      const ctrlList = await controleService.getControles(usuariosAtivos)
       setControles(ctrlList)
     } catch (err: any) {
       console.error('Erro ao recarregar controles:', err)
     }
-  }, [])
+  }, [usuariosAtivos])
 
   const refreshNomesControle = useCallback(async () => {
     try {
@@ -112,29 +118,11 @@ export function useControles() {
     }
   }, [])
 
-  const refreshResponsaveisControle = useCallback(async () => {
-    try {
-      const resps = await controleService.getResponsaveisControle({ incluirInativos: true })
-      setResponsaveisControle(resps)
-    } catch (err: any) {
-      console.error('Erro ao recarregar responsáveis:', err)
-    }
-  }, [])
-
-  const refreshExecutores = useCallback(async () => {
-    try {
-      const execs = await controleService.getExecutores({ incluirInativos: true })
-      setExecutores(execs)
-    } catch (err: any) {
-      console.error('Erro ao recarregar executores:', err)
-    }
-  }, [])
-
   const metrics: ControleMetrics = useMemo(() => {
     return controleService.calculateMetrics(controles)
   }, [controles])
 
-  // Ações de cadastro
+  // Ações de cadastro de Nomes do Controle
   const saveNomeControle = useCallback(
     async (input: { id?: string; nome: string; ativo?: boolean }) => {
       const saved = await controleService.saveNomeControle(input)
@@ -160,56 +148,6 @@ export function useControles() {
     [refreshNomesControle],
   )
 
-  const saveResponsavelControle = useCallback(
-    async (input: { id?: string; nome: string; ativo?: boolean }) => {
-      const saved = await controleService.saveResponsavelControle(input)
-      await refreshResponsaveisControle()
-      return saved
-    },
-    [refreshResponsaveisControle],
-  )
-
-  const toggleResponsavelControleAtivo = useCallback(
-    async (id: string, ativo: boolean) => {
-      await controleService.toggleResponsavelControleAtivo(id, ativo)
-      await refreshResponsaveisControle()
-    },
-    [refreshResponsaveisControle],
-  )
-
-  const excluirResponsavelControle = useCallback(
-    async (id: string) => {
-      await controleService.deleteResponsavelControle(id)
-      await refreshResponsaveisControle()
-    },
-    [refreshResponsaveisControle],
-  )
-
-  const saveExecutor = useCallback(
-    async (input: { id?: string; nome: string; ativo?: boolean }) => {
-      const saved = await controleService.saveExecutor(input)
-      await refreshExecutores()
-      return saved
-    },
-    [refreshExecutores],
-  )
-
-  const toggleExecutorAtivo = useCallback(
-    async (id: string, ativo: boolean) => {
-      await controleService.toggleExecutorAtivo(id, ativo)
-      await refreshExecutores()
-    },
-    [refreshExecutores],
-  )
-
-  const excluirExecutor = useCallback(
-    async (id: string) => {
-      await controleService.deleteExecutor(id)
-      await refreshExecutores()
-    },
-    [refreshExecutores],
-  )
-
   const archiveControle = useCallback(
     async (id: string) => {
       await controleService.archiveControle(id)
@@ -224,8 +162,7 @@ export function useControles() {
     statusProvidenciaList,
     tiposPrazoList,
     nomesControle,
-    responsaveisControle,
-    executores,
+    usuariosAtivos,
     metrics,
     loading,
     error,
@@ -233,17 +170,10 @@ export function useControles() {
     updateSettings,
     refreshControles,
     refreshNomesControle,
-    refreshResponsaveisControle,
-    refreshExecutores,
+    refreshUsuariosAtivos,
     saveNomeControle,
     toggleNomeControleAtivo,
     excluirNomeControle,
-    saveResponsavelControle,
-    toggleResponsavelControleAtivo,
-    excluirResponsavelControle,
-    saveExecutor,
-    toggleExecutorAtivo,
-    excluirExecutor,
     archiveControle,
     recarregarTudo: carregarDadosCompletos,
   }
