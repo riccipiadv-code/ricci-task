@@ -440,6 +440,19 @@ export const controleService = {
   // Resolvendo responsáveis e executores a partir de task_usuarios
   // --------------------------------------------------------------------------
   async getControles(usuariosParam?: TaskUsuarioAtivoRecord[]): Promise<TaskControleRecord[]> {
+    return this.fetchControlesList({ apenasArquivados: false }, usuariosParam)
+  },
+
+  async getControlesArquivados(
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+  ): Promise<TaskControleRecord[]> {
+    return this.fetchControlesList({ apenasArquivados: true }, usuariosParam)
+  },
+
+  async fetchControlesList(
+    options: { apenasArquivados: boolean },
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+  ): Promise<TaskControleRecord[]> {
     // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores.
     // Se falhar ou vier vazio, mantemos mapa vazio para não interromper a busca de task_tarefas.
     let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
@@ -457,8 +470,8 @@ export const controleService = {
       }
     }
 
-    // 2. Busca os controles ativos com joins nas tabelas auxiliares próprias
-    const { data: tarefasRaw, error: tarefasError } = await supabase
+    // 2. Monta consulta de controles respeitando exclusão lógica deleted_at e regra de arquivamento
+    let query = supabase
       .from('task_tarefas')
       .select(`
         *,
@@ -466,6 +479,14 @@ export const controleService = {
         status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
       `)
       .is('deleted_at', null)
+
+    if (options.apenasArquivados) {
+      query = query.not('arquivado_at', 'is', null)
+    } else {
+      query = query.is('arquivado_at', null)
+    }
+
+    const { data: tarefasRaw, error: tarefasError } = await query
 
     if (tarefasError) {
       console.error('Erro ao buscar task_tarefas:', tarefasError)
@@ -544,6 +565,7 @@ export const controleService = {
         updated_by: t.updated_by,
         deleted_at: t.deleted_at,
         deleted_by: t.deleted_by,
+        arquivado_at: t.arquivado_at || null,
 
         nome_controle: t.nome_controle_obj?.nome || null,
         responsavel_nome: respUsuario?.nome || null,
@@ -649,6 +671,7 @@ export const controleService = {
       updated_by: raw.updated_by,
       deleted_at: raw.deleted_at,
       deleted_by: raw.deleted_by,
+      arquivado_at: raw.arquivado_at || null,
 
       nome_controle: raw.nome_controle_obj?.nome || null,
       responsavel_nome: respUsuario?.nome || null,
@@ -726,13 +749,34 @@ export const controleService = {
     const { error } = await supabase
       .from('task_tarefas')
       .update({
-        deleted_at: new Date().toISOString(),
-        deleted_by: user?.id || null,
+        arquivado_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        updated_by: user?.id || null,
       })
       .eq('id', id)
 
     if (error) {
       console.error('Erro ao arquivar controle:', error)
+      throw error
+    }
+  },
+
+  async unarchiveControle(id: string): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { error } = await supabase
+      .from('task_tarefas')
+      .update({
+        arquivado_at: null,
+        updated_at: new Date().toISOString(),
+        updated_by: user?.id || null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Erro ao desarquivar controle:', error)
       throw error
     }
   },

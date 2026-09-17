@@ -178,6 +178,14 @@ export function useControles() {
     [refreshControles],
   )
 
+  const unarchiveControle = useCallback(
+    async (id: string) => {
+      await controleService.unarchiveControle(id)
+      await refreshControles()
+    },
+    [refreshControles],
+  )
+
   return {
     controles,
     statusList,
@@ -202,6 +210,7 @@ export function useControles() {
       return updated
     },
     archiveControle,
+    unarchiveControle,
     recarregarTudo: carregarDadosCompletos,
   }
 }

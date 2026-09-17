@@ -2065,6 +2065,7 @@ export type Database = {
       }
       task_tarefas: {
         Row: {
+          arquivado_at: string | null
           created_at: string
           created_by: string | null
           data_autorizacao: string | null
@@ -2083,6 +2084,7 @@ export type Database = {
           updated_by: string | null
         }
         Insert: {
+          arquivado_at?: string | null
           created_at?: string
           created_by?: string | null
           data_autorizacao?: string | null
@@ -2101,6 +2103,7 @@ export type Database = {
           updated_by?: string | null
         }
         Update: {
+          arquivado_at?: string | null
           created_at?: string
           created_by?: string | null
           data_autorizacao?: string | null

@@ -630,7 +630,7 @@ export default function TarefasPage() {
       await archiveControle(controleToArchive.id)
       toast({
         title: 'Controle arquivado com sucesso',
-        description: `O caso "${controleToArchive.identificacao_caso}" foi arquivado e não aparecerá na listagem padrão.`,
+        description: `O controle "${controleToArchive.identificacao_caso}" foi arquivado com sucesso.`,
       })
       setControleToArchive(null)
       setArchiveConfirmOpen(false)
@@ -638,7 +638,7 @@ export default function TarefasPage() {
       toast({
         variant: 'destructive',
         title: 'Erro ao arquivar',
-        description: err?.message || 'Falha ao registrar exclusão lógica no Supabase.',
+        description: err?.message || 'Falha ao arquivar controle no Supabase.',
       })
     } finally {
       setArchiving(false)
@@ -2340,9 +2340,9 @@ export default function TarefasPage() {
         open={archiveConfirmOpen}
         onOpenChange={setArchiveConfirmOpen}
         onConfirm={handleConfirmArchive}
-        title="Arquivar controle de caso?"
-        description={`Deseja arquivar o controle "${controleToArchive?.identificacao_caso}"? O registro será preservado no banco de dados com histórico completo, mas não aparecerá na listagem padrão.`}
-        confirmButtonText={archiving ? 'Arquivando...' : 'Arquivar Controle'}
+        title="Deseja arquivar este controle?"
+        description={`O controle "${controleToArchive?.identificacao_caso}" será movido para Controles Arquivados e poderá ser desarquivado a qualquer momento.`}
+        confirmButtonText={archiving ? 'Arquivando...' : 'Arquivar'}
       />
     </div>
   )

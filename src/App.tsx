@@ -9,6 +9,7 @@ import Index from './pages/Index'
 import TarefasPage from './pages/Tarefas'
 import NomesControlePage from './pages/NomesControle'
 import UsuariosPage from './pages/Usuarios'
+import ControlesArquivadosPage from './pages/ControlesArquivados'
 import ConfiguracoesPage from './pages/Configuracoes'
 import LoginPage from './pages/Login'
 import NotFound from './pages/NotFound'
@@ -39,6 +40,7 @@ const App = () => (
             <Route path="/tarefas" element={<TarefasPage />} />
             <Route path="/tabelas/nomes" element={<NomesControlePage />} />
             <Route path="/tabelas/usuarios" element={<UsuariosPage />} />
+            <Route path="/tabelas/arquivados" element={<ControlesArquivadosPage />} />
             <Route path="/configuracoes" element={<ConfiguracoesPage />} />
           </Route>
 

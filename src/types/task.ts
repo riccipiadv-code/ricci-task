@@ -112,6 +112,7 @@ export interface TaskControleRecord {
   updated_by: string | null
   deleted_at: string | null
   deleted_by: string | null
+  arquivado_at?: string | null
 
   // Hidratados para a UI
   nome_controle?: string | null
