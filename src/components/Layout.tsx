@@ -8,6 +8,8 @@ import {
   Users,
   Archive,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Check,
   Database,
   Loader2,
@@ -19,6 +21,7 @@ import { useSupabaseConnection } from '@/hooks/useSupabaseConnection'
 import { useAuth } from '@/hooks/use-auth'
 import { useToast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 interface LayoutProps {
@@ -44,12 +47,32 @@ export default function Layout({ children }: LayoutProps) {
 
   const [tabelasExpanded, setTabelasExpanded] = useState(isTabelasChildActive)
 
+  // Estado de recolhimento total do menu lateral com persistência no localStorage
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('ricci_sidebar_collapsed')
+      return saved === 'true'
+    } catch {
+      return false
+    }
+  })
+
+  // Sincroniza preferência do menu no localStorage
+  const handleToggleSidebar = (collapsed: boolean) => {
+    setSidebarCollapsed(collapsed)
+    try {
+      localStorage.setItem('ricci_sidebar_collapsed', String(collapsed))
+    } catch {
+      // noop
+    }
+  }
+
   // Mantém aberto se navegar para dentro
   useEffect(() => {
-    if (isTabelasChildActive) {
+    if (isTabelasChildActive && !sidebarCollapsed) {
       setTabelasExpanded(true)
     }
-  }, [isTabelasChildActive])
+  }, [isTabelasChildActive, sidebarCollapsed])
 
   // Deriva dados visuais do usuário logado diretamente do e-mail do auth (sem depender de RLS de perfis)
   const userEmail = user?.email || ''
@@ -83,19 +106,63 @@ export default function Layout({ children }: LayoutProps) {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row antialiased selection:bg-primary/20 selection:text-primary transition-colors duration-300">
+    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row antialiased selection:bg-primary/20 selection:text-primary transition-colors duration-300 relative">
+      {/* Botão flutuante preso na borda esquerda quando o menu está 100% recolhido */}
+      {sidebarCollapsed && (
+        <div className="hidden md:block fixed top-5 left-0 z-40 animate-fade-in">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => handleToggleSidebar(false)}
+                className="group flex items-center justify-center w-8 h-10 bg-card hover:bg-primary text-muted-foreground hover:text-primary-foreground border border-l-0 border-border rounded-r-xl shadow-md transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                aria-label="Expandir menu"
+              >
+                <ChevronRight className="w-4 h-4 transition-transform group-hover:scale-110" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8} className="font-medium">
+              Expandir menu
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
       {/* Desktop / Tablet Sidebar */}
-      <aside className="hidden md:flex flex-col border-r border-border bg-sidebar shrink-0 md:w-20 lg:w-60 min-h-screen sticky top-0 transition-all duration-300 z-30">
-        {/* Brand / Logo */}
-        <div className="h-20 flex items-center px-4 lg:px-6 border-b border-border gap-3">
-          <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/25 shrink-0">
-            <Check className="w-6 h-6 stroke-[3]" />
+      <aside
+        className={cn(
+          'hidden md:flex flex-col border-r border-border bg-sidebar shrink-0 min-h-screen sticky top-0 transition-all duration-300 ease-in-out z-30 overflow-hidden',
+          sidebarCollapsed ? 'w-0 border-r-0 opacity-0 pointer-events-none' : 'w-64 opacity-100',
+        )}
+      >
+        {/* Brand / Logo + Botão de Recolher */}
+        <div className="h-20 flex items-center justify-between px-4 lg:px-5 border-b border-border gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/25 shrink-0">
+              <Check className="w-6 h-6 stroke-[3]" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="font-bold text-lg tracking-tight text-foreground leading-tight truncate">
+                Ricci Task
+              </span>
+            </div>
           </div>
-          <div className="hidden lg:flex flex-col">
-            <span className="font-bold text-lg tracking-tight text-foreground leading-tight">
-              Ricci Task
-            </span>
-          </div>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => handleToggleSidebar(true)}
+                className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors shrink-0"
+                aria-label="Recolher menu"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={6} className="font-medium">
+              Recolher menu
+            </TooltipContent>
+          </Tooltip>
         </div>
 
         {/* Navigation Items */}
@@ -123,7 +190,7 @@ export default function Layout({ children }: LayoutProps) {
                   : 'text-muted-foreground stroke-[1.8]',
               )}
             />
-            <span className="hidden lg:inline-block truncate">Dashboard</span>
+            <span className="truncate">Dashboard</span>
           </NavLink>
 
           {/* Controles */}
@@ -148,7 +215,7 @@ export default function Layout({ children }: LayoutProps) {
                   : 'text-muted-foreground stroke-[1.8]',
               )}
             />
-            <span className="hidden lg:inline-block truncate">Controles</span>
+            <span className="truncate">Controles</span>
           </NavLink>
 
           {/* Tabelas (Expansível) */}
@@ -176,11 +243,11 @@ export default function Layout({ children }: LayoutProps) {
                       : 'text-muted-foreground stroke-[1.8]',
                   )}
                 />
-                <span className="hidden lg:inline-block truncate">Tabelas</span>
+                <span className="truncate">Tabelas</span>
               </div>
               <ChevronDown
                 className={cn(
-                  'hidden lg:inline-block w-4 h-4 shrink-0 transition-transform duration-200 opacity-70',
+                  'w-4 h-4 shrink-0 transition-transform duration-200 opacity-70',
                   tabelasExpanded && 'rotate-180',
                 )}
               />
@@ -188,7 +255,7 @@ export default function Layout({ children }: LayoutProps) {
 
             {/* Subitens de Tabelas */}
             {tabelasExpanded && (
-              <div className="pl-3 lg:pl-6 pr-1 space-y-1 py-0.5 animate-fade-in">
+              <div className="pl-6 pr-1 space-y-1 py-0.5 animate-fade-in">
                 <NavLink
                   to="/tabelas/nomes"
                   className={cn(
@@ -200,7 +267,7 @@ export default function Layout({ children }: LayoutProps) {
                   title="Nomes dos Controles"
                 >
                   <FolderKanban className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline-block truncate">Nomes dos Controles</span>
+                  <span className="truncate">Nomes dos Controles</span>
                 </NavLink>
 
                 <NavLink
@@ -214,7 +281,7 @@ export default function Layout({ children }: LayoutProps) {
                   title="Usuários"
                 >
                   <Users className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline-block truncate">Usuários</span>
+                  <span className="truncate">Usuários</span>
                 </NavLink>
 
                 <NavLink
@@ -228,7 +295,7 @@ export default function Layout({ children }: LayoutProps) {
                   title="Controles Arquivados"
                 >
                   <Archive className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline-block truncate">Controles Arquivados</span>
+                  <span className="truncate">Controles Arquivados</span>
                 </NavLink>
               </div>
             )}
@@ -256,18 +323,18 @@ export default function Layout({ children }: LayoutProps) {
                   : 'text-muted-foreground stroke-[1.8]',
               )}
             />
-            <span className="hidden lg:inline-block truncate">Configurações</span>
+            <span className="truncate">Configurações</span>
           </NavLink>
         </nav>
 
         {/* Sidebar Footer */}
         <div className="p-3 lg:p-4 border-t border-border mt-auto space-y-2">
           {/* Card do Usuário */}
-          <div className="flex items-center gap-3 p-2 lg:p-2.5 rounded-xl bg-muted/40 border border-border/50">
+          <div className="flex items-center gap-3 p-2.5 rounded-xl bg-muted/40 border border-border/50">
             <div className="h-9 w-9 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center text-sm shrink-0 border border-primary/30">
               {userInitial}
             </div>
-            <div className="hidden lg:flex flex-col min-w-0 flex-1">
+            <div className="flex flex-col min-w-0 flex-1">
               <span
                 className="text-sm font-semibold text-foreground truncate leading-tight"
                 title={userEmail || displayName}
@@ -292,7 +359,7 @@ export default function Layout({ children }: LayoutProps) {
             size="sm"
             disabled={loggingOut}
             onClick={handleSignOut}
-            className="w-full justify-center lg:justify-start h-9 px-2.5 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors text-xs font-medium"
+            className="w-full justify-start h-9 px-2.5 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors text-xs font-medium"
             title="Sair do Ricci Task"
           >
             {loggingOut ? (
@@ -300,12 +367,12 @@ export default function Layout({ children }: LayoutProps) {
             ) : (
               <LogOut className="w-4 h-4 shrink-0" />
             )}
-            <span className="hidden lg:inline-block ml-2 truncate">Sair da conta</span>
+            <span className="ml-2 truncate">Sair da conta</span>
           </Button>
 
           {/* Indicador discreto da conexão com Supabase */}
           <div
-            className="hidden lg:flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-background/50 border border-border/60 text-[11px]"
+            className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-background/50 border border-border/60 text-[11px]"
             title={
               supabaseConn.status === 'connected'
                 ? `Supabase conectado (${supabaseConn.latencyMs}ms)`
