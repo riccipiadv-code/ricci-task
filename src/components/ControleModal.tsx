@@ -368,6 +368,9 @@ export function ControleModal({
   // Ordenação visual dos cards na edição:
   // 1. Primeiro providências novas não salvas (drafts / isPersisted !== true), da mais recente para a mais antiga (ordem decrescente)
   // 2. Depois providências já salvas (isPersisted === true), da mais recente para a mais antiga (ordem decrescente de inserção/ordem)
+  // Cada item recebe seu `numeroHumano` calculado sequencialmente:
+  // - Ordem temporal crescente de criação: persistidas mais antigas primeiro (#1..#M), depois drafts na ordem em que foram criados (#M+1..#N)
+  // - Exibição visual decrescente: o mais recente no topo exibe o maior número (#N, #N-1, ...)
   const providenciasExibicao = useMemo(() => {
     const drafts = providencias.filter((p) => !p.isPersisted)
     const persistidas = providencias.filter((p) => p.isPersisted)
@@ -378,8 +381,23 @@ export function ControleModal({
     // Persistidas em ordem decrescente de ordem histórica
     persistidas.sort((a, b) => (b.ordem ?? 0) - (a.ordem ?? 0))
 
-    return [...drafts, ...persistidas]
+    const listaOrdenada = [...drafts, ...persistidas]
+    const total = listaOrdenada.length
+
+    return listaOrdenada.map((item, index) => ({
+      ...item,
+      numeroHumano: total - index,
+    }))
   }, [providencias])
+
+  // Mapeamento tempId -> numeroHumano para mensagens de validação e feedback amigáveis
+  const numeroHumanoMap = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const item of providenciasExibicao) {
+      map.set(item.tempId, item.numeroHumano)
+    }
+    return map
+  }, [providenciasExibicao])
 
   // Adicionar nova providência
   const handleAdicionarProvidencia = () => {
@@ -550,7 +568,7 @@ export function ControleModal({
     // Validação das providências incluídas
     for (let i = 0; i < providencias.length; i++) {
       const p = providencias[i]
-      const numProv = (p.ordem ?? 0) + 1
+      const numProv = numeroHumanoMap.get(p.tempId) ?? i + 1
       if (!p.providencia.trim() || !p.prazo_conclusao || !p.tipo_prazo_id || !p.status_id) {
         setActiveTab('providencias')
         toast({
@@ -1155,7 +1173,7 @@ export function ControleModal({
                 ) : (
                   <div className="space-y-4">
                     {providenciasExibicao.map((item) => {
-                      const numeroExibicao = (item.ordem ?? 0) + 1
+                      const numeroExibicao = item.numeroHumano
                       return (
                         <div
                           key={item.tempId}
@@ -1167,16 +1185,12 @@ export function ControleModal({
                               <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-bold">
                                 {numeroExibicao}
                               </span>
-                              <span>Providência #{numeroExibicao}</span>
-                              {item.isPersisted ? (
-                                <span className="text-[10px] text-muted-foreground font-normal">
-                                  (salva no banco)
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-primary/80 font-normal">
-                                  (nova)
-                                </span>
-                              )}
+                              <span>
+                                Providência #{numeroExibicao}
+                                {!item.isPersisted && (
+                                  <span className="text-primary/80 font-normal ml-1">(nova)</span>
+                                )}
+                              </span>
                             </span>
 
                             <Button
