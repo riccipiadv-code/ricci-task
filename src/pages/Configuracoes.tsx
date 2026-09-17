@@ -321,7 +321,7 @@ export default function ConfiguracoesPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Controles Ativos Carregados:</span>
               <span className="font-bold text-foreground">
-                {controles.length} registros ativos (deleted_at is null)
+                {controles.length} registros ativos (arquivado_at is null)
               </span>
             </div>
           </div>

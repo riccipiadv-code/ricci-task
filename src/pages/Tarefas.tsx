@@ -1588,7 +1588,7 @@ export default function TarefasPage() {
                                     <Tooltip>
                                       <TooltipTrigger asChild>
                                         <div className="font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-2 leading-relaxed">
-                                          {c.identificacao_caso}
+                                          {c.identificacao_caso || '—'}
                                         </div>
                                       </TooltipTrigger>
                                       <TooltipContent
@@ -1597,7 +1597,7 @@ export default function TarefasPage() {
                                       >
                                         <p className="font-bold mb-1">Identificação do Caso:</p>
                                         <p className="whitespace-pre-wrap">
-                                          {c.identificacao_caso}
+                                          {c.identificacao_caso || '—'}
                                         </p>
                                       </TooltipContent>
                                     </Tooltip>

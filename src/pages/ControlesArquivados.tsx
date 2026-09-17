@@ -111,8 +111,8 @@ export default function ControlesArquivadosPage() {
     setDesarquivando(true)
     try {
       await controleService.unarchiveControle(controleParaDesarquivar.id)
-      // Remove o item da lista de arquivados (volta automaticamente à lista principal de Controles)
-      setControlesArquivados((prev) => prev.filter((c) => c.id !== controleParaDesarquivar.id))
+      // Recarrega imediatamente a lista de arquivados para manter contadores e lista sincronizados
+      await carregarDados()
       setDesarquivarDialogOpen(false)
       toast({
         title: 'Controle desarquivado com sucesso',

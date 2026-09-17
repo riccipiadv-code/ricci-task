@@ -446,8 +446,15 @@ export const controleService = {
   async getControlesArquivados(
     usuariosParam?: TaskUsuarioAtivoRecord[],
   ): Promise<TaskControleRecord[]> {
+    return this.fetchControlesList({ apenasArquivados: true }, usuariosParam)
+  },
+
+  async fetchControlesList(
+    options: { apenasArquivados: boolean },
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+  ): Promise<TaskControleRecord[]> {
     // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores.
-    // Resiliente: se falhar ou vier vazio, mantemos mapa vazio para não descartar nenhum controle.
+    // Se falhar ou vier vazio, mantemos mapa vazio para não interromper a busca de task_tarefas.
     let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
     if (usuariosParam && usuariosParam.length > 0) {
       usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
@@ -457,27 +464,32 @@ export const controleService = {
         allUsers.forEach((u) => usuariosMap.set(u.id, { id: u.id, nome: u.nome, email: u.email }))
       } catch (err) {
         console.error(
-          'Aviso ao obter usuários para resolução de controles arquivados (usando lista vazia):',
+          'Aviso ao obter usuários para resolução de controles (usando lista vazia):',
           err,
         )
       }
     }
 
-    // 2. Consulta parte DIRETAMENTE de public.task_tarefas com LEFT JOINs opcionais (sem !inner).
-    // Critérios estritos: apenas .not('arquivado_at', 'is', null) e .order('arquivado_at', { ascending: false }).
-    // Não aplica filtros de status, prazo, providência, deleted_at, responsável ou executor.
-    const { data: tarefasRaw, error: tarefasError } = await supabase
-      .from('task_tarefas')
-      .select(`
+    // 2. Consulta parte de public.task_tarefas com LEFT JOINs opcionais (sem !inner).
+    // Para a lista principal: exclusivamente .is('arquivado_at', null).
+    // Para controles arquivados: exclusivamente .not('arquivado_at', 'is', null).order('arquivado_at', { ascending: false }).
+    // Não aplica filtros implícitos de status, prazo, providência, deleted_at, responsável ou executor.
+    let query = supabase.from('task_tarefas').select(`
         *,
         nome_controle_obj:task_nomes_controle(id, nome),
         status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
       `)
-      .not('arquivado_at', 'is', null)
-      .order('arquivado_at', { ascending: false })
+
+    if (options.apenasArquivados) {
+      query = query.not('arquivado_at', 'is', null).order('arquivado_at', { ascending: false })
+    } else {
+      query = query.is('arquivado_at', null)
+    }
+
+    const { data: tarefasRaw, error: tarefasError } = await query
 
     if (tarefasError) {
-      console.error('Erro ao buscar task_tarefas arquivadas:', tarefasError)
+      console.error('Erro ao buscar task_tarefas:', tarefasError)
       throw tarefasError
     }
 
@@ -487,8 +499,8 @@ export const controleService = {
 
     const tarefaIds = tarefasRaw.map((t) => t.id)
 
-    // 3. Busca providências associadas aos controles arquivados (tolerante a falhas)
-    let provsByTarefa: Record<string, TaskProvidenciaRecord[]> = {}
+    // 3. Busca providências associadas aos controles de forma resiliente
+    const provsByTarefa: Record<string, TaskProvidenciaRecord[]> = {}
     try {
       const { data: providenciasRaw, error: provError } = await supabase
         .from('task_providencias')
@@ -509,14 +521,15 @@ export const controleService = {
           provsByTarefa[p.tarefa_id].push(p)
         }
       }
-    } catch (pErr) {
-      console.error('Aviso ao carregar providências dos controles arquivados:', pErr)
+    } catch (provErr) {
+      console.error('Aviso ao buscar providências dos controles:', provErr)
     }
 
-    // 4. Hidratação tolerante a falhas: ausência de relacionados não oculta nem quebra a linha
+    // 4. Monta o modelo hidratado (tolerante a ausência de relacionamentos)
     const controles: TaskControleRecord[] = tarefasRaw.map((t: any) => {
       const provs = provsByTarefa[t.id] || []
 
+      // Ordena providências: abertas primeiro por prazo crescente, depois finalizadas
       const provsOrdenadas = [...provs].sort((a, b) => {
         const aFinaliza = Boolean(a.status?.finaliza)
         const bFinaliza = Boolean(b.status?.finaliza)
@@ -526,6 +539,7 @@ export const controleService = {
         return (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || '')
       })
 
+      // Próxima providência aberta (finaliza !== true)
       const provAbertas = provs.filter((p) => !p.status?.finaliza)
       provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
       const proximaProvAberta = provAbertas[0] || null
@@ -568,154 +582,36 @@ export const controleService = {
       }
     })
 
-    return controles
-  },
-
-  async fetchControlesList(
-    options: { apenasArquivados: boolean },
-    usuariosParam?: TaskUsuarioAtivoRecord[],
-  ): Promise<TaskControleRecord[]> {
-    // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores.
-    // Se falhar ou vier vazio, mantemos mapa vazio para não interromper a busca de task_tarefas.
-    let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
-    if (usuariosParam && usuariosParam.length > 0) {
-      usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
-    } else if (usuariosParam === undefined) {
-      try {
-        const allUsers = await this.getTodosUsuarios()
-        allUsers.forEach((u) => usuariosMap.set(u.id, { id: u.id, nome: u.nome, email: u.email }))
-      } catch (err) {
-        console.error(
-          'Aviso ao obter usuários para resolução de controles (usando lista vazia):',
-          err,
-        )
-      }
-    }
-
-    // 2. Monta consulta de controles respeitando exclusão lógica deleted_at e regra de arquivamento
-    // Para a lista principal (ativos): .is('deleted_at', null).is('arquivado_at', null)
-    let query = supabase.from('task_tarefas').select(`
-        *,
-        nome_controle_obj:task_nomes_controle(id, nome),
-        status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
-      `)
-
+    // 5. Ordenação:
+    // Para arquivados: arquivado_at decrescente
+    // Para a lista principal: data da próxima providência aberta em ordem crescente
     if (options.apenasArquivados) {
-      query = query.not('arquivado_at', 'is', null).order('arquivado_at', { ascending: false })
-    } else {
-      query = query.is('deleted_at', null).is('arquivado_at', null)
-    }
-
-    const { data: tarefasRaw, error: tarefasError } = await query
-
-    if (tarefasError) {
-      console.error('Erro ao buscar task_tarefas:', tarefasError)
-      throw tarefasError
-    }
-
-    if (!tarefasRaw || tarefasRaw.length === 0) {
-      return []
-    }
-
-    const tarefaIds = tarefasRaw.map((t) => t.id)
-
-    // 3. Busca todas as providências ativas desses controles
-    const { data: providenciasRaw, error: provError } = await supabase
-      .from('task_providencias')
-      .select(`
-        *,
-        tipo_prazo:task_tipos_prazo(*),
-        status:task_status_providencia(*)
-      `)
-      .in('tarefa_id', tarefaIds)
-      .is('deleted_at', null)
-      .order('prazo_conclusao', { ascending: true })
-      .order('ordem', { ascending: true })
-
-    if (provError) {
-      console.error('Erro ao buscar providências dos controles:', provError)
-      throw provError
-    }
-
-    // Agrupa providências por tarefa_id
-    const provsByTarefa: Record<string, TaskProvidenciaRecord[]> = {}
-    for (const p of (providenciasRaw || []) as unknown as TaskProvidenciaRecord[]) {
-      if (!provsByTarefa[p.tarefa_id]) {
-        provsByTarefa[p.tarefa_id] = []
-      }
-      provsByTarefa[p.tarefa_id].push(p)
-    }
-
-    // 4. Monta o modelo hidratado
-    const controles: TaskControleRecord[] = tarefasRaw.map((t: any) => {
-      const provs = provsByTarefa[t.id] || []
-
-      // Ordena providências: abertas primeiro por prazo crescente, depois finalizadas
-      const provsOrdenadas = [...provs].sort((a, b) => {
-        const aFinaliza = Boolean(a.status?.finaliza)
-        const bFinaliza = Boolean(b.status?.finaliza)
-        if (aFinaliza !== bFinaliza) {
-          return aFinaliza ? 1 : -1
-        }
-        return (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || '')
-      })
-
-      // Próxima providência aberta (finaliza !== true)
-      const provAbertas = provs.filter((p) => !p.status?.finaliza)
-      provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
-      const proximaProvAberta = provAbertas[0] || null
-
-      const respUsuario = usuariosMap.get(t.responsavel_usuario_id) || null
-      const execUsuario = usuariosMap.get(t.executor_usuario_id) || null
-
-      return {
-        id: t.id,
-        nome_controle_id: t.nome_controle_id,
-        identificacao_caso: t.identificacao_caso,
-        status_id: t.status_id,
-        data_autorizacao: t.data_autorizacao,
-        prazo_conclusao: t.prazo_conclusao,
-        responsavel_usuario_id: t.responsavel_usuario_id,
-        executor_usuario_id: t.executor_usuario_id,
-        pasta_cliente: t.pasta_cliente,
-        pasta_ricci: t.pasta_ricci,
-        created_at: t.created_at,
-        created_by: t.created_by,
-        updated_at: t.updated_at,
-        updated_by: t.updated_by,
-        deleted_at: t.deleted_at,
-        deleted_by: t.deleted_by,
-        arquivado_at: t.arquivado_at || null,
-
-        nome_controle: t.nome_controle_obj?.nome || null,
-        responsavel_nome: respUsuario?.nome || null,
-        executor_nome: execUsuario?.nome || null,
-        status: t.status_obj || null,
-        responsavel_usuario: respUsuario,
-        executor_usuario: execUsuario,
-
-        providencias: provsOrdenadas,
-        proxima_providencia: proximaProvAberta,
-      }
-    })
-
-    // 5. Ordenação padrão: data da próxima providência aberta em ordem crescente.
-    controles.sort((a, b) => {
-      const aData = a.proxima_providencia?.prazo_conclusao || null
-      const bData = b.proxima_providencia?.prazo_conclusao || null
-
-      if (aData && bData) {
-        if (aData !== bData) {
-          return aData.localeCompare(bData)
+      controles.sort((a, b) => {
+        const dataA = a.arquivado_at ? new Date(a.arquivado_at).getTime() : 0
+        const dataB = b.arquivado_at ? new Date(b.arquivado_at).getTime() : 0
+        if (dataA !== dataB) {
+          return dataB - dataA
         }
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      }
+      })
+    } else {
+      controles.sort((a, b) => {
+        const aData = a.proxima_providencia?.prazo_conclusao || null
+        const bData = b.proxima_providencia?.prazo_conclusao || null
 
-      if (aData && !bData) return -1
-      if (!aData && bData) return 1
+        if (aData && bData) {
+          if (aData !== bData) {
+            return aData.localeCompare(bData)
+          }
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        }
 
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-    })
+        if (aData && !bData) return -1
+        if (!aData && bData) return 1
+
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      })
+    }
 
     return controles
   },

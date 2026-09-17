@@ -61,7 +61,8 @@ export function useControles() {
     setLoading(true)
     setError(null)
     try {
-      // 1. Busca usuários com fallback seguro para não travar a aplicação
+      // 1. Busca usuários e tabelas auxiliares de forma independente e tolerante a falhas
+      // Nenhuma falha em consultas auxiliares pode impedir o carregamento de task_tarefas
       let users: TaskUsuarioAtivoRecord[] = []
       try {
         users = await controleService.getUsuariosAtivos()
@@ -69,33 +70,35 @@ export function useControles() {
         console.error('Falha ao carregar usuários de task_usuarios em useControles:', userErr)
         users = []
       }
+      setUsuariosAtivos(users)
 
-      // 2. Busca tabelas auxiliares e os Controles (task_tarefas sempre é buscada)
-      const [stList, stProvList, tpList, nomes, ctrlList] = await Promise.all([
+      // Executa cada consulta auxiliar independentemente, com fallback seguro para lista vazia
+      const [stList, stProvList, tpList, nomes] = await Promise.all([
         controleService.getStatus().catch((err) => {
-          console.error('Aviso ao buscar task_status:', err)
-          return []
+          console.error('Aviso ao buscar task_status (usando lista vazia):', err)
+          return [] as TaskStatusRecord[]
         }),
         controleService.getStatusProvidencia().catch((err) => {
-          console.error('Aviso ao buscar task_status_providencia:', err)
-          return []
+          console.error('Aviso ao buscar task_status_providencia (usando lista vazia):', err)
+          return [] as TaskStatusProvidenciaRecord[]
         }),
         controleService.getTiposPrazo().catch((err) => {
-          console.error('Aviso ao buscar task_tipos_prazo:', err)
-          return []
+          console.error('Aviso ao buscar task_tipos_prazo (usando lista vazia):', err)
+          return [] as TaskTipoPrazoRecord[]
         }),
         controleService.getNomesControle({ incluirInativos: true }).catch((err) => {
-          console.error('Aviso ao buscar task_nomes_controle:', err)
-          return []
+          console.error('Aviso ao buscar task_nomes_controle (usando lista vazia):', err)
+          return [] as TaskNomeControleRecord[]
         }),
-        controleService.getControles(users),
       ])
 
       setStatusList(stList)
       setStatusProvidenciaList(stProvList)
       setTiposPrazoList(tpList)
       setNomesControle(nomes)
-      setUsuariosAtivos(users)
+
+      // 2. Busca task_tarefas da lista principal (garantindo carregamento mesmo se auxiliares falharem)
+      const ctrlList = await controleService.getControles(users)
       setControles(ctrlList)
     } catch (err: any) {
       console.error('Erro ao carregar controles do Ricci Task:', err)
