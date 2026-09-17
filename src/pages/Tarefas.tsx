@@ -51,7 +51,7 @@ import {
   getStatusBadgeStyle,
   getLocalDateStr,
 } from '@/lib/formatters'
-import { Calendar as CalendarIcon, Check } from 'lucide-react'
+import { Calendar as CalendarIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 function normalizeText(text: string | null | undefined): string {
@@ -97,89 +97,19 @@ export default function TarefasPage() {
   // Estado de salvamento por id de providência
   const [updatingProvidenciaIds, setUpdatingProvidenciaIds] = useState<Record<string, boolean>>({})
 
-  // Edição pendente da Data de Conclusão para providências que exigem confirmação (cancelado, concluido, suspenso)
-  // Armazena: { [providenciaId]: { statusId: string; dataConclusao: string } }
-  const [pendingConclusao, setPendingConclusao] = useState<
-    Record<string, { statusId: string; dataConclusao: string }>
-  >({})
-
-  // Status de providência que exigem data de conclusão
+  // Status de providência que definem data de conclusão automática: cancelado, concluido, concluida, suspenso
   const isStatusExigeConclusao = (statusObj?: { codigo?: string } | null) => {
-    const cod = statusObj?.codigo?.toLowerCase() || ''
-    return cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
+    const cod = statusObj?.codigo?.trim().toLowerCase() || ''
+    return cod === 'cancelado' || cod === 'concluido' || cod === 'concluida' || cod === 'suspenso'
   }
 
-  const handleSelectProvidenciaStatus = async (
-    providenciaId: string,
-    novoStatusId: string,
-    currentDataConclusao?: string | null,
-  ) => {
+  const handleSelectProvidenciaStatus = async (providenciaId: string, novoStatusId: string) => {
     if (!providenciaId || !novoStatusId) return
     if (updatingProvidenciaIds[providenciaId]) return
 
     const selectedStatus = statusProvidenciaList.find((s) => s.id === novoStatusId)
     const exigeConclusao = isStatusExigeConclusao(selectedStatus)
-
-    if (exigeConclusao) {
-      // Abre o campo de Data de Conclusão inicializado com data existente ou hoje (YYYY-MM-DD local)
-      const initialDate = currentDataConclusao
-        ? currentDataConclusao.split('T')[0]
-        : getLocalDateStr()
-      setPendingConclusao((prev) => ({
-        ...prev,
-        [providenciaId]: {
-          statusId: novoStatusId,
-          dataConclusao: initialDate,
-        },
-      }))
-    } else {
-      // Status comum: limpa pendência e salva imediatamente com data_conclusao = null
-      setPendingConclusao((prev) => {
-        const next = { ...prev }
-        delete next[providenciaId]
-        return next
-      })
-      await executeSaveProvidenciaStatus(providenciaId, novoStatusId, null)
-    }
-  }
-
-  const handleConfirmarStatusComData = async (providenciaId: string) => {
-    const pending = pendingConclusao[providenciaId]
-    if (!pending) return
-
-    const cleanDate = pending.dataConclusao.trim()
-    if (!cleanDate) {
-      toast({
-        variant: 'destructive',
-        title: 'Data de Conclusão obrigatória',
-        description: 'Informe a Data de Conclusão para salvar esta alteração.',
-      })
-      return
-    }
-
-    await executeSaveProvidenciaStatus(providenciaId, pending.statusId, cleanDate)
-    setPendingConclusao((prev) => {
-      const next = { ...prev }
-      delete next[providenciaId]
-      return next
-    })
-  }
-
-  const handleCancelarPendingStatus = (providenciaId: string) => {
-    setPendingConclusao((prev) => {
-      const next = { ...prev }
-      delete next[providenciaId]
-      return next
-    })
-  }
-
-  const executeSaveProvidenciaStatus = async (
-    providenciaId: string,
-    novoStatusId: string,
-    dataConclusao: string | null,
-  ) => {
-    if (!providenciaId || !novoStatusId) return
-    if (updatingProvidenciaIds[providenciaId]) return
+    const dataConclusao = exigeConclusao ? getLocalDateStr() : null
 
     setUpdatingProvidenciaIds((prev) => ({ ...prev, [providenciaId]: true }))
     try {
@@ -2011,10 +1941,7 @@ export default function TarefasPage() {
                                                           <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
                                                         )}
                                                         <Select
-                                                          value={
-                                                            pendingConclusao[p.id]?.statusId ||
-                                                            p.status_id
-                                                          }
+                                                          value={p.status_id}
                                                           disabled={Boolean(
                                                             updatingProvidenciaIds[p.id],
                                                           )}
@@ -2023,7 +1950,6 @@ export default function TarefasPage() {
                                                               handleSelectProvidenciaStatus(
                                                                 p.id,
                                                                 novoStatusId,
-                                                                p.data_conclusao,
                                                               )
                                                             }
                                                           }}
@@ -2047,10 +1973,7 @@ export default function TarefasPage() {
                                                             />
                                                             <SelectValue placeholder="Status">
                                                               {statusProvidenciaList.find(
-                                                                (s) =>
-                                                                  s.id ===
-                                                                  (pendingConclusao[p.id]
-                                                                    ?.statusId || p.status_id),
+                                                                (s) => s.id === p.status_id,
                                                               )?.nome ||
                                                                 p.status?.nome ||
                                                                 'Selecionar'}
@@ -2074,88 +1997,20 @@ export default function TarefasPage() {
                                                           </SelectContent>
                                                         </Select>
 
-                                                        {/* Campo inline de Data de Conclusão quando o status selecionado exige confirmação */}
-                                                        {pendingConclusao[p.id] ? (
-                                                          <div className="flex items-center gap-1 bg-background border border-primary/40 rounded-md px-1.5 py-0.5 shadow-2xs animate-fade-in">
-                                                            <label
-                                                              htmlFor={`dt-conclusao-${p.id}`}
-                                                              className="text-[10px] font-semibold text-muted-foreground whitespace-nowrap"
-                                                            >
-                                                              Data de Conclusão:
-                                                            </label>
-                                                            <input
-                                                              id={`dt-conclusao-${p.id}`}
-                                                              type="date"
-                                                              value={
-                                                                pendingConclusao[p.id].dataConclusao
-                                                              }
-                                                              onChange={(e) => {
-                                                                const val = e.target.value
-                                                                setPendingConclusao((prev) => ({
-                                                                  ...prev,
-                                                                  [p.id]: {
-                                                                    ...prev[p.id],
-                                                                    dataConclusao: val,
-                                                                  },
-                                                                }))
-                                                              }}
-                                                              className="h-6 px-1.5 py-0 rounded text-[11px] bg-transparent text-foreground border border-input focus:outline-none focus:ring-1 focus:ring-primary"
-                                                            />
-                                                            <Button
-                                                              type="button"
-                                                              size="sm"
-                                                              variant="default"
-                                                              disabled={Boolean(
-                                                                updatingProvidenciaIds[p.id],
-                                                              )}
-                                                              onClick={() =>
-                                                                handleConfirmarStatusComData(p.id)
-                                                              }
-                                                              className="h-6 px-2 text-[10px] rounded font-semibold bg-primary hover:bg-primary/90 text-primary-foreground gap-1"
-                                                              title="Salvar status e data de conclusão"
-                                                            >
-                                                              <Check className="w-3 h-3" />
-                                                              <span>Salvar</span>
-                                                            </Button>
-                                                            <Button
-                                                              type="button"
-                                                              size="sm"
-                                                              variant="ghost"
-                                                              disabled={Boolean(
-                                                                updatingProvidenciaIds[p.id],
-                                                              )}
-                                                              onClick={() =>
-                                                                handleCancelarPendingStatus(p.id)
-                                                              }
-                                                              className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground rounded"
-                                                              title="Cancelar alteração"
-                                                            >
-                                                              <X className="w-3 h-3" />
-                                                            </Button>
-                                                          </div>
-                                                        ) : (
-                                                          /* Visualização da Data de Conclusão para status concluído, cancelado ou suspenso */
-                                                          isStatusExigeConclusao(p.status) && (
-                                                            <span
-                                                              className={cn(
-                                                                'inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border',
-                                                                p.data_conclusao
-                                                                  ? 'bg-muted/40 text-foreground border-border/60'
-                                                                  : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800/50',
-                                                              )}
-                                                              title="Data de Conclusão da Providência"
-                                                            >
-                                                              <CalendarIcon className="w-3 h-3 text-muted-foreground" />
-                                                              <span>
-                                                                Conclusão:{' '}
-                                                                <strong>
-                                                                  {p.data_conclusao
-                                                                    ? formatDateBR(p.data_conclusao)
-                                                                    : 'Não informada'}
-                                                                </strong>
-                                                              </span>
+                                                        {/* Exibição em somente leitura da Data de Conclusão quando a providência possuir data */}
+                                                        {p.data_conclusao && (
+                                                          <span
+                                                            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border bg-muted/40 text-foreground border-border/60"
+                                                            title="Data de Conclusão da Providência"
+                                                          >
+                                                            <CalendarIcon className="w-3 h-3 text-muted-foreground" />
+                                                            <span>
+                                                              Conclusão:{' '}
+                                                              <strong>
+                                                                {formatDateBR(p.data_conclusao)}
+                                                              </strong>
                                                             </span>
-                                                          )
+                                                          </span>
                                                         )}
                                                       </div>
                                                     </div>
@@ -2423,17 +2278,11 @@ export default function TarefasPage() {
                                               <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
                                             )}
                                             <Select
-                                              value={
-                                                pendingConclusao[p.id]?.statusId || p.status_id
-                                              }
+                                              value={p.status_id}
                                               disabled={Boolean(updatingProvidenciaIds[p.id])}
                                               onValueChange={(novoStatusId) => {
                                                 if (novoStatusId) {
-                                                  handleSelectProvidenciaStatus(
-                                                    p.id,
-                                                    novoStatusId,
-                                                    p.data_conclusao,
-                                                  )
+                                                  handleSelectProvidenciaStatus(p.id, novoStatusId)
                                                 }
                                               }}
                                             >
@@ -2455,10 +2304,7 @@ export default function TarefasPage() {
                                                 />
                                                 <SelectValue placeholder="Status">
                                                   {statusProvidenciaList.find(
-                                                    (s) =>
-                                                      s.id ===
-                                                      (pendingConclusao[p.id]?.statusId ||
-                                                        p.status_id),
+                                                    (s) => s.id === p.status_id,
                                                   )?.nome ||
                                                     p.status?.nome ||
                                                     'Selecionar'}
@@ -2481,81 +2327,18 @@ export default function TarefasPage() {
                                           </div>
                                         </div>
 
-                                        {/* Campo inline de Data de Conclusão no mobile quando pendente */}
-                                        {pendingConclusao[p.id] && (
-                                          <div className="flex items-center gap-1 bg-background border border-primary/40 rounded-md px-2 py-1 shadow-2xs animate-fade-in flex-wrap">
-                                            <label
-                                              htmlFor={`dt-conclusao-mob-${p.id}`}
-                                              className="text-[10px] font-semibold text-muted-foreground whitespace-nowrap"
-                                            >
-                                              Data de Conclusão:
-                                            </label>
-                                            <input
-                                              id={`dt-conclusao-mob-${p.id}`}
-                                              type="date"
-                                              value={pendingConclusao[p.id].dataConclusao}
-                                              onChange={(e) => {
-                                                const val = e.target.value
-                                                setPendingConclusao((prev) => ({
-                                                  ...prev,
-                                                  [p.id]: {
-                                                    ...prev[p.id],
-                                                    dataConclusao: val,
-                                                  },
-                                                }))
-                                              }}
-                                              className="h-6 px-1.5 py-0 rounded text-[11px] bg-transparent text-foreground border border-input focus:outline-none focus:ring-1 focus:ring-primary"
-                                            />
-                                            <div className="flex items-center gap-1 ml-auto">
-                                              <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="default"
-                                                disabled={Boolean(updatingProvidenciaIds[p.id])}
-                                                onClick={() => handleConfirmarStatusComData(p.id)}
-                                                className="h-6 px-2 text-[10px] rounded font-semibold bg-primary text-primary-foreground gap-1"
-                                              >
-                                                <Check className="w-3 h-3" />
-                                                <span>Salvar</span>
-                                              </Button>
-                                              <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="ghost"
-                                                disabled={Boolean(updatingProvidenciaIds[p.id])}
-                                                onClick={() => handleCancelarPendingStatus(p.id)}
-                                                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground rounded"
-                                              >
-                                                <X className="w-3 h-3" />
-                                              </Button>
-                                            </div>
+                                        {/* Visualização de Data de Conclusão no mobile quando a providência tiver data */}
+                                        {p.data_conclusao && (
+                                          <div className="pt-0.5">
+                                            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded border bg-muted/40 text-foreground border-border/60">
+                                              <CalendarIcon className="w-3 h-3 text-muted-foreground" />
+                                              <span>
+                                                Conclusão:{' '}
+                                                <strong>{formatDateBR(p.data_conclusao)}</strong>
+                                              </span>
+                                            </span>
                                           </div>
                                         )}
-
-                                        {/* Visualização de Data de Conclusão no mobile quando já salvo */}
-                                        {!pendingConclusao[p.id] &&
-                                          isStatusExigeConclusao(p.status) && (
-                                            <div className="pt-0.5">
-                                              <span
-                                                className={cn(
-                                                  'inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded border',
-                                                  p.data_conclusao
-                                                    ? 'bg-muted/40 text-foreground border-border/60'
-                                                    : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800/50',
-                                                )}
-                                              >
-                                                <CalendarIcon className="w-3 h-3 text-muted-foreground" />
-                                                <span>
-                                                  Conclusão:{' '}
-                                                  <strong>
-                                                    {p.data_conclusao
-                                                      ? formatDateBR(p.data_conclusao)
-                                                      : 'Não informada'}
-                                                  </strong>
-                                                </span>
-                                              </span>
-                                            </div>
-                                          )}
                                         <p
                                           className={cn(
                                             'whitespace-pre-wrap text-xs',
