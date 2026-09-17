@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -270,16 +270,19 @@ export function ControleModal({
       )
 
       if (autoAddNewProvidencia) {
+        const maiorOrdem = draftList.reduce((max, p) => Math.max(max, p.ordem ?? 0), -1)
+        const autoTempId = `draft-auto-${Date.now()}`
         draftList.push({
-          tempId: `draft-auto-${Date.now()}`,
+          tempId: autoTempId,
           providencia: '',
           prazo_conclusao: '',
           tipo_prazo_id: tipoPrazoPadraoId,
           status_id: statusProvPadraoId,
-          ordem: draftList.length,
+          ordem: maiorOrdem + 1,
           data_conclusao: null,
           isPersisted: false,
         })
+        setFocusNewProvId(autoTempId)
       }
 
       setProvidencias(draftList)
@@ -357,32 +360,60 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [usuariosLista, executorUsuarioId, buscaExecSelect])
 
-  // Ordenação visual dos cards de providências pelo prazo de conclusão crescente.
+  // Ref para o container de scroll interno do modal
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  // ID da providência recém-adicionada que deve receber foco
+  const [focusNewProvId, setFocusNewProvId] = useState<string | null>(null)
+
+  // Ordenação visual dos cards na edição:
+  // 1. Primeiro providências novas não salvas (drafts / isPersisted !== true), da mais recente para a mais antiga (ordem decrescente)
+  // 2. Depois providências já salvas (isPersisted === true), da mais recente para a mais antiga (ordem decrescente de inserção/ordem)
   const providenciasExibicao = useMemo(() => {
-    return [...providencias].sort((a, b) => {
-      if (!a.prazo_conclusao && !b.prazo_conclusao) return a.ordem - b.ordem
-      if (!a.prazo_conclusao) return 1
-      if (!b.prazo_conclusao) return -1
-      if (a.prazo_conclusao !== b.prazo_conclusao) {
-        return a.prazo_conclusao.localeCompare(b.prazo_conclusao)
-      }
-      return a.ordem - b.ordem
-    })
+    const drafts = providencias.filter((p) => !p.isPersisted)
+    const persistidas = providencias.filter((p) => p.isPersisted)
+
+    // Drafts em ordem decrescente de ordem (a mais recente adicionada fica no topo)
+    drafts.sort((a, b) => (b.ordem ?? 0) - (a.ordem ?? 0))
+
+    // Persistidas em ordem decrescente de ordem histórica
+    persistidas.sort((a, b) => (b.ordem ?? 0) - (a.ordem ?? 0))
+
+    return [...drafts, ...persistidas]
   }, [providencias])
 
   // Adicionar nova providência
   const handleAdicionarProvidencia = () => {
+    // Sequência superior à maior ordem já existente para preservar a ordem histórica
+    const maiorOrdem = providencias.reduce((max, p) => Math.max(max, p.ordem ?? 0), -1)
+    const proximaOrdem = maiorOrdem + 1
+
+    const newTempId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     const novoItem: DraftProvidenciaItem = {
-      tempId: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      tempId: newTempId,
       providencia: '',
       prazo_conclusao: '',
       tipo_prazo_id: tipoPrazoPadraoId,
       status_id: statusProvPadraoId,
-      ordem: providencias.length,
+      ordem: proximaOrdem,
       data_conclusao: null,
       isPersisted: false,
     }
+
+    setActiveTab('providencias')
     setProvidencias((prev) => [...prev, novoItem])
+    setFocusNewProvId(newTempId)
+
+    // Levar o scroll interno do modal para o topo imediatamente
+    requestAnimationFrame(() => {
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+      setTimeout(() => {
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+        }
+      }, 50)
+    })
   }
 
   // Atualizar campo de uma providência específica
@@ -417,6 +448,8 @@ export function ControleModal({
       if (controleToEdit?.id) {
         const freshUpdated = await controleService.getControleUpdatedAt(controleToEdit.id)
         if (freshUpdated) setUpdatedAtDisplay(freshUpdated)
+        const fullyLoaded = await controleService.getControleById(controleToEdit.id, usuariosLista)
+        if (fullyLoaded) onSaved(fullyLoaded)
       }
     } catch (err: any) {
       toast({
@@ -517,12 +550,13 @@ export function ControleModal({
     // Validação das providências incluídas
     for (let i = 0; i < providencias.length; i++) {
       const p = providencias[i]
+      const numProv = (p.ordem ?? 0) + 1
       if (!p.providencia.trim() || !p.prazo_conclusao || !p.tipo_prazo_id || !p.status_id) {
         setActiveTab('providencias')
         toast({
           variant: 'destructive',
           title: 'Providência incompleta',
-          description: `Preencha todos os campos obrigatórios (Providência, Prazo, Tipo e Status) da providência #${i + 1}.`,
+          description: `Preencha todos os campos obrigatórios (Providência, Prazo, Tipo e Status) da providência #${numProv}.`,
         })
         return
       }
@@ -535,7 +569,7 @@ export function ControleModal({
           toast({
             variant: 'destructive',
             title: 'Data de Conclusão obrigatória',
-            description: `A providência #${i + 1} está com status "${st?.nome || cod}" e exige o preenchimento da Data de Conclusão.`,
+            description: `A providência #${numProv} está com status "${st?.nome || cod}" e exige o preenchimento da Data de Conclusão.`,
           })
           return
         }
@@ -560,10 +594,9 @@ export function ControleModal({
       // 1. Salva o controle principal em task_tarefas
       const savedControle = await controleService.saveControle(payload, usuariosLista)
 
-      // 2. Salva as providências (inserção ou atualização individual)
+      // 2. Salva as providências preservando rigorosamente a sequência (ordem) de cada uma
       if (providencias.length > 0) {
-        for (let i = 0; i < providencias.length; i++) {
-          const p = providencias[i]
+        for (const p of providencias) {
           const st = statusProvLista.find((s) => s.id === p.status_id)
           const cod = st?.codigo?.toLowerCase() || ''
           const exigeData = cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
@@ -576,7 +609,7 @@ export function ControleModal({
             prazo_conclusao: p.prazo_conclusao,
             tipo_prazo_id: p.tipo_prazo_id,
             status_id: p.status_id,
-            ordem: i,
+            ordem: p.ordem ?? 0,
             data_conclusao: dtConclusao,
           })
         }
@@ -649,7 +682,7 @@ export function ControleModal({
           </DialogHeader>
 
           {/* Conteúdo com scroll */}
-          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {/* ============================================================= */}
             {/* ABA 1: DADOS DO CASO                                          */}
             {/* ============================================================= */}
@@ -1121,7 +1154,8 @@ export function ControleModal({
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {providenciasExibicao.map((item, index) => {
+                    {providenciasExibicao.map((item) => {
+                      const numeroExibicao = (item.ordem ?? 0) + 1
                       return (
                         <div
                           key={item.tempId}
@@ -1131,12 +1165,16 @@ export function ControleModal({
                           <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-2">
                             <span className="text-xs font-bold text-primary flex items-center gap-1.5">
                               <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-bold">
-                                {index + 1}
+                                {numeroExibicao}
                               </span>
-                              <span>Providência #{index + 1}</span>
-                              {item.isPersisted && (
+                              <span>Providência #{numeroExibicao}</span>
+                              {item.isPersisted ? (
                                 <span className="text-[10px] text-muted-foreground font-normal">
                                   (salva no banco)
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-primary/80 font-normal">
+                                  (nova)
                                 </span>
                               )}
                             </span>
@@ -1168,6 +1206,14 @@ export function ControleModal({
                               <Textarea
                                 rows={2}
                                 value={item.providencia}
+                                ref={(el) => {
+                                  if (el && focusNewProvId === item.tempId) {
+                                    setTimeout(() => {
+                                      el.focus()
+                                    }, 10)
+                                    setFocusNewProvId(null)
+                                  }
+                                }}
                                 onChange={(e) =>
                                   handleUpdateProvidencia(
                                     item.tempId,

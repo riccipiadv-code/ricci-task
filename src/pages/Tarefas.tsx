@@ -1978,176 +1978,195 @@ export default function TarefasPage() {
                                                   </Badge>
                                                 )}
                                               <span className="text-[11px] text-muted-foreground">
-                                                Ordenadas por prazo crescente (abertas primeiro)
+                                                Ordenadas por prazo decrescente
                                               </span>
                                             </div>
                                           </div>
 
                                           {!c.providencias || c.providencias.length === 0 ? (
                                             <p className="text-muted-foreground italic text-xs p-3 rounded-lg bg-muted/20 border border-border/40">
-                                              Sem providências abertas
+                                              Sem providências cadastradas
                                             </p>
                                           ) : (
                                             <div className="space-y-2">
-                                              {c.providencias.map((p, idx) => {
-                                                const pFinalizada = Boolean(p.status?.finaliza)
-                                                const pVencida = isPrazoOverdue(
-                                                  p.prazo_conclusao,
-                                                  p.status,
-                                                )
-                                                const pStatusBadge = getStatusBadgeStyle(
-                                                  p.status?.codigo,
-                                                  p.status?.finaliza,
-                                                )
+                                              {[...c.providencias]
+                                                .sort((a, b) => {
+                                                  // Prazo de conclusão decrescente (maior prazo primeiro)
+                                                  // Sem prazo no final
+                                                  // Empate de prazo: maior ordem primeiro
+                                                  const pA = a.prazo_conclusao
+                                                    ? a.prazo_conclusao.split('T')[0]
+                                                    : ''
+                                                  const pB = b.prazo_conclusao
+                                                    ? b.prazo_conclusao.split('T')[0]
+                                                    : ''
+                                                  if (!pA && !pB)
+                                                    return (b.ordem ?? 0) - (a.ordem ?? 0)
+                                                  if (!pA) return 1
+                                                  if (!pB) return -1
+                                                  if (pA !== pB) return pB.localeCompare(pA)
+                                                  return (b.ordem ?? 0) - (a.ordem ?? 0)
+                                                })
+                                                .map((p, idx) => {
+                                                  const pFinalizada = Boolean(p.status?.finaliza)
+                                                  const pVencida = isPrazoOverdue(
+                                                    p.prazo_conclusao,
+                                                    p.status,
+                                                  )
+                                                  const pStatusBadge = getStatusBadgeStyle(
+                                                    p.status?.codigo,
+                                                    p.status?.finaliza,
+                                                  )
 
-                                                return (
-                                                  <div
-                                                    key={p.id || idx}
-                                                    className={cn(
-                                                      'p-3 rounded-xl border space-y-2 transition-all',
-                                                      pFinalizada
-                                                        ? 'bg-muted/25 border-border/40 opacity-75'
-                                                        : 'bg-card border-border/70 shadow-xs',
-                                                    )}
-                                                  >
-                                                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                                                      <div className="flex items-center gap-2">
-                                                        <span
-                                                          className={cn(
-                                                            'text-[11px] font-bold',
-                                                            pFinalizada
-                                                              ? 'text-muted-foreground'
-                                                              : 'text-primary',
-                                                          )}
-                                                        >
-                                                          #{idx + 1}
-                                                        </span>
-                                                        <span
-                                                          className={cn(
-                                                            'font-bold inline-flex items-center gap-1',
-                                                            pFinalizada
-                                                              ? 'text-muted-foreground line-through decoration-muted-foreground/60'
-                                                              : pVencida
-                                                                ? 'text-destructive'
-                                                                : 'text-foreground',
-                                                          )}
-                                                        >
-                                                          {pVencida && !pFinalizada && (
-                                                            <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
-                                                          )}
-                                                          <span>
-                                                            Prazo: {formatDateBR(p.prazo_conclusao)}
-                                                          </span>
-                                                        </span>
-                                                        {p.tipo_prazo && (
-                                                          <Badge
-                                                            variant="outline"
-                                                            className={cn(
-                                                              'text-[10px] font-normal',
-                                                              pFinalizada &&
-                                                                'text-muted-foreground border-border/50 bg-transparent',
-                                                            )}
-                                                          >
-                                                            {p.tipo_prazo.nome}
-                                                          </Badge>
-                                                        )}
-                                                      </div>
-
-                                                      {/* Seletor rápido de Status da Providência e Data de Conclusão */}
-                                                      <div className="flex items-center gap-2 flex-wrap">
-                                                        {updatingProvidenciaIds[p.id] && (
-                                                          <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
-                                                        )}
-                                                        <Select
-                                                          value={p.status_id}
-                                                          disabled={Boolean(
-                                                            updatingProvidenciaIds[p.id],
-                                                          )}
-                                                          onValueChange={(novoStatusId) => {
-                                                            if (novoStatusId) {
-                                                              handleSelectProvidenciaStatus(
-                                                                p.id,
-                                                                novoStatusId,
-                                                                c.id,
-                                                              )
-                                                            }
-                                                          }}
-                                                        >
-                                                          <SelectTrigger
-                                                            className={cn(
-                                                              'h-7 px-2 py-0 rounded-md text-[10px] font-semibold border inline-flex items-center gap-1 shadow-none transition-colors w-auto min-w-[120px]',
-                                                              pStatusBadge.bg,
-                                                              pStatusBadge.text,
-                                                              pStatusBadge.border,
-                                                              pFinalizada && 'opacity-80',
-                                                              updatingProvidenciaIds[p.id] &&
-                                                                'opacity-60 cursor-not-allowed',
-                                                            )}
-                                                          >
-                                                            <span
-                                                              className={cn(
-                                                                'w-1.5 h-1.5 rounded-full shrink-0',
-                                                                pStatusBadge.dot,
-                                                              )}
-                                                            />
-                                                            <SelectValue placeholder="Status">
-                                                              {statusProvidenciaList.find(
-                                                                (s) => s.id === p.status_id,
-                                                              )?.nome ||
-                                                                p.status?.nome ||
-                                                                'Selecionar'}
-                                                            </SelectValue>
-                                                          </SelectTrigger>
-                                                          <SelectContent className="rounded-xl">
-                                                            {[...statusProvidenciaList]
-                                                              .sort(
-                                                                (a, b) =>
-                                                                  (a.ordem ?? 0) - (b.ordem ?? 0),
-                                                              )
-                                                              .map((sp) => (
-                                                                <SelectItem
-                                                                  key={sp.id}
-                                                                  value={sp.id}
-                                                                  className="text-xs"
-                                                                >
-                                                                  {sp.nome}
-                                                                </SelectItem>
-                                                              ))}
-                                                          </SelectContent>
-                                                        </Select>
-
-                                                        {/* Exibição em somente leitura da Data de Conclusão quando a providência possuir data */}
-                                                        {p.data_conclusao && (
-                                                          <span
-                                                            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border bg-muted/40 text-foreground border-border/60"
-                                                            title="Data de Conclusão da Providência"
-                                                          >
-                                                            <CalendarIcon className="w-3 h-3 text-muted-foreground" />
-                                                            <span>
-                                                              Conclusão:{' '}
-                                                              <strong>
-                                                                {formatDateBR(p.data_conclusao)}
-                                                              </strong>
-                                                            </span>
-                                                          </span>
-                                                        )}
-                                                      </div>
-                                                    </div>
-
-                                                    {/* Texto Integral da Providência sem corte */}
+                                                  return (
                                                     <div
+                                                      key={p.id || idx}
                                                       className={cn(
-                                                        'p-2.5 rounded-lg text-xs leading-relaxed whitespace-pre-wrap',
+                                                        'p-3 rounded-xl border space-y-2 transition-all',
                                                         pFinalizada
-                                                          ? 'bg-muted/15 border border-border/30 line-through text-muted-foreground/80 decoration-muted-foreground/60'
-                                                          : 'bg-muted/30 border border-border/50 text-foreground',
+                                                          ? 'bg-muted/25 border-border/40 opacity-75'
+                                                          : 'bg-card border-border/70 shadow-xs',
                                                       )}
                                                     >
-                                                      {p.providencia}
+                                                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                                                        <div className="flex items-center gap-2">
+                                                          <span
+                                                            className={cn(
+                                                              'text-[11px] font-bold',
+                                                              pFinalizada
+                                                                ? 'text-muted-foreground'
+                                                                : 'text-primary',
+                                                            )}
+                                                          >
+                                                            #{idx + 1}
+                                                          </span>
+                                                          <span
+                                                            className={cn(
+                                                              'font-bold inline-flex items-center gap-1',
+                                                              pFinalizada
+                                                                ? 'text-muted-foreground line-through decoration-muted-foreground/60'
+                                                                : pVencida
+                                                                  ? 'text-destructive'
+                                                                  : 'text-foreground',
+                                                            )}
+                                                          >
+                                                            {pVencida && !pFinalizada && (
+                                                              <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
+                                                            )}
+                                                            <span>
+                                                              Prazo:{' '}
+                                                              {formatDateBR(p.prazo_conclusao)}
+                                                            </span>
+                                                          </span>
+                                                          {p.tipo_prazo && (
+                                                            <Badge
+                                                              variant="outline"
+                                                              className={cn(
+                                                                'text-[10px] font-normal',
+                                                                pFinalizada &&
+                                                                  'text-muted-foreground border-border/50 bg-transparent',
+                                                              )}
+                                                            >
+                                                              {p.tipo_prazo.nome}
+                                                            </Badge>
+                                                          )}
+                                                        </div>
+
+                                                        {/* Seletor rápido de Status da Providência e Data de Conclusão */}
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                          {updatingProvidenciaIds[p.id] && (
+                                                            <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                                                          )}
+                                                          <Select
+                                                            value={p.status_id}
+                                                            disabled={Boolean(
+                                                              updatingProvidenciaIds[p.id],
+                                                            )}
+                                                            onValueChange={(novoStatusId) => {
+                                                              if (novoStatusId) {
+                                                                handleSelectProvidenciaStatus(
+                                                                  p.id,
+                                                                  novoStatusId,
+                                                                  c.id,
+                                                                )
+                                                              }
+                                                            }}
+                                                          >
+                                                            <SelectTrigger
+                                                              className={cn(
+                                                                'h-7 px-2 py-0 rounded-md text-[10px] font-semibold border inline-flex items-center gap-1 shadow-none transition-colors w-auto min-w-[120px]',
+                                                                pStatusBadge.bg,
+                                                                pStatusBadge.text,
+                                                                pStatusBadge.border,
+                                                                pFinalizada && 'opacity-80',
+                                                                updatingProvidenciaIds[p.id] &&
+                                                                  'opacity-60 cursor-not-allowed',
+                                                              )}
+                                                            >
+                                                              <span
+                                                                className={cn(
+                                                                  'w-1.5 h-1.5 rounded-full shrink-0',
+                                                                  pStatusBadge.dot,
+                                                                )}
+                                                              />
+                                                              <SelectValue placeholder="Status">
+                                                                {statusProvidenciaList.find(
+                                                                  (s) => s.id === p.status_id,
+                                                                )?.nome ||
+                                                                  p.status?.nome ||
+                                                                  'Selecionar'}
+                                                              </SelectValue>
+                                                            </SelectTrigger>
+                                                            <SelectContent className="rounded-xl">
+                                                              {[...statusProvidenciaList]
+                                                                .sort(
+                                                                  (a, b) =>
+                                                                    (a.ordem ?? 0) - (b.ordem ?? 0),
+                                                                )
+                                                                .map((sp) => (
+                                                                  <SelectItem
+                                                                    key={sp.id}
+                                                                    value={sp.id}
+                                                                    className="text-xs"
+                                                                  >
+                                                                    {sp.nome}
+                                                                  </SelectItem>
+                                                                ))}
+                                                            </SelectContent>
+                                                          </Select>
+
+                                                          {/* Exibição em somente leitura da Data de Conclusão quando a providência possuir data */}
+                                                          {p.data_conclusao && (
+                                                            <span
+                                                              className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border bg-muted/40 text-foreground border-border/60"
+                                                              title="Data de Conclusão da Providência"
+                                                            >
+                                                              <CalendarIcon className="w-3 h-3 text-muted-foreground" />
+                                                              <span>
+                                                                Conclusão:{' '}
+                                                                <strong>
+                                                                  {formatDateBR(p.data_conclusao)}
+                                                                </strong>
+                                                              </span>
+                                                            </span>
+                                                          )}
+                                                        </div>
+                                                      </div>
+
+                                                      {/* Texto Integral da Providência sem corte */}
+                                                      <div
+                                                        className={cn(
+                                                          'p-2.5 rounded-lg text-xs leading-relaxed whitespace-pre-wrap',
+                                                          pFinalizada
+                                                            ? 'bg-muted/15 border border-border/30 line-through text-muted-foreground/80 decoration-muted-foreground/60'
+                                                            : 'bg-muted/30 border border-border/50 text-foreground',
+                                                        )}
+                                                      >
+                                                        {p.providencia}
+                                                      </div>
                                                     </div>
-                                                  </div>
-                                                )
-                                              })}
+                                                  )
+                                                })}
                                             </div>
                                           )}
                                         </div>
@@ -2377,118 +2396,132 @@ export default function TarefasPage() {
                                       </Badge>
                                     )}
                                   </div>
-                                  {c.providencias?.map((p, idx) => {
-                                    const pFinalizadaMobile = Boolean(p.status?.finaliza)
-                                    const pStatusBadgeMobile = getStatusBadgeStyle(
-                                      p.status?.codigo,
-                                      p.status?.finaliza,
-                                    )
-                                    return (
-                                      <div
-                                        key={p.id || idx}
-                                        className={cn(
-                                          'p-2.5 rounded-lg border space-y-1.5 transition-opacity',
-                                          pFinalizadaMobile
-                                            ? 'bg-muted/30 border-border/30 opacity-75'
-                                            : 'bg-background border-border/40',
-                                        )}
-                                      >
-                                        <div className="flex items-center justify-between text-[11px] gap-2 flex-wrap">
-                                          <span
-                                            className={cn(
-                                              'font-semibold',
-                                              pFinalizadaMobile
-                                                ? 'text-muted-foreground line-through decoration-muted-foreground/60'
-                                                : 'text-primary',
-                                            )}
-                                          >
-                                            Prazo: {formatDateBR(p.prazo_conclusao)}
-                                          </span>
-
-                                          {/* Seletor rápido de Status da Providência no mobile */}
-                                          <div className="flex items-center gap-1.5 ml-auto flex-wrap justify-end">
-                                            {updatingProvidenciaIds[p.id] && (
-                                              <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
-                                            )}
-                                            <Select
-                                              value={p.status_id}
-                                              disabled={Boolean(updatingProvidenciaIds[p.id])}
-                                              onValueChange={(novoStatusId) => {
-                                                if (novoStatusId) {
-                                                  handleSelectProvidenciaStatus(
-                                                    p.id,
-                                                    novoStatusId,
-                                                    c.id,
-                                                  )
-                                                }
-                                              }}
-                                            >
-                                              <SelectTrigger
-                                                className={cn(
-                                                  'h-6 px-1.5 py-0 rounded text-[10px] font-medium border inline-flex items-center gap-1 shadow-none transition-colors w-auto min-w-[110px]',
-                                                  pStatusBadgeMobile.bg,
-                                                  pStatusBadgeMobile.text,
-                                                  pStatusBadgeMobile.border,
-                                                  updatingProvidenciaIds[p.id] &&
-                                                    'opacity-60 cursor-not-allowed',
-                                                )}
-                                              >
-                                                <span
-                                                  className={cn(
-                                                    'w-1.5 h-1.5 rounded-full shrink-0',
-                                                    pStatusBadgeMobile.dot,
-                                                  )}
-                                                />
-                                                <SelectValue placeholder="Status">
-                                                  {statusProvidenciaList.find(
-                                                    (s) => s.id === p.status_id,
-                                                  )?.nome ||
-                                                    p.status?.nome ||
-                                                    'Selecionar'}
-                                                </SelectValue>
-                                              </SelectTrigger>
-                                              <SelectContent className="rounded-xl">
-                                                {[...statusProvidenciaList]
-                                                  .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
-                                                  .map((sp) => (
-                                                    <SelectItem
-                                                      key={sp.id}
-                                                      value={sp.id}
-                                                      className="text-xs"
-                                                    >
-                                                      {sp.nome}
-                                                    </SelectItem>
-                                                  ))}
-                                              </SelectContent>
-                                            </Select>
-                                          </div>
-                                        </div>
-
-                                        {/* Visualização de Data de Conclusão no mobile quando a providência tiver data */}
-                                        {p.data_conclusao && (
-                                          <div className="pt-0.5">
-                                            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded border bg-muted/40 text-foreground border-border/60">
-                                              <CalendarIcon className="w-3 h-3 text-muted-foreground" />
-                                              <span>
-                                                Conclusão:{' '}
-                                                <strong>{formatDateBR(p.data_conclusao)}</strong>
-                                              </span>
-                                            </span>
-                                          </div>
-                                        )}
-                                        <p
+                                  {[...(c.providencias || [])]
+                                    .sort((a, b) => {
+                                      const pA = a.prazo_conclusao
+                                        ? a.prazo_conclusao.split('T')[0]
+                                        : ''
+                                      const pB = b.prazo_conclusao
+                                        ? b.prazo_conclusao.split('T')[0]
+                                        : ''
+                                      if (!pA && !pB) return (b.ordem ?? 0) - (a.ordem ?? 0)
+                                      if (!pA) return 1
+                                      if (!pB) return -1
+                                      if (pA !== pB) return pB.localeCompare(pA)
+                                      return (b.ordem ?? 0) - (a.ordem ?? 0)
+                                    })
+                                    .map((p, idx) => {
+                                      const pFinalizadaMobile = Boolean(p.status?.finaliza)
+                                      const pStatusBadgeMobile = getStatusBadgeStyle(
+                                        p.status?.codigo,
+                                        p.status?.finaliza,
+                                      )
+                                      return (
+                                        <div
+                                          key={p.id || idx}
                                           className={cn(
-                                            'whitespace-pre-wrap text-xs',
+                                            'p-2.5 rounded-lg border space-y-1.5 transition-opacity',
                                             pFinalizadaMobile
-                                              ? 'line-through text-muted-foreground/75 decoration-muted-foreground/60'
-                                              : 'text-foreground',
+                                              ? 'bg-muted/30 border-border/30 opacity-75'
+                                              : 'bg-background border-border/40',
                                           )}
                                         >
-                                          {p.providencia}
-                                        </p>
-                                      </div>
-                                    )
-                                  })}
+                                          <div className="flex items-center justify-between text-[11px] gap-2 flex-wrap">
+                                            <span
+                                              className={cn(
+                                                'font-semibold',
+                                                pFinalizadaMobile
+                                                  ? 'text-muted-foreground line-through decoration-muted-foreground/60'
+                                                  : 'text-primary',
+                                              )}
+                                            >
+                                              Prazo: {formatDateBR(p.prazo_conclusao)}
+                                            </span>
+
+                                            {/* Seletor rápido de Status da Providência no mobile */}
+                                            <div className="flex items-center gap-1.5 ml-auto flex-wrap justify-end">
+                                              {updatingProvidenciaIds[p.id] && (
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                                              )}
+                                              <Select
+                                                value={p.status_id}
+                                                disabled={Boolean(updatingProvidenciaIds[p.id])}
+                                                onValueChange={(novoStatusId) => {
+                                                  if (novoStatusId) {
+                                                    handleSelectProvidenciaStatus(
+                                                      p.id,
+                                                      novoStatusId,
+                                                      c.id,
+                                                    )
+                                                  }
+                                                }}
+                                              >
+                                                <SelectTrigger
+                                                  className={cn(
+                                                    'h-6 px-1.5 py-0 rounded text-[10px] font-medium border inline-flex items-center gap-1 shadow-none transition-colors w-auto min-w-[110px]',
+                                                    pStatusBadgeMobile.bg,
+                                                    pStatusBadgeMobile.text,
+                                                    pStatusBadgeMobile.border,
+                                                    updatingProvidenciaIds[p.id] &&
+                                                      'opacity-60 cursor-not-allowed',
+                                                  )}
+                                                >
+                                                  <span
+                                                    className={cn(
+                                                      'w-1.5 h-1.5 rounded-full shrink-0',
+                                                      pStatusBadgeMobile.dot,
+                                                    )}
+                                                  />
+                                                  <SelectValue placeholder="Status">
+                                                    {statusProvidenciaList.find(
+                                                      (s) => s.id === p.status_id,
+                                                    )?.nome ||
+                                                      p.status?.nome ||
+                                                      'Selecionar'}
+                                                  </SelectValue>
+                                                </SelectTrigger>
+                                                <SelectContent className="rounded-xl">
+                                                  {[...statusProvidenciaList]
+                                                    .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                                                    .map((sp) => (
+                                                      <SelectItem
+                                                        key={sp.id}
+                                                        value={sp.id}
+                                                        className="text-xs"
+                                                      >
+                                                        {sp.nome}
+                                                      </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                              </Select>
+                                            </div>
+                                          </div>
+
+                                          {/* Visualização de Data de Conclusão no mobile quando a providência tiver data */}
+                                          {p.data_conclusao && (
+                                            <div className="pt-0.5">
+                                              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded border bg-muted/40 text-foreground border-border/60">
+                                                <CalendarIcon className="w-3 h-3 text-muted-foreground" />
+                                                <span>
+                                                  Conclusão:{' '}
+                                                  <strong>{formatDateBR(p.data_conclusao)}</strong>
+                                                </span>
+                                              </span>
+                                            </div>
+                                          )}
+                                          <p
+                                            className={cn(
+                                              'whitespace-pre-wrap text-xs',
+                                              pFinalizadaMobile
+                                                ? 'line-through text-muted-foreground/75 decoration-muted-foreground/60'
+                                                : 'text-foreground',
+                                            )}
+                                          >
+                                            {p.providencia}
+                                          </p>
+                                        </div>
+                                      )
+                                    })}
                                 </div>
                               </div>
                             )}
