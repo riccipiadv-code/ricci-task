@@ -2124,7 +2124,7 @@ export type Database = {
             columns: ['executor_usuario_id']
             isOneToOne: false
             referencedRelation: 'task_usuarios'
-            referencedColumns: ['perfil_id']
+            referencedColumns: ['id']
           },
           {
             foreignKeyName: 'task_tarefas_nome_controle_id_fkey'
@@ -2138,7 +2138,7 @@ export type Database = {
             columns: ['responsavel_usuario_id']
             isOneToOne: false
             referencedRelation: 'task_usuarios'
-            referencedColumns: ['perfil_id']
+            referencedColumns: ['id']
           },
           {
             foreignKeyName: 'task_tarefas_status_id_fkey'
@@ -2226,10 +2226,16 @@ export type Database = {
         Args: { p_contato_id: string }
         Returns: undefined
       }
+      task_listar_usuarios_ativos: {
+        Args: never
+        Returns: {
+          id: string
+          nome: string
+        }[]
+      }
       task_normalizar_nome: { Args: { p_valor: string }; Returns: string }
       task_status_padrao_id: { Args: never; Returns: string }
       task_status_providencia_padrao_id: { Args: never; Returns: string }
-      task_usuario_sessao_ativa: { Args: never; Returns: boolean }
     }
     Enums: {
       perfil_type: 'socio_gestor' | 'gestor_area' | 'advogado' | 'estagiario' | 'administrativo'

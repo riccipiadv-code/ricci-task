@@ -37,6 +37,7 @@ export default function UsuariosPage() {
 
   const [usuarios, setUsuarios] = useState<TaskUsuarioRecord[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [busca, setBusca] = useState('')
 
   // Estado do Modal de Cadastro / Edição
@@ -57,15 +58,19 @@ export default function UsuariosPage() {
 
   const carregarUsuarios = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const data = await controleService.getTodosUsuarios()
       setUsuarios(data)
     } catch (err: any) {
       console.error('Erro ao carregar usuários:', err)
+      const msg =
+        err?.message || 'Não foi possível carregar a lista de usuários. Verifique sua conexão.'
+      setLoadError(msg)
       toast({
         variant: 'destructive',
         title: 'Erro ao carregar usuários',
-        description: 'Não foi possível carregar a lista de usuários. Verifique sua conexão.',
+        description: msg,
       })
     } finally {
       setLoading(false)
@@ -310,7 +315,28 @@ export default function UsuariosPage() {
         {loading ? (
           <div className="p-12 text-center text-muted-foreground flex items-center justify-center gap-2 text-sm">
             <Loader2 className="w-5 h-5 animate-spin text-primary" />
-            <span>Carregando usuários...</span>
+            <span>Carregando usuários do Ricci Task...</span>
+          </div>
+        ) : loadError ? (
+          <div className="p-12 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-destructive/10 text-destructive flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div className="space-y-1 max-w-md mx-auto">
+              <p className="font-semibold text-foreground text-sm">
+                Não foi possível carregar os usuários
+              </p>
+              <p className="text-xs text-muted-foreground">{loadError}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={carregarUsuarios}
+              className="rounded-xl text-xs"
+            >
+              <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+              Tentar novamente
+            </Button>
           </div>
         ) : listaFiltrada.length === 0 ? (
           <div className="p-12 text-center space-y-3">

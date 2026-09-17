@@ -187,7 +187,8 @@ export const controleService = {
   // --------------------------------------------------------------------------
   /**
    * Retorna os usuários disponíveis para seleção em novos controles ou edição:
-   * Filtro: ativo = true.
+   * Filtro: ativo = true exclusivamente para o formulário.
+   * Consulta exclusiva: task_usuarios.select('id, nome, email, ativo').
    * Ordenado alfabeticamente por nome.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
@@ -198,7 +199,7 @@ export const controleService = {
       .order('nome', { ascending: true })
 
     if (error) {
-      console.error('Erro ao buscar task_usuarios:', error)
+      console.error('Erro ao buscar task_usuarios ativos:', error)
       throw new Error(
         'Não foi possível carregar a lista de usuários disponíveis. Verifique sua conexão.',
       )
@@ -215,12 +216,13 @@ export const controleService = {
   },
 
   /**
-   * Retorna todos os usuários de task_usuarios (para a tela de administração/tabelas ou resolução de nomes).
+   * Retorna todos os usuários de task_usuarios (ativos e inativos), usando exclusivamente
+   * task_usuarios.select('id, nome, email, ativo').
    */
   async getTodosUsuarios(): Promise<TaskUsuarioRecord[]> {
     const { data, error } = await supabase
       .from('task_usuarios')
-      .select('id, nome, email, ativo, created_at, updated_at')
+      .select('id, nome, email, ativo')
       .order('nome', { ascending: true })
 
     if (error) {
@@ -257,7 +259,7 @@ export const controleService = {
         .from('task_usuarios')
         .update(payload)
         .eq('id', input.id)
-        .select('id, nome, email, ativo, created_at, updated_at')
+        .select('id, nome, email, ativo')
         .single()
 
       if (error) {
@@ -271,7 +273,7 @@ export const controleService = {
         .insert({
           ...payload,
         })
-        .select('id, nome, email, ativo, created_at, updated_at')
+        .select('id, nome, email, ativo')
         .single()
 
       if (error) {
@@ -438,16 +440,20 @@ export const controleService = {
   // Resolvendo responsáveis e executores a partir de task_usuarios
   // --------------------------------------------------------------------------
   async getControles(usuariosParam?: TaskUsuarioAtivoRecord[]): Promise<TaskControleRecord[]> {
-    // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores
+    // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores.
+    // Se falhar ou vier vazio, mantemos mapa vazio para não interromper a busca de task_tarefas.
     let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
     if (usuariosParam && usuariosParam.length > 0) {
       usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
-    } else {
+    } else if (usuariosParam === undefined) {
       try {
         const allUsers = await this.getTodosUsuarios()
         allUsers.forEach((u) => usuariosMap.set(u.id, { id: u.id, nome: u.nome, email: u.email }))
       } catch (err) {
-        console.error('Aviso ao obter usuários para resolução de controles:', err)
+        console.error(
+          'Aviso ao obter usuários para resolução de controles (usando lista vazia):',
+          err,
+        )
       }
     }
 

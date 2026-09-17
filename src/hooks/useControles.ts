@@ -54,20 +54,42 @@ export function useControles() {
     })
   }, [])
 
-  // Carrega catálogos, usuários ativos via RPC e controles
+  // Carrega catálogos, usuários e controles.
+  // Resiliente: se a busca de usuários falhar, usamos uma lista vazia, registramos o erro no console
+  // e prosseguimos com o carregamento dos Controles (task_tarefas) normalmente.
   const carregarDadosCompletos = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [stList, stProvList, tpList, nomes, users] = await Promise.all([
-        controleService.getStatus(),
-        controleService.getStatusProvidencia(),
-        controleService.getTiposPrazo(),
-        controleService.getNomesControle({ incluirInativos: true }),
-        controleService.getUsuariosAtivos(),
-      ])
+      // 1. Busca usuários com fallback seguro para não travar a aplicação
+      let users: TaskUsuarioAtivoRecord[] = []
+      try {
+        users = await controleService.getUsuariosAtivos()
+      } catch (userErr: any) {
+        console.error('Falha ao carregar usuários de task_usuarios em useControles:', userErr)
+        users = []
+      }
 
-      const ctrlList = await controleService.getControles(users)
+      // 2. Busca tabelas auxiliares e os Controles (task_tarefas sempre é buscada)
+      const [stList, stProvList, tpList, nomes, ctrlList] = await Promise.all([
+        controleService.getStatus().catch((err) => {
+          console.error('Aviso ao buscar task_status:', err)
+          return []
+        }),
+        controleService.getStatusProvidencia().catch((err) => {
+          console.error('Aviso ao buscar task_status_providencia:', err)
+          return []
+        }),
+        controleService.getTiposPrazo().catch((err) => {
+          console.error('Aviso ao buscar task_tipos_prazo:', err)
+          return []
+        }),
+        controleService.getNomesControle({ incluirInativos: true }).catch((err) => {
+          console.error('Aviso ao buscar task_nomes_controle:', err)
+          return []
+        }),
+        controleService.getControles(users),
+      ])
 
       setStatusList(stList)
       setStatusProvidenciaList(stProvList)
@@ -76,7 +98,7 @@ export function useControles() {
       setUsuariosAtivos(users)
       setControles(ctrlList)
     } catch (err: any) {
-      console.error('Erro ao carregar dados do Ricci Task:', err)
+      console.error('Erro ao carregar controles do Ricci Task:', err)
       setError(err?.message || 'Falha ao sincronizar dados com o Supabase.')
     } finally {
       setLoading(false)
