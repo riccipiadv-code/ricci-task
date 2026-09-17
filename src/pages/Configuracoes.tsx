@@ -310,9 +310,7 @@ export default function ConfiguracoesPage() {
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Responsável e Executor:</span>
-              <span className="text-foreground">
-                task_usuarios (ativo = true e ativo_no_conectai = true)
-              </span>
+              <span className="text-foreground">task_usuarios (ativo = true)</span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground text-[11px]">
               <span className="text-muted-foreground">Fonte:</span>

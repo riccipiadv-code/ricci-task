@@ -2188,36 +2188,27 @@ export type Database = {
       task_usuarios: {
         Row: {
           ativo: boolean
-          ativo_no_conectai: boolean
           created_at: string
-          created_by: string | null
           email: string
+          id: string
           nome: string
-          perfil_id: string
           updated_at: string
-          updated_by: string | null
         }
         Insert: {
           ativo?: boolean
-          ativo_no_conectai?: boolean
           created_at?: string
-          created_by?: string | null
           email: string
+          id?: string
           nome: string
-          perfil_id: string
           updated_at?: string
-          updated_by?: string | null
         }
         Update: {
           ativo?: boolean
-          ativo_no_conectai?: boolean
           created_at?: string
-          created_by?: string | null
           email?: string
+          id?: string
           nome?: string
-          perfil_id?: string
           updated_at?: string
-          updated_by?: string | null
         }
         Relationships: []
       }
@@ -2235,15 +2226,7 @@ export type Database = {
         Args: { p_contato_id: string }
         Returns: undefined
       }
-      task_listar_usuarios_ativos: {
-        Args: never
-        Returns: {
-          id: string
-          nome: string
-        }[]
-      }
       task_normalizar_nome: { Args: { p_valor: string }; Returns: string }
-      task_sincronizar_usuarios_origem: { Args: never; Returns: number }
       task_status_padrao_id: { Args: never; Returns: string }
       task_status_providencia_padrao_id: { Args: never; Returns: string }
       task_usuario_sessao_ativa: { Args: never; Returns: boolean }

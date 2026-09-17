@@ -53,23 +53,26 @@ export interface TaskNomeControleRecord {
 }
 
 export interface TaskUsuarioAtivoRecord {
-  id: string // mapeado a partir de task_usuarios.perfil_id
+  id: string
   nome: string
   email?: string
   ativo?: boolean
-  ativo_no_conectai?: boolean
 }
 
 export interface TaskUsuarioRecord {
-  perfil_id: string
+  id: string
   nome: string
   email: string
   ativo: boolean
-  ativo_no_conectai: boolean
-  created_at: string
-  updated_at: string
-  created_by?: string | null
-  updated_by?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface SaveUsuarioInput {
+  id?: string
+  nome: string
+  email: string
+  ativo?: boolean
 }
 
 export interface TaskProvidenciaRecord {

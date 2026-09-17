@@ -3,21 +3,32 @@ import {
   Users,
   Search,
   RotateCw,
-  Power,
   CheckCircle2,
   XCircle,
   X,
   Loader2,
   Mail,
-  RefreshCw,
-  Info,
+  Plus,
+  Pencil,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react'
 import { controleService } from '@/services/controleService'
 import { TaskUsuarioRecord } from '@/types/task'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
@@ -26,9 +37,23 @@ export default function UsuariosPage() {
 
   const [usuarios, setUsuarios] = useState<TaskUsuarioRecord[]>([])
   const [loading, setLoading] = useState(true)
-  const [sincronizando, setSincronizando] = useState(false)
-  const [atualizandoId, setAtualizandoId] = useState<string | null>(null)
   const [busca, setBusca] = useState('')
+
+  // Estado do Modal de Cadastro / Edição
+  const [modalOpen, setModalOpen] = useState(false)
+  const [usuarioEditando, setUsuarioEditando] = useState<TaskUsuarioRecord | null>(null)
+  const [formNome, setFormNome] = useState('')
+  const [formEmail, setFormEmail] = useState('')
+  const [formAtivo, setFormAtivo] = useState(true)
+  const [formNomeError, setFormNomeError] = useState<string | null>(null)
+  const [formEmailError, setFormEmailError] = useState<string | null>(null)
+  const [formGeralError, setFormGeralError] = useState<string | null>(null)
+  const [salvando, setSalvando] = useState(false)
+
+  // Estado do Modal de Confirmação de Exclusão
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [usuarioParaExcluir, setUsuarioParaExcluir] = useState<TaskUsuarioRecord | null>(null)
+  const [excluindo, setExcluindo] = useState(false)
 
   const carregarUsuarios = useCallback(async () => {
     setLoading(true)
@@ -36,7 +61,7 @@ export default function UsuariosPage() {
       const data = await controleService.getTodosUsuarios()
       setUsuarios(data)
     } catch (err: any) {
-      console.error('Erro ao carregar usuários de task_usuarios:', err)
+      console.error('Erro ao carregar usuários:', err)
       toast({
         variant: 'destructive',
         title: 'Erro ao carregar usuários',
@@ -51,57 +76,154 @@ export default function UsuariosPage() {
     carregarUsuarios()
   }, [carregarUsuarios])
 
-  const handleSincronizar = async () => {
-    if (sincronizando) return
-    setSincronizando(true)
+  // Abrir modal de criação
+  const handleNovoUsuario = () => {
+    setUsuarioEditando(null)
+    setFormNome('')
+    setFormEmail('')
+    setFormAtivo(true)
+    setFormNomeError(null)
+    setFormEmailError(null)
+    setFormGeralError(null)
+    setModalOpen(true)
+  }
+
+  // Abrir modal de edição
+  const handleEditarUsuario = (u: TaskUsuarioRecord) => {
+    setUsuarioEditando(u)
+    setFormNome(u.nome)
+    setFormEmail(u.email)
+    setFormAtivo(u.ativo)
+    setFormNomeError(null)
+    setFormEmailError(null)
+    setFormGeralError(null)
+    setModalOpen(true)
+  }
+
+  // Submeter formulário (criação / edição)
+  const handleSalvarUsuario = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (salvando) return
+
+    setFormNomeError(null)
+    setFormEmailError(null)
+    setFormGeralError(null)
+
+    const nomeClean = formNome.trim()
+    const emailClean = formEmail.trim().toLowerCase()
+
+    let hasError = false
+    if (!nomeClean) {
+      setFormNomeError('O nome é obrigatório.')
+      hasError = true
+    }
+
+    if (!emailClean) {
+      setFormEmailError('O e-mail é obrigatório.')
+      hasError = true
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
+      setFormEmailError('Informe um e-mail válido.')
+      hasError = true
+    }
+
+    if (hasError) return
+
+    setSalvando(true)
     try {
-      const total = await controleService.sincronizarUsuariosOrigem()
-      await carregarUsuarios()
-      toast({
-        title: 'Usuários atualizados',
-        description: `Sincronização concluída com sucesso. Total de ${total} usuário(s) na base do Ricci Task.`,
+      const saved = await controleService.saveUsuario({
+        id: usuarioEditando?.id,
+        nome: nomeClean,
+        email: emailClean,
+        ativo: formAtivo,
       })
+
+      if (usuarioEditando) {
+        setUsuarios((prev) => prev.map((u) => (u.id === saved.id ? saved : u)))
+        toast({
+          title: 'Usuário atualizado com sucesso',
+          description: `Os dados de "${saved.nome}" foram alterados.`,
+        })
+      } else {
+        setUsuarios((prev) => [...prev, saved])
+        toast({
+          title: 'Usuário cadastrado com sucesso',
+          description: `"${saved.nome}" foi adicionado aos usuários.`,
+        })
+      }
+
+      setModalOpen(false)
     } catch (err: any) {
-      console.error('Erro ao sincronizar usuários com origem:', err)
-      toast({
-        variant: 'destructive',
-        title: 'Erro na sincronização',
-        description:
-          'Não foi possível atualizar a lista de usuários com a origem. Tente novamente em instantes.',
-      })
+      console.error('Erro ao salvar usuário:', err)
+      const errorMsg = String(err?.message || '')
+      const isUniqueEmail =
+        err?.code === '23505' ||
+        errorMsg.includes('23505') ||
+        errorMsg.includes('task_usuarios_email_normalizado_uidx') ||
+        errorMsg.includes('task_usuarios_email_key') ||
+        errorMsg.toLowerCase().includes('duplicate key')
+
+      if (isUniqueEmail) {
+        setFormEmailError('Já existe um usuário cadastrado com este e-mail.')
+      } else {
+        setFormGeralError(err?.message || 'Ocorreu um erro ao salvar o usuário. Tente novamente.')
+      }
     } finally {
-      setSincronizando(false)
+      setSalvando(false)
     }
   }
 
-  const handleToggleAtivo = async (usuario: TaskUsuarioRecord) => {
-    const novoStatus = !usuario.ativo
-    setAtualizandoId(usuario.perfil_id)
+  // Iniciar exclusão de usuário
+  const handleSolicitarExclusao = (u: TaskUsuarioRecord) => {
+    setUsuarioParaExcluir(u)
+    setDeleteConfirmOpen(true)
+  }
+
+  // Confirmar exclusão real (DELETE)
+  const handleConfirmarExclusao = async () => {
+    if (!usuarioParaExcluir || excluindo) return
+
+    setExcluindo(true)
     try {
-      await controleService.toggleUsuarioAtivo(usuario.perfil_id, novoStatus)
-      setUsuarios((prev) =>
-        prev.map((u) => (u.perfil_id === usuario.perfil_id ? { ...u, ativo: novoStatus } : u)),
-      )
+      await controleService.deleteUsuario(usuarioParaExcluir.id)
+      setUsuarios((prev) => prev.filter((u) => u.id !== usuarioParaExcluir.id))
+      setDeleteConfirmOpen(false)
       toast({
-        title: novoStatus ? 'Usuário ativado' : 'Usuário desativado',
-        description: `A situação de "${usuario.nome}" no Ricci Task foi alterada para ${
-          novoStatus ? 'Ativo' : 'Inativo'
-        }.`,
+        title: 'Usuário excluído',
+        description: `O usuário "${usuarioParaExcluir.nome}" foi removido com sucesso.`,
       })
+      setUsuarioParaExcluir(null)
     } catch (err: any) {
-      console.error('Erro ao alterar situação do usuário em task_usuarios:', err)
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao alterar situação',
-        description:
-          'Não foi possível atualizar a situação do usuário. Verifique suas permissões de acesso.',
-      })
+      console.error('Erro ao excluir usuário:', err)
+      setDeleteConfirmOpen(false)
+
+      const errorMsg = String(err?.message || '')
+      const isFkError =
+        err?.code === '23503' ||
+        errorMsg.includes('23503') ||
+        errorMsg.toLowerCase().includes('foreign key') ||
+        errorMsg.toLowerCase().includes('violates foreign key constraint') ||
+        errorMsg.toLowerCase().includes('task_tarefas')
+
+      if (isFkError) {
+        toast({
+          variant: 'destructive',
+          title: 'Não é possível excluir',
+          description:
+            'Este usuário possui controles vinculados e não pode ser excluído. Desative-o para preservar o histórico.',
+        })
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao excluir usuário',
+          description: err?.message || 'Falha ao excluir o usuário. Tente novamente.',
+        })
+      }
     } finally {
-      setAtualizandoId(null)
+      setExcluindo(false)
     }
   }
 
-  // Filtragem e ordenação
+  // Filtragem e ordenação por nome
   const listaFiltrada = useMemo(() => {
     let list = [...usuarios]
     if (busca.trim()) {
@@ -114,10 +236,6 @@ export default function UsuariosPage() {
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [usuarios, busca])
-
-  const totalDisponiveis = useMemo(() => {
-    return usuarios.filter((u) => u.ativo && u.ativo_no_conectai).length
-  }, [usuarios])
 
   return (
     <div className="space-y-6 animate-fade-in w-full min-w-0">
@@ -132,42 +250,24 @@ export default function UsuariosPage() {
               variant="outline"
               size="sm"
               onClick={carregarUsuarios}
-              disabled={loading || sincronizando}
+              disabled={loading || salvando || excluindo}
               className="h-10 rounded-xl px-3 border-border hover:bg-muted"
               title="Recarregar listagem"
             >
               <RotateCw className={cn('w-4 h-4', loading && 'animate-spin')} />
             </Button>
             <Button
-              onClick={handleSincronizar}
-              disabled={sincronizando || loading}
+              onClick={handleNovoUsuario}
               className="h-10 px-4 rounded-xl font-semibold bg-primary hover:bg-[#4A4AC2] text-primary-foreground shadow-sm flex items-center gap-2"
-              title="Sincronizar tabela própria de usuários com a base de origem"
             >
-              <RefreshCw className={cn('w-4 h-4', sincronizando && 'animate-spin')} />
-              <span>{sincronizando ? 'Atualizando...' : 'Atualizar usuários'}</span>
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Novo Usuário</span>
             </Button>
           </div>
         }
       />
 
-      {/* Nota explicativa de integridade */}
-      <div className="rounded-2xl p-4 bg-muted/40 border border-border/70 flex items-start gap-3 text-xs text-muted-foreground">
-        <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <p className="font-semibold text-foreground">
-            Regra de seleção para Responsável e Executor
-          </p>
-          <p>
-            Apenas usuários com situação <strong>Ativo no Ricci Task</strong> e{' '}
-            <strong>Ativo no Conectaí</strong> ficam disponíveis para seleção nos controles de
-            casos. Usuários inativos no Conectaí são identificados com indicador visual e não podem
-            ser selecionados.
-          </p>
-        </div>
-      </div>
-
-      {/* Barra de Busca e Métricas rápidas */}
+      {/* Barra de Busca e Contadores */}
       <div className="bg-card border border-border rounded-2xl p-4 shadow-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="relative flex-1 max-w-md">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
@@ -196,15 +296,11 @@ export default function UsuariosPage() {
           </span>
           <span>•</span>
           <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-            Disponíveis nos controles: {totalDisponiveis}
+            Ativos: {usuarios.filter((u) => u.ativo).length}
           </span>
           <span>•</span>
           <span className="text-muted-foreground">
-            Inativos Ricci Task: {usuarios.filter((u) => !u.ativo).length}
-          </span>
-          <span>•</span>
-          <span className="text-amber-600 dark:text-amber-400 font-medium">
-            Inativos Conectaí: {usuarios.filter((u) => !u.ativo_no_conectai).length}
+            Inativos: {usuarios.filter((u) => !u.ativo).length}
           </span>
         </div>
       </div>
@@ -214,7 +310,7 @@ export default function UsuariosPage() {
         {loading ? (
           <div className="p-12 text-center text-muted-foreground flex items-center justify-center gap-2 text-sm">
             <Loader2 className="w-5 h-5 animate-spin text-primary" />
-            <span>Carregando usuários do Ricci Task...</span>
+            <span>Carregando usuários...</span>
           </div>
         ) : listaFiltrada.length === 0 ? (
           <div className="p-12 text-center space-y-3">
@@ -226,10 +322,10 @@ export default function UsuariosPage() {
               <p className="text-xs text-muted-foreground">
                 {busca
                   ? 'Tente buscar por outro termo ou nome.'
-                  : 'Clique em "Atualizar usuários" para sincronizar a base.'}
+                  : 'Clique no botão "Novo Usuário" para cadastrar.'}
               </p>
             </div>
-            {busca && (
+            {busca ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -238,120 +334,271 @@ export default function UsuariosPage() {
               >
                 Limpar busca
               </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={handleNovoUsuario}
+                className="rounded-xl text-xs bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Novo Usuário
+              </Button>
             )}
           </div>
         ) : (
-          <div className="divide-y divide-border/70">
-            {listaFiltrada.map((item) => {
-              const estaAtualizando = atualizandoId === item.perfil_id
-              const disponivelParaSelecao = item.ativo && item.ativo_no_conectai
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-border/80 bg-muted/40 text-xs font-semibold text-muted-foreground">
+                  <th className="py-3 px-4">Nome</th>
+                  <th className="py-3 px-4">E-mail</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60 text-sm">
+                {listaFiltrada.map((item) => (
+                  <tr key={item.id} className="hover:bg-muted/30 transition-colors">
+                    {/* Coluna Nome */}
+                    <td className="py-3.5 px-4 font-semibold text-foreground">{item.nome}</td>
 
-              return (
-                <div
-                  key={item.perfil_id}
-                  className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 hover:bg-muted/30 transition-colors"
-                >
-                  {/* Dados do usuário */}
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="font-semibold text-sm text-foreground leading-snug break-words">
-                        {item.nome}
-                      </span>
-
-                      {disponivelParaSelecao ? (
-                        <Badge
-                          variant="secondary"
-                          className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>Disponível nos Controles</span>
-                        </Badge>
-                      ) : (
-                        <Badge
-                          variant="secondary"
-                          className="bg-muted text-muted-foreground border border-border text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1"
-                        >
-                          <XCircle className="w-3 h-3" />
-                          <span>Indisponível nos Controles</span>
-                        </Badge>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                      <span className="flex items-center gap-1">
-                        <Mail className="w-3 h-3 text-muted-foreground/70" />
+                    {/* Coluna E-mail */}
+                    <td className="py-3.5 px-4 text-muted-foreground text-xs sm:text-sm">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Mail className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
                         <span>{item.email}</span>
                       </span>
-                    </div>
-                  </div>
+                    </td>
 
-                  {/* Situações e Ação de Ativar/Desativar */}
-                  <div className="flex items-center gap-3 shrink-0 flex-wrap justify-between md:justify-end pt-2 md:pt-0 border-t md:border-t-0 border-border/50">
-                    {/* Situação Conectaí */}
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <span className="text-[11px] text-muted-foreground">Conectaí:</span>
-                      {item.ativo_no_conectai ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Ativo
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
-                          <XCircle className="w-3 h-3" />
-                          Inativo na Origem
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Situação Ricci Task */}
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <span className="text-[11px] text-muted-foreground">Ricci Task:</span>
+                    {/* Coluna Status */}
+                    <td className="py-3.5 px-4">
                       {item.ativo ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                        <Badge
+                          variant="secondary"
+                          className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-xs font-semibold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1"
+                        >
                           <CheckCircle2 className="w-3 h-3" />
-                          Ativo
-                        </span>
+                          <span>Ativo</span>
+                        </Badge>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-muted text-muted-foreground border border-border">
+                        <Badge
+                          variant="secondary"
+                          className="bg-muted text-muted-foreground border border-border text-xs font-medium px-2.5 py-0.5 rounded-full inline-flex items-center gap-1"
+                        >
                           <XCircle className="w-3 h-3" />
-                          Inativo
-                        </span>
+                          <span>Inativo</span>
+                        </Badge>
                       )}
-                    </div>
+                    </td>
 
-                    {/* Botão de Toggle Ativar/Desativar no Ricci Task */}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={estaAtualizando}
-                      onClick={() => handleToggleAtivo(item)}
-                      className={cn(
-                        'h-8 px-2.5 text-xs rounded-xl transition-colors',
-                        item.ativo
-                          ? 'text-muted-foreground hover:text-amber-600 hover:bg-amber-500/10'
-                          : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10',
-                      )}
-                      title={
-                        item.ativo
-                          ? 'Desativar este usuário no Ricci Task'
-                          : 'Ativar este usuário no Ricci Task'
-                      }
-                    >
-                      {estaAtualizando ? (
-                        <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <Power className="w-3.5 h-3.5 mr-1" />
-                      )}
-                      <span>{item.ativo ? 'Desativar no RT' : 'Ativar no RT'}</span>
-                    </Button>
-                  </div>
-                </div>
-              )
-            })}
+                    {/* Coluna Ações */}
+                    <td className="py-3.5 px-4 text-right">
+                      <div className="inline-flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditarUsuario(item)}
+                          className="h-8 px-2.5 text-xs rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground"
+                          title="Editar usuário"
+                        >
+                          <Pencil className="w-3.5 h-3.5 mr-1" />
+                          <span>Editar</span>
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleSolicitarExclusao(item)}
+                          className="h-8 px-2.5 text-xs rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                          title="Excluir usuário"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-1" />
+                          <span>Excluir</span>
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
+
+      {/* Modal de Cadastro / Edição de Usuário */}
+      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+        <DialogContent className="sm:max-w-[480px] rounded-2xl p-6">
+          <form onSubmit={handleSalvarUsuario} className="space-y-5">
+            <DialogHeader className="space-y-1">
+              <DialogTitle className="text-lg font-bold text-foreground">
+                {usuarioEditando ? 'Editar Usuário' : 'Novo Usuário'}
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                {usuarioEditando
+                  ? 'Atualize os dados e a situação do usuário.'
+                  : 'Preencha os campos para cadastrar um novo usuário.'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {/* Campo Nome */}
+              <div className="space-y-1.5">
+                <Label htmlFor="usuario-nome" className="text-xs font-semibold text-foreground">
+                  Nome <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="usuario-nome"
+                  type="text"
+                  placeholder="Nome completo do usuário"
+                  value={formNome}
+                  onChange={(e) => {
+                    setFormNome(e.target.value)
+                    if (formNomeError) setFormNomeError(null)
+                  }}
+                  disabled={salvando}
+                  className={cn(
+                    'h-10 rounded-xl bg-background text-sm',
+                    formNomeError && 'border-destructive focus-visible:ring-destructive',
+                  )}
+                  autoFocus
+                />
+                {formNomeError && (
+                  <p className="text-xs text-destructive font-medium">{formNomeError}</p>
+                )}
+              </div>
+
+              {/* Campo E-mail */}
+              <div className="space-y-1.5">
+                <Label htmlFor="usuario-email" className="text-xs font-semibold text-foreground">
+                  E-mail <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="usuario-email"
+                  type="email"
+                  placeholder="exemplo@email.com"
+                  value={formEmail}
+                  onChange={(e) => {
+                    setFormEmail(e.target.value)
+                    if (formEmailError) setFormEmailError(null)
+                  }}
+                  disabled={salvando}
+                  className={cn(
+                    'h-10 rounded-xl bg-background text-sm',
+                    formEmailError && 'border-destructive focus-visible:ring-destructive',
+                  )}
+                />
+                {formEmailError && (
+                  <p className="text-xs text-destructive font-medium">{formEmailError}</p>
+                )}
+              </div>
+
+              {/* Campo Status (Ativo / Inativo) */}
+              <div className="p-3.5 rounded-xl bg-muted/40 border border-border flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="usuario-status"
+                    className="text-xs font-semibold text-foreground cursor-pointer"
+                  >
+                    Status
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    {formAtivo
+                      ? 'Usuário ativo e disponível para seleção nos controles.'
+                      : 'Usuário inativo. Não aparecerá para seleção em novos controles.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      'text-xs font-semibold',
+                      formAtivo
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-muted-foreground',
+                    )}
+                  >
+                    {formAtivo ? 'Ativo' : 'Inativo'}
+                  </span>
+                  <Switch
+                    id="usuario-status"
+                    checked={formAtivo}
+                    onCheckedChange={setFormAtivo}
+                    disabled={salvando}
+                  />
+                </div>
+              </div>
+
+              {/* Erro geral */}
+              {formGeralError && (
+                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{formGeralError}</span>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setModalOpen(false)}
+                disabled={salvando}
+                className="h-10 rounded-xl text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={salvando}
+                className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary hover:bg-[#4A4AC2] text-primary-foreground shadow-sm"
+              >
+                {salvando && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                <span>{salvando ? 'Salvando...' : 'Salvar'}</span>
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Confirmação de Exclusão (Requisito 4) */}
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="sm:max-w-[420px] rounded-2xl p-6">
+          <DialogHeader className="flex flex-col items-start gap-2">
+            <div className="h-10 w-10 rounded-full bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <DialogTitle className="text-lg font-bold text-foreground">Excluir usuário</DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground">
+              Deseja excluir esse usuário?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4 gap-2 sm:gap-0 flex-col-reverse sm:flex-row">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={excluindo}
+              onClick={() => {
+                setDeleteConfirmOpen(false)
+                setUsuarioParaExcluir(null)
+              }}
+              className="h-10 rounded-xl"
+            >
+              Não
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={excluindo}
+              onClick={handleConfirmarExclusao}
+              className="h-10 rounded-xl bg-destructive hover:bg-destructive/90 text-destructive-foreground font-semibold"
+            >
+              {excluindo && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              <span>{excluindo ? 'Excluindo...' : 'Sim'}</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

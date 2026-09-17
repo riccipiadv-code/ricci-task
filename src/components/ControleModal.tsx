@@ -191,15 +191,14 @@ export function ControleModal({
           const todos = await controleService.getTodosUsuarios()
           todos.forEach((tu) => {
             if (
-              (tu.perfil_id === respId || tu.perfil_id === execId) &&
-              !listaCombinada.some((u) => u.id === tu.perfil_id)
+              (tu.id === respId || tu.id === execId) &&
+              !listaCombinada.some((u) => u.id === tu.id)
             ) {
               listaCombinada.push({
-                id: tu.perfil_id,
+                id: tu.id,
                 nome: tu.nome,
                 email: tu.email,
                 ativo: tu.ativo,
-                ativo_no_conectai: tu.ativo_no_conectai,
               })
             }
           })
@@ -303,13 +302,12 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
-  // Opções de Responsáveis (task_usuarios com ativo e ativo_no_conectai = true, ou o já selecionado)
+  // Opções de Responsáveis (task_usuarios com ativo = true, ou o já selecionado)
   const opcoesResponsaveis = useMemo(() => {
     let list = usuariosLista.filter((u) => {
       // Sempre permitir o usuário que já está selecionado na edição (para preservá-lo)
       if (u.id === responsavelUsuarioId) return true
-      // Novos ou outras seleções: apenas ativos em ambos
-      return (u.ativo ?? true) && (u.ativo_no_conectai ?? true)
+      return u.ativo ?? true
     })
     if (buscaRespSelect.trim()) {
       const q = buscaRespSelect.trim().toLowerCase()
@@ -320,13 +318,12 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [usuariosLista, responsavelUsuarioId, buscaRespSelect])
 
-  // Opções de Executores (task_usuarios com ativo e ativo_no_conectai = true, ou o já selecionado)
+  // Opções de Executores (task_usuarios com ativo = true, ou o já selecionado)
   const opcoesExecutores = useMemo(() => {
     let list = usuariosLista.filter((u) => {
       // Sempre permitir o usuário que já está selecionado na edição (para preservá-lo)
       if (u.id === executorUsuarioId) return true
-      // Novos ou outras seleções: apenas ativos em ambos
-      return (u.ativo ?? true) && (u.ativo_no_conectai ?? true)
+      return u.ativo ?? true
     })
     if (buscaExecSelect.trim()) {
       const q = buscaExecSelect.trim().toLowerCase()
@@ -884,7 +881,6 @@ export function ControleModal({
                           ) : (
                             opcoesResponsaveis.map((r) => {
                               const isInativoLocal = r.ativo === false
-                              const isInativoConectai = r.ativo_no_conectai === false
                               return (
                                 <SelectItem key={r.id} value={r.id} className="py-2">
                                   <div className="flex flex-col gap-0.5 text-left">
@@ -892,9 +888,9 @@ export function ControleModal({
                                       <span className="font-semibold text-foreground text-xs">
                                         {r.nome}
                                       </span>
-                                      {(isInativoLocal || isInativoConectai) && (
+                                      {isInativoLocal && (
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
-                                          {isInativoConectai ? 'Inativo Conectaí' : 'Inativo RT'}
+                                          Inativo
                                         </span>
                                       )}
                                     </div>
@@ -973,7 +969,6 @@ export function ControleModal({
                           ) : (
                             opcoesExecutores.map((e) => {
                               const isInativoLocal = e.ativo === false
-                              const isInativoConectai = e.ativo_no_conectai === false
                               return (
                                 <SelectItem key={e.id} value={e.id} className="py-2">
                                   <div className="flex flex-col gap-0.5 text-left">
@@ -981,9 +976,9 @@ export function ControleModal({
                                       <span className="font-semibold text-foreground text-xs">
                                         {e.nome}
                                       </span>
-                                      {(isInativoLocal || isInativoConectai) && (
+                                      {isInativoLocal && (
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
-                                          {isInativoConectai ? 'Inativo Conectaí' : 'Inativo RT'}
+                                          Inativo
                                         </span>
                                       )}
                                     </div>

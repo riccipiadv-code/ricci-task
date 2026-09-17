@@ -8,6 +8,7 @@ import {
   TaskNomeControleRecord,
   TaskUsuarioAtivoRecord,
   TaskUsuarioRecord,
+  SaveUsuarioInput,
   TaskProvidenciaRecord,
   SaveControleInput,
   SaveProvidenciaInput,
@@ -186,16 +187,14 @@ export const controleService = {
   // --------------------------------------------------------------------------
   /**
    * Retorna os usuários disponíveis para seleção em novos controles ou edição:
-   * Filtro obrigatório: ativo = true AND ativo_no_conectai = true.
+   * Filtro: ativo = true.
    * Ordenado alfabeticamente por nome.
-   * Mapeia perfil_id para id, preservando compatibilidade com controles e filtros.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
     const { data, error } = await supabase
       .from('task_usuarios')
-      .select('perfil_id, nome, email, ativo, ativo_no_conectai')
+      .select('id, nome, email, ativo')
       .eq('ativo', true)
-      .eq('ativo_no_conectai', true)
       .order('nome', { ascending: true })
 
     if (error) {
@@ -206,11 +205,10 @@ export const controleService = {
     }
 
     const lista: TaskUsuarioAtivoRecord[] = (data || []).map((u) => ({
-      id: u.perfil_id,
+      id: u.id,
       nome: u.nome,
       email: u.email,
       ativo: u.ativo,
-      ativo_no_conectai: u.ativo_no_conectai,
     }))
 
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
@@ -222,7 +220,7 @@ export const controleService = {
   async getTodosUsuarios(): Promise<TaskUsuarioRecord[]> {
     const { data, error } = await supabase
       .from('task_usuarios')
-      .select('*')
+      .select('id, nome, email, ativo, created_at, updated_at')
       .order('nome', { ascending: true })
 
     if (error) {
@@ -234,21 +232,67 @@ export const controleService = {
   },
 
   /**
+   * Cadastra ou atualiza um usuário em task_usuarios.
+   */
+  async saveUsuario(input: SaveUsuarioInput): Promise<TaskUsuarioRecord> {
+    const cleanNome = input.nome.trim()
+    const cleanEmail = input.email.trim().toLowerCase()
+
+    if (!cleanNome) {
+      throw new Error('O Nome do usuário é obrigatório.')
+    }
+    if (!cleanEmail) {
+      throw new Error('O E-mail do usuário é obrigatório.')
+    }
+
+    const payload = {
+      nome: cleanNome,
+      email: cleanEmail,
+      ativo: input.ativo !== undefined ? input.ativo : true,
+      updated_at: new Date().toISOString(),
+    }
+
+    if (input.id) {
+      const { data, error } = await supabase
+        .from('task_usuarios')
+        .update(payload)
+        .eq('id', input.id)
+        .select('id, nome, email, ativo, created_at, updated_at')
+        .single()
+
+      if (error) {
+        console.error('Erro ao atualizar task_usuarios:', error)
+        throw error
+      }
+      return data as TaskUsuarioRecord
+    } else {
+      const { data, error } = await supabase
+        .from('task_usuarios')
+        .insert({
+          ...payload,
+        })
+        .select('id, nome, email, ativo, created_at, updated_at')
+        .single()
+
+      if (error) {
+        console.error('Erro ao criar task_usuarios:', error)
+        throw error
+      }
+      return data as TaskUsuarioRecord
+    }
+  },
+
+  /**
    * Altera exclusivamente o campo 'ativo' de um registro em task_usuarios.
    */
-  async toggleUsuarioAtivo(perfilId: string, novoAtivo: boolean): Promise<void> {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
+  async toggleUsuarioAtivo(id: string, novoAtivo: boolean): Promise<void> {
     const { error } = await supabase
       .from('task_usuarios')
       .update({
         ativo: novoAtivo,
         updated_at: new Date().toISOString(),
-        updated_by: user?.id || null,
       })
-      .eq('perfil_id', perfilId)
+      .eq('id', id)
 
     if (error) {
       console.error('Erro ao atualizar ativo em task_usuarios:', error)
@@ -257,18 +301,16 @@ export const controleService = {
   },
 
   /**
-   * Sincroniza a tabela task_usuarios com a origem através da RPC task_sincronizar_usuarios_origem.
-   * Não altera logins ou perfis de origem, apenas atualiza a tabela interna task_usuarios.
+   * Exclui fisicamente um usuário do Ricci Task.
+   * Se o usuário estiver vinculado a controles (FK violation), lança erro específico.
    */
-  async sincronizarUsuariosOrigem(): Promise<number> {
-    const { data, error } = await supabase.rpc('task_sincronizar_usuarios_origem')
+  async deleteUsuario(id: string): Promise<void> {
+    const { error } = await supabase.from('task_usuarios').delete().eq('id', id)
 
     if (error) {
-      console.error('Erro ao executar RPC task_sincronizar_usuarios_origem:', error)
-      throw new Error('Falha ao sincronizar usuários com a base de origem.')
+      console.error('Erro ao excluir task_usuarios:', error)
+      throw error
     }
-
-    return typeof data === 'number' ? data : Number(data) || 0
   },
 
   // --------------------------------------------------------------------------
@@ -403,9 +445,7 @@ export const controleService = {
     } else {
       try {
         const allUsers = await this.getTodosUsuarios()
-        allUsers.forEach((u) =>
-          usuariosMap.set(u.perfil_id, { id: u.perfil_id, nome: u.nome, email: u.email }),
-        )
+        allUsers.forEach((u) => usuariosMap.set(u.id, { id: u.id, nome: u.nome, email: u.email }))
       } catch (err) {
         console.error('Aviso ao obter usuários para resolução de controles:', err)
       }
@@ -558,12 +598,11 @@ export const controleService = {
       try {
         const allUsers = await this.getTodosUsuarios()
         allUsers.forEach((u) =>
-          usuariosMap.set(u.perfil_id, {
-            id: u.perfil_id,
+          usuariosMap.set(u.id, {
+            id: u.id,
             nome: u.nome,
             email: u.email,
             ativo: u.ativo,
-            ativo_no_conectai: u.ativo_no_conectai,
           }),
         )
       } catch (err) {
