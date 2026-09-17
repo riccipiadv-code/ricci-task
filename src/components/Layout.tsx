@@ -107,9 +107,19 @@ export default function Layout({ children }: LayoutProps) {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row antialiased selection:bg-primary/20 selection:text-primary transition-colors duration-300 relative">
-      {/* Botão flutuante preso na borda esquerda quando o menu está 100% recolhido */}
+      {/* Backdrop para telas pequenas (< md) quando o menu lateral está expandido */}
+      {!sidebarCollapsed && (
+        <div
+          role="presentation"
+          onClick={() => handleToggleSidebar(true)}
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs md:hidden transition-opacity duration-300"
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Botão flutuante preso na borda esquerda quando o menu está 100% recolhido (visível em desktop e mobile) */}
       {sidebarCollapsed && (
-        <div className="hidden md:block fixed top-5 left-0 z-40 animate-fade-in">
+        <div className="fixed top-5 left-0 z-40 animate-fade-in">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -128,11 +138,20 @@ export default function Layout({ children }: LayoutProps) {
         </div>
       )}
 
-      {/* Desktop / Tablet Sidebar */}
+      {/* Sidebar Responsiva:
+          - Mobile (< md): fixed inset-y-0 left-0, z-50, w-72 (largura adequada), com translate-x para fora da tela quando recolhido
+          - Desktop/Tablet (>= md): integrado ao layout (md:relative md:top-0 md:min-h-screen md:sticky), w-64 quando aberto e w-0 quando recolhido
+      */}
       <aside
         className={cn(
-          'hidden md:flex flex-col border-r border-border bg-sidebar shrink-0 min-h-screen sticky top-0 transition-all duration-300 ease-in-out z-30 overflow-hidden',
-          sidebarCollapsed ? 'w-0 border-r-0 opacity-0 pointer-events-none' : 'w-64 opacity-100',
+          'flex flex-col bg-sidebar transition-all duration-300 ease-in-out overflow-hidden',
+          // Mobile (< md): Painel sobreposto fixed com z-50
+          'fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] shadow-2xl border-r border-border',
+          // Desktop (>= md): Integrado ao layout flex, sticky e z-30
+          'md:static md:inset-auto md:min-h-screen md:sticky md:top-0 md:shadow-none md:z-30 shrink-0',
+          sidebarCollapsed
+            ? '-translate-x-full opacity-0 pointer-events-none md:w-0 md:border-r-0 md:translate-x-0'
+            : 'translate-x-0 opacity-100 md:w-64',
         )}
       >
         {/* Brand / Logo + Botão de Recolher */}
