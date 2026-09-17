@@ -446,7 +446,129 @@ export const controleService = {
   async getControlesArquivados(
     usuariosParam?: TaskUsuarioAtivoRecord[],
   ): Promise<TaskControleRecord[]> {
-    return this.fetchControlesList({ apenasArquivados: true }, usuariosParam)
+    // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores.
+    // Resiliente: se falhar ou vier vazio, mantemos mapa vazio para não descartar nenhum controle.
+    let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
+    if (usuariosParam && usuariosParam.length > 0) {
+      usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
+    } else {
+      try {
+        const allUsers = await this.getTodosUsuarios()
+        allUsers.forEach((u) => usuariosMap.set(u.id, { id: u.id, nome: u.nome, email: u.email }))
+      } catch (err) {
+        console.error(
+          'Aviso ao obter usuários para resolução de controles arquivados (usando lista vazia):',
+          err,
+        )
+      }
+    }
+
+    // 2. Consulta parte DIRETAMENTE de public.task_tarefas com LEFT JOINs opcionais (sem !inner).
+    // Critérios estritos: apenas .not('arquivado_at', 'is', null) e .order('arquivado_at', { ascending: false }).
+    // Não aplica filtros de status, prazo, providência, deleted_at, responsável ou executor.
+    const { data: tarefasRaw, error: tarefasError } = await supabase
+      .from('task_tarefas')
+      .select(`
+        *,
+        nome_controle_obj:task_nomes_controle(id, nome),
+        status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
+      `)
+      .not('arquivado_at', 'is', null)
+      .order('arquivado_at', { ascending: false })
+
+    if (tarefasError) {
+      console.error('Erro ao buscar task_tarefas arquivadas:', tarefasError)
+      throw tarefasError
+    }
+
+    if (!tarefasRaw || tarefasRaw.length === 0) {
+      return []
+    }
+
+    const tarefaIds = tarefasRaw.map((t) => t.id)
+
+    // 3. Busca providências associadas aos controles arquivados (tolerante a falhas)
+    let provsByTarefa: Record<string, TaskProvidenciaRecord[]> = {}
+    try {
+      const { data: providenciasRaw, error: provError } = await supabase
+        .from('task_providencias')
+        .select(`
+          *,
+          tipo_prazo:task_tipos_prazo(*),
+          status:task_status_providencia(*)
+        `)
+        .in('tarefa_id', tarefaIds)
+        .order('prazo_conclusao', { ascending: true })
+        .order('ordem', { ascending: true })
+
+      if (!provError && providenciasRaw) {
+        for (const p of providenciasRaw as unknown as TaskProvidenciaRecord[]) {
+          if (!provsByTarefa[p.tarefa_id]) {
+            provsByTarefa[p.tarefa_id] = []
+          }
+          provsByTarefa[p.tarefa_id].push(p)
+        }
+      }
+    } catch (pErr) {
+      console.error('Aviso ao carregar providências dos controles arquivados:', pErr)
+    }
+
+    // 4. Hidratação tolerante a falhas: ausência de relacionados não oculta nem quebra a linha
+    const controles: TaskControleRecord[] = tarefasRaw.map((t: any) => {
+      const provs = provsByTarefa[t.id] || []
+
+      const provsOrdenadas = [...provs].sort((a, b) => {
+        const aFinaliza = Boolean(a.status?.finaliza)
+        const bFinaliza = Boolean(b.status?.finaliza)
+        if (aFinaliza !== bFinaliza) {
+          return aFinaliza ? 1 : -1
+        }
+        return (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || '')
+      })
+
+      const provAbertas = provs.filter((p) => !p.status?.finaliza)
+      provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
+      const proximaProvAberta = provAbertas[0] || null
+
+      const respUsuario = t.responsavel_usuario_id
+        ? usuariosMap.get(t.responsavel_usuario_id) || null
+        : null
+      const execUsuario = t.executor_usuario_id
+        ? usuariosMap.get(t.executor_usuario_id) || null
+        : null
+
+      return {
+        id: t.id,
+        nome_controle_id: t.nome_controle_id,
+        identificacao_caso: t.identificacao_caso,
+        status_id: t.status_id,
+        data_autorizacao: t.data_autorizacao,
+        prazo_conclusao: t.prazo_conclusao,
+        responsavel_usuario_id: t.responsavel_usuario_id,
+        executor_usuario_id: t.executor_usuario_id,
+        pasta_cliente: t.pasta_cliente,
+        pasta_ricci: t.pasta_ricci,
+        created_at: t.created_at,
+        created_by: t.created_by,
+        updated_at: t.updated_at,
+        updated_by: t.updated_by,
+        deleted_at: t.deleted_at,
+        deleted_by: t.deleted_by,
+        arquivado_at: t.arquivado_at || null,
+
+        nome_controle: t.nome_controle_obj?.nome || null,
+        responsavel_nome: respUsuario?.nome || null,
+        executor_nome: execUsuario?.nome || null,
+        status: t.status_obj || null,
+        responsavel_usuario: respUsuario,
+        executor_usuario: execUsuario,
+
+        providencias: provsOrdenadas,
+        proxima_providencia: proximaProvAberta,
+      }
+    })
+
+    return controles
   },
 
   async fetchControlesList(
@@ -471,19 +593,17 @@ export const controleService = {
     }
 
     // 2. Monta consulta de controles respeitando exclusão lógica deleted_at e regra de arquivamento
-    let query = supabase
-      .from('task_tarefas')
-      .select(`
+    // Para a lista principal (ativos): .is('deleted_at', null).is('arquivado_at', null)
+    let query = supabase.from('task_tarefas').select(`
         *,
         nome_controle_obj:task_nomes_controle(id, nome),
         status_obj:task_status(id, codigo, nome, ordem, finaliza, ativo)
       `)
-      .is('deleted_at', null)
 
     if (options.apenasArquivados) {
-      query = query.not('arquivado_at', 'is', null)
+      query = query.not('arquivado_at', 'is', null).order('arquivado_at', { ascending: false })
     } else {
-      query = query.is('arquivado_at', null)
+      query = query.is('deleted_at', null).is('arquivado_at', null)
     }
 
     const { data: tarefasRaw, error: tarefasError } = await query
@@ -759,6 +879,14 @@ export const controleService = {
       console.error('Erro ao arquivar controle:', error)
       throw error
     }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ricci:controles-changed', {
+          detail: { action: 'archive', controleId: id },
+        }),
+      )
+    }
   },
 
   async unarchiveControle(id: string): Promise<void> {
@@ -778,6 +906,14 @@ export const controleService = {
     if (error) {
       console.error('Erro ao desarquivar controle:', error)
       throw error
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ricci:controles-changed', {
+          detail: { action: 'unarchive', controleId: id },
+        }),
+      )
     }
   },
 

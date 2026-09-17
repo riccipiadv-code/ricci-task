@@ -105,12 +105,6 @@ export function useControles() {
     }
   }, [])
 
-  useEffect(() => {
-    if (user) {
-      carregarDadosCompletos()
-    }
-  }, [user, carregarDadosCompletos])
-
   const refreshUsuariosAtivos = useCallback(async () => {
     try {
       const users = await controleService.getUsuariosAtivos()
@@ -130,6 +124,26 @@ export function useControles() {
       console.error('Erro ao recarregar controles:', err)
     }
   }, [usuariosAtivos])
+
+  useEffect(() => {
+    if (user) {
+      carregarDadosCompletos()
+    }
+  }, [user, carregarDadosCompletos])
+
+  // Ouve eventos de alteração global (ex: arquivar/desarquivar feito em qualquer tela)
+  useEffect(() => {
+    const handleGlobalChange = () => {
+      refreshControles()
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('ricci:controles-changed', handleGlobalChange)
+      return () => {
+        window.removeEventListener('ricci:controles-changed', handleGlobalChange)
+      }
+    }
+  }, [refreshControles])
 
   const refreshNomesControle = useCallback(async () => {
     try {

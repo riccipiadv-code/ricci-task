@@ -85,6 +85,20 @@ export default function ControlesArquivadosPage() {
     carregarDados()
   }, [carregarDados])
 
+  // Ouve eventos de alteração global (ex: arquivamento feito na tela principal de Controles)
+  useEffect(() => {
+    const handleGlobalChange = () => {
+      carregarDados()
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('ricci:controles-changed', handleGlobalChange)
+      return () => {
+        window.removeEventListener('ricci:controles-changed', handleGlobalChange)
+      }
+    }
+  }, [carregarDados])
+
   // Desarquivar controle
   const handleOpenDesarquivar = (controle: TaskControleRecord) => {
     setControleParaDesarquivar(controle)
@@ -297,7 +311,7 @@ export default function ControlesArquivadosPage() {
                         <td className="py-3.5 px-4 font-semibold text-foreground">
                           <span className="inline-flex items-center gap-1.5 text-xs text-primary font-bold">
                             <FolderKanban className="w-3.5 h-3.5 shrink-0" />
-                            <span className="truncate">{item.nome_controle || 'Sem nome'}</span>
+                            <span className="truncate">{item.nome_controle || '—'}</span>
                           </span>
                         </td>
 
@@ -437,10 +451,10 @@ export default function ControlesArquivadosPage() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="inline-flex items-center gap-1 text-xs text-primary font-bold">
                         <FolderKanban className="w-3.5 h-3.5" />
-                        <span>{item.nome_controle || 'Sem nome'}</span>
+                        <span>{item.nome_controle || '—'}</span>
                       </span>
                       <span className="text-[11px] text-muted-foreground">
-                        {item.arquivado_at ? formatDateBR(item.arquivado_at) : ''}
+                        {item.arquivado_at ? formatDateBR(item.arquivado_at) : '—'}
                       </span>
                     </div>
 
