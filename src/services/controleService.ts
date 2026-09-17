@@ -7,6 +7,7 @@ import {
   TaskTipoPrazoRecord,
   TaskNomeControleRecord,
   TaskUsuarioAtivoRecord,
+  TaskUsuarioRecord,
   TaskProvidenciaRecord,
   SaveControleInput,
   SaveProvidenciaInput,
@@ -180,22 +181,94 @@ export const controleService = {
   },
 
   // --------------------------------------------------------------------------
-  // LISTAGEM DE USUÁRIOS ATIVOS VIA RPC (task_listar_usuarios_ativos)
-  // Única fonte para Responsável e Executor (Profiles do Conectaí)
+  // GESTÃO DE USUÁRIOS DO RICCI TASK (task_usuarios)
+  // Única fonte para Responsável e Executor nos controles e providências
   // --------------------------------------------------------------------------
+  /**
+   * Retorna os usuários disponíveis para seleção em novos controles ou edição:
+   * Filtro obrigatório: ativo = true AND ativo_no_conectai = true.
+   * Ordenado alfabeticamente por nome.
+   * Mapeia perfil_id para id, preservando compatibilidade com controles e filtros.
+   */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
-    const { data, error } = await supabase.rpc('task_listar_usuarios_ativos')
+    const { data, error } = await supabase
+      .from('task_usuarios')
+      .select('perfil_id, nome, email, ativo, ativo_no_conectai')
+      .eq('ativo', true)
+      .eq('ativo_no_conectai', true)
+      .order('nome', { ascending: true })
 
     if (error) {
-      console.error('Erro ao executar RPC task_listar_usuarios_ativos:', error)
+      console.error('Erro ao buscar task_usuarios:', error)
       throw new Error(
-        'Não foi possível carregar a lista de usuários ativos. Verifique sua conexão.',
+        'Não foi possível carregar a lista de usuários disponíveis. Verifique sua conexão.',
       )
     }
 
-    const lista = (data || []) as TaskUsuarioAtivoRecord[]
-    // Ordenar alfabeticamente por nome
+    const lista: TaskUsuarioAtivoRecord[] = (data || []).map((u) => ({
+      id: u.perfil_id,
+      nome: u.nome,
+      email: u.email,
+      ativo: u.ativo,
+      ativo_no_conectai: u.ativo_no_conectai,
+    }))
+
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+  },
+
+  /**
+   * Retorna todos os usuários de task_usuarios (para a tela de administração/tabelas ou resolução de nomes).
+   */
+  async getTodosUsuarios(): Promise<TaskUsuarioRecord[]> {
+    const { data, error } = await supabase
+      .from('task_usuarios')
+      .select('*')
+      .order('nome', { ascending: true })
+
+    if (error) {
+      console.error('Erro ao listar task_usuarios:', error)
+      throw new Error('Falha ao listar usuários do sistema.')
+    }
+
+    return (data || []) as TaskUsuarioRecord[]
+  },
+
+  /**
+   * Altera exclusivamente o campo 'ativo' de um registro em task_usuarios.
+   */
+  async toggleUsuarioAtivo(perfilId: string, novoAtivo: boolean): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { error } = await supabase
+      .from('task_usuarios')
+      .update({
+        ativo: novoAtivo,
+        updated_at: new Date().toISOString(),
+        updated_by: user?.id || null,
+      })
+      .eq('perfil_id', perfilId)
+
+    if (error) {
+      console.error('Erro ao atualizar ativo em task_usuarios:', error)
+      throw new Error('Não foi possível alterar a situação do usuário no Ricci Task.')
+    }
+  },
+
+  /**
+   * Sincroniza a tabela task_usuarios com a origem através da RPC task_sincronizar_usuarios_origem.
+   * Não altera logins ou perfis de origem, apenas atualiza a tabela interna task_usuarios.
+   */
+  async sincronizarUsuariosOrigem(): Promise<number> {
+    const { data, error } = await supabase.rpc('task_sincronizar_usuarios_origem')
+
+    if (error) {
+      console.error('Erro ao executar RPC task_sincronizar_usuarios_origem:', error)
+      throw new Error('Falha ao sincronizar usuários com a base de origem.')
+    }
+
+    return typeof data === 'number' ? data : Number(data) || 0
   },
 
   // --------------------------------------------------------------------------
@@ -320,17 +393,19 @@ export const controleService = {
 
   // --------------------------------------------------------------------------
   // LISTAGEM PRINCIPAL DE CONTROLES (task_tarefas)
-  // Resolvendo responsáveis e executores a partir dos usuários ativos da RPC
+  // Resolvendo responsáveis e executores a partir de task_usuarios
   // --------------------------------------------------------------------------
   async getControles(usuariosParam?: TaskUsuarioAtivoRecord[]): Promise<TaskControleRecord[]> {
-    // 1. Garante que temos a lista de usuários para resolver os nomes
-    let usuariosMap = new Map<string, TaskUsuarioAtivoRecord>()
+    // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores
+    let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
     if (usuariosParam && usuariosParam.length > 0) {
       usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
     } else {
       try {
-        const users = await this.getUsuariosAtivos()
-        users.forEach((u) => usuariosMap.set(u.id, u))
+        const allUsers = await this.getTodosUsuarios()
+        allUsers.forEach((u) =>
+          usuariosMap.set(u.perfil_id, { id: u.perfil_id, nome: u.nome, email: u.email }),
+        )
       } catch (err) {
         console.error('Aviso ao obter usuários para resolução de controles:', err)
       }
@@ -481,8 +556,16 @@ export const controleService = {
       usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
     } else {
       try {
-        const users = await this.getUsuariosAtivos()
-        users.forEach((u) => usuariosMap.set(u.id, u))
+        const allUsers = await this.getTodosUsuarios()
+        allUsers.forEach((u) =>
+          usuariosMap.set(u.perfil_id, {
+            id: u.perfil_id,
+            nome: u.nome,
+            email: u.email,
+            ativo: u.ativo,
+            ativo_no_conectai: u.ativo_no_conectai,
+          }),
+        )
       } catch (err) {
         console.error('Aviso ao obter usuários para resolução de controle:', err)
       }

@@ -1811,6 +1811,68 @@ export type Database = {
           },
         ]
       }
+      task_importacao_natura_pendencias: {
+        Row: {
+          andamentos_origem: string | null
+          controle_importado_at: string | null
+          created_at: string
+          identificacao_caso: string
+          linha_origem: number
+          pasta_cliente: string | null
+          pasta_ricci: string | null
+          prazo_conclusao: string | null
+          providencia_importada_at: string | null
+          proxima_providencia: string
+          status_origem: string | null
+          status_providencia_codigo: string
+          tarefa_id: string | null
+          tipo_prazo_codigo: string | null
+          updated_at: string
+        }
+        Insert: {
+          andamentos_origem?: string | null
+          controle_importado_at?: string | null
+          created_at?: string
+          identificacao_caso: string
+          linha_origem: number
+          pasta_cliente?: string | null
+          pasta_ricci?: string | null
+          prazo_conclusao?: string | null
+          providencia_importada_at?: string | null
+          proxima_providencia: string
+          status_origem?: string | null
+          status_providencia_codigo: string
+          tarefa_id?: string | null
+          tipo_prazo_codigo?: string | null
+          updated_at?: string
+        }
+        Update: {
+          andamentos_origem?: string | null
+          controle_importado_at?: string | null
+          created_at?: string
+          identificacao_caso?: string
+          linha_origem?: number
+          pasta_cliente?: string | null
+          pasta_ricci?: string | null
+          prazo_conclusao?: string | null
+          providencia_importada_at?: string | null
+          proxima_providencia?: string
+          status_origem?: string | null
+          status_providencia_codigo?: string
+          tarefa_id?: string | null
+          tipo_prazo_codigo?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'task_importacao_natura_pendencias_tarefa_id_fkey'
+            columns: ['tarefa_id']
+            isOneToOne: false
+            referencedRelation: 'task_tarefas'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       task_nomes_controle: {
         Row: {
           ativo: boolean
@@ -1854,6 +1916,7 @@ export type Database = {
         Row: {
           created_at: string
           created_by: string | null
+          data_conclusao: string | null
           deleted_at: string | null
           deleted_by: string | null
           id: string
@@ -1869,6 +1932,7 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by?: string | null
+          data_conclusao?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
           id?: string
@@ -1884,6 +1948,7 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string | null
+          data_conclusao?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
           id?: string
@@ -2055,11 +2120,25 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: 'task_tarefas_executor_task_usuario_fkey'
+            columns: ['executor_usuario_id']
+            isOneToOne: false
+            referencedRelation: 'task_usuarios'
+            referencedColumns: ['perfil_id']
+          },
+          {
             foreignKeyName: 'task_tarefas_nome_controle_id_fkey'
             columns: ['nome_controle_id']
             isOneToOne: false
             referencedRelation: 'task_nomes_controle'
             referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'task_tarefas_responsavel_task_usuario_fkey'
+            columns: ['responsavel_usuario_id']
+            isOneToOne: false
+            referencedRelation: 'task_usuarios'
+            referencedColumns: ['perfil_id']
           },
           {
             foreignKeyName: 'task_tarefas_status_id_fkey'
@@ -2106,6 +2185,42 @@ export type Database = {
         }
         Relationships: []
       }
+      task_usuarios: {
+        Row: {
+          ativo: boolean
+          ativo_no_conectai: boolean
+          created_at: string
+          created_by: string | null
+          email: string
+          nome: string
+          perfil_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          ativo?: boolean
+          ativo_no_conectai?: boolean
+          created_at?: string
+          created_by?: string | null
+          email: string
+          nome: string
+          perfil_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          ativo?: boolean
+          ativo_no_conectai?: boolean
+          created_at?: string
+          created_by?: string | null
+          email?: string
+          nome?: string
+          perfil_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -2128,8 +2243,10 @@ export type Database = {
         }[]
       }
       task_normalizar_nome: { Args: { p_valor: string }; Returns: string }
+      task_sincronizar_usuarios_origem: { Args: never; Returns: number }
       task_status_padrao_id: { Args: never; Returns: string }
       task_status_providencia_padrao_id: { Args: never; Returns: string }
+      task_usuario_sessao_ativa: { Args: never; Returns: boolean }
     }
     Enums: {
       perfil_type: 'socio_gestor' | 'gestor_area' | 'advogado' | 'estagiario' | 'administrativo'

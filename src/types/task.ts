@@ -1,5 +1,5 @@
 // Tipos do Domínio Ricci Task — Fase Controles de Casos
-// Alinhado exclusivamente com as tabelas task_* no Supabase e RPC task_listar_usuarios_ativos
+// Alinhado exclusivamente com as tabelas task_* no Supabase (task_usuarios como única fonte de usuários)
 
 export interface TaskStatusRecord {
   id: string
@@ -53,8 +53,23 @@ export interface TaskNomeControleRecord {
 }
 
 export interface TaskUsuarioAtivoRecord {
-  id: string
+  id: string // mapeado a partir de task_usuarios.perfil_id
   nome: string
+  email?: string
+  ativo?: boolean
+  ativo_no_conectai?: boolean
+}
+
+export interface TaskUsuarioRecord {
+  perfil_id: string
+  nome: string
+  email: string
+  ativo: boolean
+  ativo_no_conectai: boolean
+  created_at: string
+  updated_at: string
+  created_by?: string | null
+  updated_by?: string | null
 }
 
 export interface TaskProvidenciaRecord {

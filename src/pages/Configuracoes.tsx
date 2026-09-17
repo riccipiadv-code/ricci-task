@@ -305,17 +305,19 @@ export default function ConfiguracoesPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Armazenamento:</span>
               <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                Supabase PostgreSQL (task_tarefas, task_providencias)
+                Supabase PostgreSQL (task_tarefas, task_providencias, task_usuarios)
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Responsável e Executor:</span>
-              <span className="text-foreground">usuários ativos do sistema</span>
+              <span className="text-foreground">
+                task_usuarios (ativo = true e ativo_no_conectai = true)
+              </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground text-[11px]">
               <span className="text-muted-foreground">Fonte:</span>
               <span className="text-muted-foreground">
-                task_listar_usuarios_ativos (somente leitura).
+                Tabela task_usuarios (gerenciada no menu Tabelas &gt; Usuários).
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">

@@ -8,6 +8,7 @@ import { ProtectedLayout, PublicRoute } from './components/ProtectedRoute'
 import Index from './pages/Index'
 import TarefasPage from './pages/Tarefas'
 import NomesControlePage from './pages/NomesControle'
+import UsuariosPage from './pages/Usuarios'
 import ConfiguracoesPage from './pages/Configuracoes'
 import LoginPage from './pages/Login'
 import NotFound from './pages/NotFound'
@@ -37,6 +38,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/tarefas" element={<TarefasPage />} />
             <Route path="/tabelas/nomes" element={<NomesControlePage />} />
+            <Route path="/tabelas/usuarios" element={<UsuariosPage />} />
             <Route path="/configuracoes" element={<ConfiguracoesPage />} />
           </Route>
 

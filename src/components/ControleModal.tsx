@@ -163,12 +163,13 @@ export function ControleModal({
     try {
       const [nomes, users, stProv] = await Promise.all([
         controleService.getNomesControle({ incluirInativos: true }),
-        controleService.getUsuariosAtivos().catch((rpcErr) => {
-          console.error('Falha na RPC task_listar_usuarios_ativos:', rpcErr)
+        controleService.getUsuariosAtivos().catch((fetchErr) => {
+          console.error('Falha ao carregar usuários de task_usuarios:', fetchErr)
           toast({
             variant: 'destructive',
             title: 'Erro ao carregar usuários',
-            description: 'Não foi possível obter a lista de usuários ativos. Verifique a conexão.',
+            description:
+              'Não foi possível obter a lista de usuários disponíveis. Verifique a conexão.',
           })
           return [] as TaskUsuarioAtivoRecord[]
         }),
@@ -176,8 +177,39 @@ export function ControleModal({
           ? Promise.resolve(statusProvidenciaList)
           : controleService.getStatusProvidencia(),
       ])
+
+      // Se estiver editando e o responsável/executor atual não estiver na lista de ativos,
+      // buscamos todos os usuários para garantir que o valor existente seja preservado legivelmente
+      let listaCombinada = [...users]
+      const respId = controleToEdit?.responsavel_usuario_id
+      const execId = controleToEdit?.executor_usuario_id
+      const respFalta = respId && !listaCombinada.some((u) => u.id === respId)
+      const execFalta = execId && !listaCombinada.some((u) => u.id === execId)
+
+      if (respFalta || execFalta) {
+        try {
+          const todos = await controleService.getTodosUsuarios()
+          todos.forEach((tu) => {
+            if (
+              (tu.perfil_id === respId || tu.perfil_id === execId) &&
+              !listaCombinada.some((u) => u.id === tu.perfil_id)
+            ) {
+              listaCombinada.push({
+                id: tu.perfil_id,
+                nome: tu.nome,
+                email: tu.email,
+                ativo: tu.ativo,
+                ativo_no_conectai: tu.ativo_no_conectai,
+              })
+            }
+          })
+        } catch (err) {
+          console.error('Aviso ao preservar usuário existente em edição:', err)
+        }
+      }
+
       setNomesLista(nomes)
-      setUsuariosLista(users)
+      setUsuariosLista(listaCombinada)
       setStatusProvLista(stProv)
     } catch (err) {
       console.error('Erro ao carregar listas auxiliares no ControleModal:', err)
@@ -271,25 +303,39 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
-  // Opções de Responsáveis (mesma lista de usuários ativos da RPC)
+  // Opções de Responsáveis (task_usuarios com ativo e ativo_no_conectai = true, ou o já selecionado)
   const opcoesResponsaveis = useMemo(() => {
-    let list = [...usuariosLista]
+    let list = usuariosLista.filter((u) => {
+      // Sempre permitir o usuário que já está selecionado na edição (para preservá-lo)
+      if (u.id === responsavelUsuarioId) return true
+      // Novos ou outras seleções: apenas ativos em ambos
+      return (u.ativo ?? true) && (u.ativo_no_conectai ?? true)
+    })
     if (buscaRespSelect.trim()) {
       const q = buscaRespSelect.trim().toLowerCase()
-      list = list.filter((u) => u.nome.toLowerCase().includes(q))
+      list = list.filter(
+        (u) => u.nome.toLowerCase().includes(q) || (u.email && u.email.toLowerCase().includes(q)),
+      )
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [usuariosLista, buscaRespSelect])
+  }, [usuariosLista, responsavelUsuarioId, buscaRespSelect])
 
-  // Opções de Executores (mesma lista de usuários ativos da RPC)
+  // Opções de Executores (task_usuarios com ativo e ativo_no_conectai = true, ou o já selecionado)
   const opcoesExecutores = useMemo(() => {
-    let list = [...usuariosLista]
+    let list = usuariosLista.filter((u) => {
+      // Sempre permitir o usuário que já está selecionado na edição (para preservá-lo)
+      if (u.id === executorUsuarioId) return true
+      // Novos ou outras seleções: apenas ativos em ambos
+      return (u.ativo ?? true) && (u.ativo_no_conectai ?? true)
+    })
     if (buscaExecSelect.trim()) {
       const q = buscaExecSelect.trim().toLowerCase()
-      list = list.filter((u) => u.nome.toLowerCase().includes(q))
+      list = list.filter(
+        (u) => u.nome.toLowerCase().includes(q) || (u.email && u.email.toLowerCase().includes(q)),
+      )
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [usuariosLista, buscaExecSelect])
+  }, [usuariosLista, executorUsuarioId, buscaExecSelect])
 
   // Ordenação visual dos cards de providências pelo prazo de conclusão crescente.
   const providenciasExibicao = useMemo(() => {
@@ -782,7 +828,7 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Bloco 3: Responsável e Executor (única fonte: RPC task_listar_usuarios_ativos, sem botões +) */}
+                {/* Bloco 3: Responsável e Executor (única fonte: task_usuarios) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Responsável */}
                   <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
@@ -805,7 +851,7 @@ export function ControleModal({
                       >
                         <SelectTrigger
                           className={cn(
-                            'h-11 rounded-xl bg-background text-sm font-medium',
+                            'h-12 rounded-xl bg-background text-sm font-medium',
                             responsavelError && 'border-destructive focus-visible:ring-destructive',
                           )}
                         >
@@ -816,7 +862,7 @@ export function ControleModal({
                             <div className="relative">
                               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                               <Input
-                                placeholder="Filtrar responsáveis..."
+                                placeholder="Filtrar por nome ou e-mail..."
                                 value={buscaRespSelect}
                                 onChange={(e) => setBuscaRespSelect(e.target.value)}
                                 className="h-8 pl-8 pr-2 text-xs rounded-lg"
@@ -833,16 +879,34 @@ export function ControleModal({
                             </div>
                           ) : opcoesResponsaveis.length === 0 ? (
                             <div className="p-4 text-center text-xs text-muted-foreground">
-                              Nenhum responsável encontrado.
+                              Nenhum responsável disponível encontrado.
                             </div>
                           ) : (
-                            opcoesResponsaveis.map((r) => (
-                              <SelectItem key={r.id} value={r.id} className="py-2.5">
-                                <span className="font-semibold text-foreground text-xs">
-                                  {r.nome}
-                                </span>
-                              </SelectItem>
-                            ))
+                            opcoesResponsaveis.map((r) => {
+                              const isInativoLocal = r.ativo === false
+                              const isInativoConectai = r.ativo_no_conectai === false
+                              return (
+                                <SelectItem key={r.id} value={r.id} className="py-2">
+                                  <div className="flex flex-col gap-0.5 text-left">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-foreground text-xs">
+                                        {r.nome}
+                                      </span>
+                                      {(isInativoLocal || isInativoConectai) && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
+                                          {isInativoConectai ? 'Inativo Conectaí' : 'Inativo RT'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {r.email && (
+                                      <span className="text-[11px] text-muted-foreground font-normal">
+                                        {r.email}
+                                      </span>
+                                    )}
+                                  </div>
+                                </SelectItem>
+                              )
+                            })
                           )}
                         </SelectContent>
                       </Select>
@@ -876,7 +940,7 @@ export function ControleModal({
                       >
                         <SelectTrigger
                           className={cn(
-                            'h-11 rounded-xl bg-background text-sm font-medium',
+                            'h-12 rounded-xl bg-background text-sm font-medium',
                             executorError && 'border-destructive focus-visible:ring-destructive',
                           )}
                         >
@@ -887,7 +951,7 @@ export function ControleModal({
                             <div className="relative">
                               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                               <Input
-                                placeholder="Filtrar executores..."
+                                placeholder="Filtrar por nome ou e-mail..."
                                 value={buscaExecSelect}
                                 onChange={(e) => setBuscaExecSelect(e.target.value)}
                                 className="h-8 pl-8 pr-2 text-xs rounded-lg"
@@ -904,16 +968,34 @@ export function ControleModal({
                             </div>
                           ) : opcoesExecutores.length === 0 ? (
                             <div className="p-4 text-center text-xs text-muted-foreground">
-                              Nenhum executor encontrado.
+                              Nenhum executor disponível encontrado.
                             </div>
                           ) : (
-                            opcoesExecutores.map((e) => (
-                              <SelectItem key={e.id} value={e.id} className="py-2.5">
-                                <span className="font-semibold text-foreground text-xs">
-                                  {e.nome}
-                                </span>
-                              </SelectItem>
-                            ))
+                            opcoesExecutores.map((e) => {
+                              const isInativoLocal = e.ativo === false
+                              const isInativoConectai = e.ativo_no_conectai === false
+                              return (
+                                <SelectItem key={e.id} value={e.id} className="py-2">
+                                  <div className="flex flex-col gap-0.5 text-left">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-foreground text-xs">
+                                        {e.nome}
+                                      </span>
+                                      {(isInativoLocal || isInativoConectai) && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
+                                          {isInativoConectai ? 'Inativo Conectaí' : 'Inativo RT'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {e.email && (
+                                      <span className="text-[11px] text-muted-foreground font-normal">
+                                        {e.email}
+                                      </span>
+                                    )}
+                                  </div>
+                                </SelectItem>
+                              )
+                            })
                           )}
                         </SelectContent>
                       </Select>
