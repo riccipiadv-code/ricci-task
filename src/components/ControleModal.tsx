@@ -57,6 +57,8 @@ interface ControleModalProps {
   statusProvidenciaList?: TaskStatusProvidenciaRecord[]
   tiposPrazoList: TaskTipoPrazoRecord[]
   usuariosAtivos?: TaskUsuarioAtivoRecord[]
+  initialTab?: 'dados' | 'providencias'
+  autoAddNewProvidencia?: boolean
   onSaved: (controle: TaskControleRecord) => void
 }
 
@@ -80,6 +82,8 @@ export function ControleModal({
   statusProvidenciaList = [],
   tiposPrazoList,
   usuariosAtivos: usuariosProp,
+  initialTab = 'dados',
+  autoAddNewProvidencia = false,
   onSaved,
 }: ControleModalProps) {
   const { toast } = useToast()
@@ -224,7 +228,7 @@ export function ControleModal({
     if (!open) return
 
     carregarListasAuxiliares()
-    setActiveTab('dados')
+    setActiveTab(initialTab || 'dados')
     setNomeControleError(false)
     setIdentificacaoError(false)
     setStatusError(false)
@@ -264,6 +268,20 @@ export function ControleModal({
           isPersisted: true,
         }),
       )
+
+      if (autoAddNewProvidencia) {
+        draftList.push({
+          tempId: `draft-auto-${Date.now()}`,
+          providencia: '',
+          prazo_conclusao: '',
+          tipo_prazo_id: tipoPrazoPadraoId,
+          status_id: statusProvPadraoId,
+          ordem: draftList.length,
+          data_conclusao: null,
+          isPersisted: false,
+        })
+      }
+
       setProvidencias(draftList)
     } else {
       // Novo controle
@@ -285,6 +303,8 @@ export function ControleModal({
     statusPadraoId,
     tipoPrazoPadraoId,
     statusProvPadraoId,
+    initialTab,
+    autoAddNewProvidencia,
     carregarListasAuxiliares,
   ])
 

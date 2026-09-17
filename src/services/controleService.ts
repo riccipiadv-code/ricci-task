@@ -717,7 +717,38 @@ export const controleService = {
     } = await supabase.auth.getUser()
     const userId = user?.id || null
 
-    const payload = {
+    // Regra A: Verificar se o status recebido é finalizador (task_status.finaliza = true).
+    // Se for, preencher arquivado_at com a data/hora atual na mesma operação de salvamento.
+    // NÃO desarquivar automaticamente se o status voltar a não finalizador.
+    let statusFinaliza = false
+    try {
+      const { data: statusObj } = await supabase
+        .from('task_status')
+        .select('finaliza')
+        .eq('id', input.status_id)
+        .single()
+      if (statusObj?.finaliza) {
+        statusFinaliza = true
+      }
+    } catch (checkErr) {
+      console.error('Aviso ao verificar se status do controle finaliza:', checkErr)
+    }
+
+    const nowIso = new Date().toISOString()
+    const updatePayload: {
+      nome_controle_id: string
+      identificacao_caso: string
+      status_id: string
+      data_autorizacao: string | null
+      prazo_conclusao: string | null
+      responsavel_usuario_id: string
+      executor_usuario_id: string
+      pasta_cliente: string | null
+      pasta_ricci: string | null
+      updated_at: string
+      updated_by: string | null
+      arquivado_at?: string
+    } = {
       nome_controle_id: input.nome_controle_id,
       identificacao_caso: input.identificacao_caso.trim(),
       status_id: input.status_id,
@@ -727,14 +758,18 @@ export const controleService = {
       executor_usuario_id: input.executor_usuario_id,
       pasta_cliente: input.pasta_cliente?.trim() || null,
       pasta_ricci: input.pasta_ricci?.trim() || null,
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso,
       updated_by: userId,
+    }
+
+    if (statusFinaliza) {
+      updatePayload.arquivado_at = nowIso
     }
 
     if (input.id) {
       const { data, error } = await supabase
         .from('task_tarefas')
-        .update(payload)
+        .update(updatePayload)
         .eq('id', input.id)
         .select()
         .single()
@@ -743,15 +778,26 @@ export const controleService = {
         console.error('Erro ao atualizar task_tarefas:', error)
         throw error
       }
+
+      // Notifica alteração global caso tenha sido arquivado automaticamente
+      if (statusFinaliza && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('ricci:controles-changed', {
+            detail: { action: 'auto-archive', controleId: data.id },
+          }),
+        )
+      }
+
       const loaded = await this.getControleById(data.id, usuariosParam)
       return (loaded || data) as TaskControleRecord
     } else {
+      const insertPayload = {
+        ...updatePayload,
+        created_by: userId || undefined,
+      }
       const { data, error } = await supabase
         .from('task_tarefas')
-        .insert({
-          ...payload,
-          created_by: userId,
-        })
+        .insert(insertPayload)
         .select()
         .single()
 
@@ -759,9 +805,94 @@ export const controleService = {
         console.error('Erro ao criar task_tarefas:', error)
         throw error
       }
+
+      if (statusFinaliza && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('ricci:controles-changed', {
+            detail: { action: 'auto-archive', controleId: data.id },
+          }),
+        )
+      }
+
       const loaded = await this.getControleById(data.id, usuariosParam)
       return (loaded || data) as TaskControleRecord
     }
+  },
+
+  /**
+   * Alias de getProvidencias para clareza
+   */
+  async getProvidenciasByControleId(tarefaId: string): Promise<TaskProvidenciaRecord[]> {
+    return this.getProvidencias(tarefaId)
+  },
+
+  /**
+   * Localiza o status de Controle "Concluído" pelo código, aceitando as variações
+   * 'concluido' e 'concluida' (nunca pelo texto exibido).
+   */
+  async getStatusControleConcluido(): Promise<TaskStatusRecord | null> {
+    const { data, error } = await supabase
+      .from('task_status')
+      .select('*')
+      .in('codigo', ['concluido', 'concluida'])
+      .eq('ativo', true)
+      .limit(1)
+
+    if (error) {
+      console.error('Erro ao buscar status de controle concluído:', error)
+      throw error
+    }
+    return data && data[0] ? (data[0] as TaskStatusRecord) : null
+  },
+
+  /**
+   * Encerra um Controle em UMA ÚNICA OPERAÇÃO:
+   * status_id = Concluído (ou outro finalizador informado), arquivado_at = data/hora atual,
+   * updated_at e updated_by. Não usa delete().
+   */
+  async encerrarControle(controleId: string, statusId?: string): Promise<TaskControleRecord> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    const userId = user?.id || null
+
+    let finalStatusId = statusId
+    if (!finalStatusId) {
+      const statusConcluido = await this.getStatusControleConcluido()
+      if (!statusConcluido) {
+        throw new Error('Status "Concluído" de Controle não foi localizado no catálogo.')
+      }
+      finalStatusId = statusConcluido.id
+    }
+
+    const nowIso = new Date().toISOString()
+    const { data, error } = await supabase
+      .from('task_tarefas')
+      .update({
+        status_id: finalStatusId,
+        arquivado_at: nowIso,
+        updated_at: nowIso,
+        updated_by: userId,
+      })
+      .eq('id', controleId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Erro ao encerrar controle:', error)
+      throw error
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ricci:controles-changed', {
+          detail: { action: 'encerrar', controleId },
+        }),
+      )
+    }
+
+    const fullyLoaded = await this.getControleById(controleId)
+    return (fullyLoaded || data) as TaskControleRecord
   },
 
   async archiveControle(id: string): Promise<void> {

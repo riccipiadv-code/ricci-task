@@ -45,6 +45,17 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/co
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useToast } from '@/hooks/use-toast'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { controleService } from '@/services/controleService'
+import {
   formatDateBR,
   formatDateTimeBR,
   isPrazoOverdue,
@@ -103,21 +114,45 @@ export default function TarefasPage() {
     return cod === 'cancelado' || cod === 'concluido' || cod === 'concluida' || cod === 'suspenso'
   }
 
-  const handleSelectProvidenciaStatus = async (providenciaId: string, novoStatusId: string) => {
+  const handleSelectProvidenciaStatus = async (
+    providenciaId: string,
+    novoStatusId: string,
+    controleId: string,
+  ) => {
     if (!providenciaId || !novoStatusId) return
     if (updatingProvidenciaIds[providenciaId]) return
 
     const selectedStatus = statusProvidenciaList.find((s) => s.id === novoStatusId)
     const exigeConclusao = isStatusExigeConclusao(selectedStatus)
     const dataConclusao = exigeConclusao ? getLocalDateStr() : null
+    const isStatusFinalizador = Boolean(selectedStatus?.finaliza)
 
     setUpdatingProvidenciaIds((prev) => ({ ...prev, [providenciaId]: true }))
     try {
+      // 1. Salvar imediatamente o status da Providência e Data de Conclusão automática
       await updateProvidenciaStatus(providenciaId, novoStatusId, dataConclusao)
       toast({
         title: 'Status atualizado com sucesso',
         description: 'A providência foi atualizada e os dados recarregados.',
       })
+
+      // Regra B: Executar fluxo sequencial SOMENTE quando o status selecionado tiver finaliza = true.
+      // Status Suspenso pode registrar Data de Conclusão, mas NÃO inicia este fluxo enquanto finaliza = false.
+      if (isStatusFinalizador && controleId) {
+        // Consultar NOVAMENTE as providências do mesmo Controle no banco (nunca usar dados em cache)
+        const provsDoControle = await controleService.getProvidenciasByControleId(controleId)
+        const temAberta = provsDoControle.some((p) => !p.deleted_at && !p.status?.finaliza)
+
+        if (!temAberta) {
+          // Se NÃO existir nenhuma providência aberta, abrir Modal 1:
+          // "Sem mais providências nesse controle / Deseja inserir uma nova providência?"
+          const ctrlAtualizado = await controleService.getControleById(controleId, usuariosAtivos)
+          if (ctrlAtualizado) {
+            setControlePendenteAcao(ctrlAtualizado)
+            setDialogNovaProvidenciaOpen(true)
+          }
+        }
+      }
     } catch (err: any) {
       toast({
         variant: 'destructive',
@@ -131,6 +166,61 @@ export default function TarefasPage() {
         return next
       })
     }
+  }
+
+  // Resposta SIM no Modal 1: Deseja inserir uma nova providência?
+  const handleConfirmNovaProvidencia = () => {
+    setDialogNovaProvidenciaOpen(false)
+    if (!controlePendenteAcao) return
+
+    // Abrir a tela de edição do mesmo Controle diretamente na aba Providência com formulário vazio
+    setControleToEdit(controlePendenteAcao)
+    setModalInitialTab('providencias')
+    setModalAutoAddNewProvidencia(true)
+    setModalOpen(true)
+    setControlePendenteAcao(null)
+  }
+
+  // Resposta NÃO no Modal 1: Mostrar Modal 2 (Encerrar controle)
+  const handleRejectNovaProvidencia = () => {
+    setDialogNovaProvidenciaOpen(false)
+    setDialogEncerrarControleOpen(true)
+  }
+
+  // Resposta SIM no Modal 2: Encerrar controle
+  const handleConfirmEncerrarControle = async () => {
+    if (!controlePendenteAcao) return
+    setEncerrandoControle(true)
+    try {
+      // Localiza status Concluído pelo código ('concluido' ou 'concluida')
+      // e atualiza em UMA ÚNICA OPERAÇÃO: status_id = Concluído, arquivado_at = data/hora atual, updated_at e updated_by
+      await controleService.encerrarControle(controlePendenteAcao.id)
+
+      toast({
+        title: 'Controle encerrado com sucesso',
+        description: `O controle "${controlePendenteAcao.identificacao_caso}" foi concluído e arquivado.`,
+      })
+
+      setDialogEncerrarControleOpen(false)
+      setControlePendenteAcao(null)
+
+      // Recarrega lista
+      await refreshControles()
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao encerrar controle',
+        description: err?.message || 'Falha ao concluir e arquivar controle.',
+      })
+    } finally {
+      setEncerrandoControle(false)
+    }
+  }
+
+  // Resposta NÃO no Modal 2: Manter controle ativo sem alterar nada
+  const handleRejectEncerrarControle = () => {
+    setDialogEncerrarControleOpen(false)
+    setControlePendenteAcao(null)
   }
 
   const { toast } = useToast()
@@ -162,9 +252,19 @@ export default function TarefasPage() {
   // Modais de edição/criação e arquivamento
   const [modalOpen, setModalOpen] = useState(false)
   const [controleToEdit, setControleToEdit] = useState<TaskControleRecord | null>(null)
+  const [modalInitialTab, setModalInitialTab] = useState<'dados' | 'providencias'>('dados')
+  const [modalAutoAddNewProvidencia, setModalAutoAddNewProvidencia] = useState(false)
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
   const [controleToArchive, setControleToArchive] = useState<TaskControleRecord | null>(null)
   const [archiving, setArchiving] = useState(false)
+
+  // Modais sequenciais de pós-encerramento de Providência
+  // Modal 1: "Sem mais providências nesse controle / Deseja inserir uma nova providência?"
+  const [dialogNovaProvidenciaOpen, setDialogNovaProvidenciaOpen] = useState(false)
+  const [controlePendenteAcao, setControlePendenteAcao] = useState<TaskControleRecord | null>(null)
+  // Modal 2: "Encerrar controle / Deseja encerrar esse controle?"
+  const [dialogEncerrarControleOpen, setDialogEncerrarControleOpen] = useState(false)
+  const [encerrandoControle, setEncerrandoControle] = useState(false)
 
   // Debounce na busca
   useEffect(() => {
@@ -620,12 +720,16 @@ export default function TarefasPage() {
   // Modais de Criação e Edição
   const handleOpenCreate = () => {
     setControleToEdit(null)
+    setModalInitialTab('dados')
+    setModalAutoAddNewProvidencia(false)
     setModalOpen(true)
   }
 
   const handleOpenEdit = (controle: TaskControleRecord, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
     setControleToEdit(controle)
+    setModalInitialTab('dados')
+    setModalAutoAddNewProvidencia(false)
     setModalOpen(true)
   }
 
@@ -1860,14 +1964,28 @@ export default function TarefasPage() {
                                                 {c.providencias?.length || 0})
                                               </span>
                                             </h4>
-                                            <span className="text-[11px] text-muted-foreground">
-                                              Ordenadas por prazo crescente (abertas primeiro)
-                                            </span>
+                                            <div className="flex items-center gap-2">
+                                              {c.providencias &&
+                                                c.providencias.length > 0 &&
+                                                !c.providencias.some(
+                                                  (p) => !p.deleted_at && !p.status?.finaliza,
+                                                ) && (
+                                                  <Badge
+                                                    variant="secondary"
+                                                    className="bg-muted text-muted-foreground border-border text-[11px] font-semibold"
+                                                  >
+                                                    Sem providências abertas
+                                                  </Badge>
+                                                )}
+                                              <span className="text-[11px] text-muted-foreground">
+                                                Ordenadas por prazo crescente (abertas primeiro)
+                                              </span>
+                                            </div>
                                           </div>
 
                                           {!c.providencias || c.providencias.length === 0 ? (
                                             <p className="text-muted-foreground italic text-xs p-3 rounded-lg bg-muted/20 border border-border/40">
-                                              Nenhuma providência registrada para este controle.
+                                              Sem providências abertas
                                             </p>
                                           ) : (
                                             <div className="space-y-2">
@@ -1950,6 +2068,7 @@ export default function TarefasPage() {
                                                               handleSelectProvidenciaStatus(
                                                                 p.id,
                                                                 novoStatusId,
+                                                                c.id,
                                                               )
                                                             }
                                                           }}
@@ -2241,9 +2360,23 @@ export default function TarefasPage() {
                                 </div>
 
                                 <div className="space-y-2 pt-2 border-t border-border/50">
-                                  <span className="text-[10px] font-bold uppercase text-muted-foreground block">
-                                    Providências ({c.providencias?.length || 0})
-                                  </span>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                                      Providências ({c.providencias?.length || 0})
+                                    </span>
+                                    {(!c.providencias ||
+                                      c.providencias.length === 0 ||
+                                      !c.providencias.some(
+                                        (p) => !p.deleted_at && !p.status?.finaliza,
+                                      )) && (
+                                      <Badge
+                                        variant="secondary"
+                                        className="bg-muted text-muted-foreground border-border text-[10px] font-medium"
+                                      >
+                                        Sem providências abertas
+                                      </Badge>
+                                    )}
+                                  </div>
                                   {c.providencias?.map((p, idx) => {
                                     const pFinalizadaMobile = Boolean(p.status?.finaliza)
                                     const pStatusBadgeMobile = getStatusBadgeStyle(
@@ -2282,7 +2415,11 @@ export default function TarefasPage() {
                                               disabled={Boolean(updatingProvidenciaIds[p.id])}
                                               onValueChange={(novoStatusId) => {
                                                 if (novoStatusId) {
-                                                  handleSelectProvidenciaStatus(p.id, novoStatusId)
+                                                  handleSelectProvidenciaStatus(
+                                                    p.id,
+                                                    novoStatusId,
+                                                    c.id,
+                                                  )
                                                 }
                                               }}
                                             >
@@ -2370,16 +2507,105 @@ export default function TarefasPage() {
       {/* Modal de Criação / Edição de Controle */}
       <ControleModal
         open={modalOpen}
-        onOpenChange={setModalOpen}
+        onOpenChange={(isOpen) => {
+          setModalOpen(isOpen)
+          if (!isOpen) {
+            setModalInitialTab('dados')
+            setModalAutoAddNewProvidencia(false)
+          }
+        }}
         controleToEdit={controleToEdit}
         statusList={statusList}
         statusProvidenciaList={statusProvidenciaList}
         tiposPrazoList={tiposPrazoList}
         usuariosAtivos={usuariosAtivos}
+        initialTab={modalInitialTab}
+        autoAddNewProvidencia={modalAutoAddNewProvidencia}
         onSaved={() => {
           refreshControles()
         }}
       />
+
+      {/* Modal 1 de pós-encerramento de providência: Sem mais providências nesse controle */}
+      <AlertDialog
+        open={dialogNovaProvidenciaOpen}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setDialogNovaProvidenciaOpen(false)
+            setControlePendenteAcao(null)
+          }
+        }}
+      >
+        <AlertDialogContent className="rounded-2xl max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base font-bold text-foreground">
+              Sem mais providências nesse controle
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm text-muted-foreground">
+              Deseja inserir uma nova providência?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex sm:justify-end gap-2 pt-2">
+            <AlertDialogCancel
+              onClick={handleRejectNovaProvidencia}
+              className="rounded-xl px-4 h-10 border-border"
+            >
+              Não
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmNovaProvidencia}
+              className="rounded-xl px-5 h-10 bg-primary hover:bg-[#4A4AC2] text-primary-foreground font-semibold"
+            >
+              Sim
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal 2 de pós-encerramento de providência: Encerrar controle */}
+      <AlertDialog
+        open={dialogEncerrarControleOpen}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !encerrandoControle) {
+            setDialogEncerrarControleOpen(false)
+            setControlePendenteAcao(null)
+          }
+        }}
+      >
+        <AlertDialogContent className="rounded-2xl max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base font-bold text-foreground">
+              Encerrar controle
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm text-muted-foreground">
+              Deseja encerrar esse controle?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex sm:justify-end gap-2 pt-2">
+            <AlertDialogCancel
+              disabled={encerrandoControle}
+              onClick={handleRejectEncerrarControle}
+              className="rounded-xl px-4 h-10 border-border"
+            >
+              Não
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={encerrandoControle}
+              onClick={handleConfirmEncerrarControle}
+              className="rounded-xl px-5 h-10 bg-primary hover:bg-[#4A4AC2] text-primary-foreground font-semibold"
+            >
+              {encerrandoControle ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Encerrando...
+                </span>
+              ) : (
+                'Sim'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Confirmação de Arquivamento */}
       <DeleteConfirmDialog
