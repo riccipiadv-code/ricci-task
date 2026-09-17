@@ -23,6 +23,7 @@ import {
   Plus,
   Trash2,
   Calendar,
+  Calendar as CalendarIcon,
   Clock,
   User,
   CheckCircle2,
@@ -67,6 +68,7 @@ interface DraftProvidenciaItem {
   tipo_prazo_id: string
   status_id: string
   ordem: number
+  data_conclusao?: string | null
   isPersisted?: boolean
 }
 
@@ -258,6 +260,7 @@ export function ControleModal({
           tipo_prazo_id: p.tipo_prazo_id || tipoPrazoPadraoId,
           status_id: p.status_id || statusProvPadraoId,
           ordem: p.ordem ?? idx,
+          data_conclusao: p.data_conclusao ? p.data_conclusao.split('T')[0] : '',
           isPersisted: true,
         }),
       )
@@ -356,6 +359,7 @@ export function ControleModal({
       tipo_prazo_id: tipoPrazoPadraoId,
       status_id: statusProvPadraoId,
       ordem: providencias.length,
+      data_conclusao: null,
       isPersisted: false,
     }
     setProvidencias((prev) => [...prev, novoItem])
@@ -502,6 +506,20 @@ export function ControleModal({
         })
         return
       }
+
+      const st = statusProvLista.find((s) => s.id === p.status_id)
+      const cod = st?.codigo?.toLowerCase() || ''
+      if (cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso') {
+        if (!p.data_conclusao || !p.data_conclusao.trim()) {
+          setActiveTab('providencias')
+          toast({
+            variant: 'destructive',
+            title: 'Data de Conclusão obrigatória',
+            description: `A providência #${i + 1} está com status "${st?.nome || cod}" e exige o preenchimento da Data de Conclusão.`,
+          })
+          return
+        }
+      }
     }
 
     const payload: SaveControleInput = {
@@ -526,6 +544,11 @@ export function ControleModal({
       if (providencias.length > 0) {
         for (let i = 0; i < providencias.length; i++) {
           const p = providencias[i]
+          const st = statusProvLista.find((s) => s.id === p.status_id)
+          const cod = st?.codigo?.toLowerCase() || ''
+          const exigeData = cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
+          const dtConclusao = exigeData ? (p.data_conclusao ? p.data_conclusao.trim() : null) : null
+
           await controleService.saveProvidencia({
             id: p.id,
             tarefa_id: savedControle.id,
@@ -534,6 +557,7 @@ export function ControleModal({
             tipo_prazo_id: p.tipo_prazo_id,
             status_id: p.status_id,
             ordem: i,
+            data_conclusao: dtConclusao,
           })
         }
       }
@@ -1187,9 +1211,26 @@ export function ControleModal({
                                 </Label>
                                 <Select
                                   value={item.status_id}
-                                  onValueChange={(val) =>
+                                  onValueChange={(val) => {
                                     handleUpdateProvidencia(item.tempId, 'status_id', val)
-                                  }
+                                    const st = statusProvLista.find((s) => s.id === val)
+                                    const cod = st?.codigo?.toLowerCase() || ''
+                                    if (
+                                      cod === 'cancelado' ||
+                                      cod === 'concluido' ||
+                                      cod === 'suspenso'
+                                    ) {
+                                      if (!item.data_conclusao) {
+                                        handleUpdateProvidencia(
+                                          item.tempId,
+                                          'data_conclusao',
+                                          getTodayLocalDate(),
+                                        )
+                                      }
+                                    } else {
+                                      handleUpdateProvidencia(item.tempId, 'data_conclusao', null)
+                                    }
+                                  }}
                                 >
                                   <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
                                     <SelectValue placeholder="Selecione o status..." />
@@ -1205,6 +1246,37 @@ export function ControleModal({
                                   </SelectContent>
                                 </Select>
                               </div>
+
+                              {/* Campo 5: Data de Conclusão (exibida quando o status for cancelado, concluido ou suspenso) */}
+                              {(() => {
+                                const st = statusProvLista.find((s) => s.id === item.status_id)
+                                const cod = st?.codigo?.toLowerCase() || ''
+                                const exigeData =
+                                  cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
+                                if (!exigeData) return null
+
+                                return (
+                                  <div className="space-y-1 animate-fade-in">
+                                    <Label className="text-xs font-semibold flex items-center gap-1 text-primary">
+                                      <CalendarIcon className="w-3.5 h-3.5" />
+                                      <span>Data de Conclusão</span>
+                                      <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Input
+                                      type="date"
+                                      value={item.data_conclusao || ''}
+                                      onChange={(e) =>
+                                        handleUpdateProvidencia(
+                                          item.tempId,
+                                          'data_conclusao',
+                                          e.target.value,
+                                        )
+                                      }
+                                      className="h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary"
+                                    />
+                                  </div>
+                                )
+                              })()}
                             </div>
                           </div>
                         </div>

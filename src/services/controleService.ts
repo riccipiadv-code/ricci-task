@@ -354,6 +354,7 @@ export const controleService = {
           tipo_prazo_id: input.tipo_prazo_id,
           status_id: input.status_id,
           ordem: input.ordem ?? 0,
+          data_conclusao: input.data_conclusao !== undefined ? input.data_conclusao : null,
           updated_at: new Date().toISOString(),
           updated_by: userId,
         })
@@ -377,6 +378,7 @@ export const controleService = {
           tipo_prazo_id: input.tipo_prazo_id,
           status_id: input.status_id,
           ordem: input.ordem ?? 0,
+          data_conclusao: input.data_conclusao !== undefined ? input.data_conclusao : null,
           created_by: userId,
           updated_by: userId,
         })
@@ -392,7 +394,11 @@ export const controleService = {
     }
   },
 
-  async updateProvidenciaStatus(id: string, statusId: string): Promise<TaskProvidenciaRecord> {
+  async updateProvidenciaStatus(
+    id: string,
+    statusId: string,
+    dataConclusao?: string | null,
+  ): Promise<TaskProvidenciaRecord> {
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -401,6 +407,7 @@ export const controleService = {
       .from('task_providencias')
       .update({
         status_id: statusId,
+        data_conclusao: dataConclusao !== undefined ? dataConclusao : null,
         updated_at: new Date().toISOString(),
         updated_by: user?.id || null,
       })

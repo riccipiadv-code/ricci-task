@@ -125,7 +125,23 @@ export function getStatusBadgeStyle(
     }
   }
 
+  if (codigo === 'cancelado') {
+    return {
+      bg: 'bg-rose-50 dark:bg-rose-950/40',
+      text: 'text-rose-700 dark:text-rose-300',
+      border: 'border-rose-200 dark:border-rose-800/60',
+      dot: 'bg-rose-500',
+    }
+  }
+
   switch (codigo) {
+    case 'cancelado':
+      return {
+        bg: 'bg-rose-50 dark:bg-rose-950/40',
+        text: 'text-rose-700 dark:text-rose-300',
+        border: 'border-rose-200 dark:border-rose-800/60',
+        dot: 'bg-rose-500',
+      }
     case 'pendente':
       return {
         bg: 'bg-amber-50 dark:bg-amber-950/40',

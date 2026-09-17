@@ -83,6 +83,7 @@ export interface TaskProvidenciaRecord {
   tipo_prazo_id: string
   status_id: string
   ordem: number
+  data_conclusao?: string | null
   created_at?: string
   created_by?: string | null
   updated_at?: string
@@ -149,6 +150,7 @@ export interface SaveProvidenciaInput {
   tipo_prazo_id: string
   status_id: string
   ordem?: number
+  data_conclusao?: string | null
 }
 
 export interface DraftProvidencia {
@@ -159,6 +161,7 @@ export interface DraftProvidencia {
   tipo_prazo_id: string
   status_id: string
   ordem?: number
+  data_conclusao?: string | null
   deleted?: boolean
 }
 
