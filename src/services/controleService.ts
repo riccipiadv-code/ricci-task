@@ -763,7 +763,6 @@ export const controleService = {
       updated_at: nowIso,
       updated_by: userId,
     }
-
     if (statusFinaliza) {
       updatePayload.arquivado_at = nowIso
     }
@@ -796,7 +795,7 @@ export const controleService = {
       const insertPayload = {
         ...updatePayload,
         created_by: userId || undefined,
-      }
+      } as any
       const { data, error } = await supabase
         .from('task_tarefas')
         .insert(insertPayload)
@@ -853,6 +852,10 @@ export const controleService = {
    * updated_at e updated_by. Não usa delete().
    */
   async encerrarControle(controleId: string, statusId?: string): Promise<TaskControleRecord> {
+    if (!controleId) {
+      throw new Error('ID do controle não informado para encerramento.')
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -881,8 +884,14 @@ export const controleService = {
       .single()
 
     if (error) {
-      console.error('Erro ao encerrar controle:', error)
+      console.error('Erro ao encerrar controle no Supabase:', error)
       throw error
+    }
+
+    if (!data) {
+      const noRowError = new Error('Nenhuma linha foi retornada após encerrar o controle.')
+      console.error(noRowError)
+      throw noRowError
     }
 
     if (typeof window !== 'undefined') {

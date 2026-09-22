@@ -190,29 +190,35 @@ export default function TarefasPage() {
 
   // Resposta SIM no Modal 2: Encerrar controle
   const handleConfirmEncerrarControle = async () => {
-    if (encerrandoControle || !controlePendenteAcao) return
     const controleAlvo = controlePendenteAcao
+    if (!controleAlvo || encerrandoControle) return
     setEncerrandoControle(true)
     try {
-      // Localiza status Concluído pelo código ('concluido' ou 'concluida')
-      // e atualiza em UMA ÚNICA OPERAÇÃO: status_id = Concluído, arquivado_at = data/hora atual, updated_at e updated_by
-      await controleService.encerrarControle(controleAlvo.id)
+      // Executa e aguarda a atualização com validação no Supabase
+      const controleEncerrado = await controleService.encerrarControle(controleAlvo.id)
+
+      // Somente após sucesso: fechar o modal, limpar controlePendenteAcao e atualizar a lista
+      setDialogEncerrarControleOpen(false)
+      setControlePendenteAcao(null)
 
       toast({
         title: 'Controle encerrado com sucesso',
-        description: `O controle "${controleAlvo.identificacao_caso}" foi concluído e arquivado.`,
+        description: `O controle "${controleEncerrado?.identificacao_caso || controleAlvo.identificacao_caso}" foi concluído e arquivado.`,
       })
-
-      setDialogEncerrarControleOpen(false)
-      setControlePendenteAcao(null)
 
       // Recarrega lista
       await refreshControles()
     } catch (err: any) {
+      console.error('Falha ao encerrar controle:', err)
+      const mensagemErro =
+        err?.message ||
+        err?.error_description ||
+        err?.details ||
+        'Falha ao concluir e arquivar controle.'
       toast({
         variant: 'destructive',
         title: 'Erro ao encerrar controle',
-        description: err?.message || 'Falha ao concluir e arquivar controle.',
+        description: mensagemErro,
       })
     } finally {
       setEncerrandoControle(false)
@@ -2695,7 +2701,8 @@ export default function TarefasPage() {
       <AlertDialog
         open={dialogEncerrarControleOpen}
         onOpenChange={(isOpen) => {
-          if (!isOpen && !encerrandoControle) {
+          if (!isOpen) {
+            if (encerrandoControle) return
             setDialogEncerrarControleOpen(false)
             setControlePendenteAcao(null)
           }
@@ -2718,9 +2725,13 @@ export default function TarefasPage() {
             >
               Não
             </AlertDialogCancel>
-            <AlertDialogAction
+            <Button
+              type="button"
               disabled={encerrandoControle}
-              onClick={handleConfirmEncerrarControle}
+              onClick={(e) => {
+                e.preventDefault()
+                handleConfirmEncerrarControle()
+              }}
               className="rounded-xl px-5 h-10 bg-primary hover:bg-[#4A4AC2] text-primary-foreground font-semibold"
             >
               {encerrandoControle ? (
@@ -2731,7 +2742,7 @@ export default function TarefasPage() {
               ) : (
                 'Sim'
               )}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
