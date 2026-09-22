@@ -76,6 +76,7 @@ function normalizeText(text: string | null | undefined): string {
 
 export type SortField =
   | 'nome_controle'
+  | 'numero_caso'
   | 'identificacao_caso'
   | 'status_controle'
   | 'data_autorizacao'
@@ -236,7 +237,7 @@ export default function TarefasPage() {
   const [statusProvidenciaFilter, setStatusProvidenciaFilter] = useState<string>('todos')
 
   // Ordenação manual clicável das colunas (padrão: data da próxima providência aberta crescente)
-  const [sortField, setSortField] = useState<SortField>('prazo_providencia')
+  const [sortField, setSortField] = useState<SortField | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   // Controle de popover/sheet de filtros
@@ -334,7 +335,7 @@ export default function TarefasPage() {
     setExecutorFilter('todos')
     setTipoPrazoFilter('todos')
     setStatusProvidenciaFilter('todos')
-    setSortField('prazo_providencia')
+    setSortField(null)
     setSortDirection('asc')
   }
 
@@ -343,10 +344,18 @@ export default function TarefasPage() {
     let list = [...controles]
 
     // 1. Busca textual: Nome do Controle, Identificação do Caso, Pasta Cliente, Pasta Ricci,
-    // Providências, Responsável e Executor
+    // Providências, Responsável, Executor e Número do Caso (ex: "12", "#12", "caso 12", "caso #12")
     if (debouncedSearch.trim()) {
       const q = normalizeText(debouncedSearch)
+      // Extrair número caso a busca seja por número puro ou termos como "caso 12" ou "#12"
+      const matchNum = debouncedSearch.trim().match(/^(?:caso\s*#?|#)?(\d+)$/i)
+      const numBuscado = matchNum ? parseInt(matchNum[1], 10) : null
+
       list = list.filter((c) => {
+        if (numBuscado !== null && c.numero_caso === numBuscado) {
+          return true
+        }
+
         const nomeNorm = normalizeText(c.nome_controle)
         const casoNorm = normalizeText(c.identificacao_caso)
         const clienteNorm = normalizeText(c.pasta_cliente)
@@ -354,6 +363,7 @@ export default function TarefasPage() {
         const respNorm = normalizeText(c.responsavel_nome)
         const execNorm = normalizeText(c.executor_nome)
         const provsNorm = normalizeText((c.providencias || []).map((p) => p.providencia).join(' '))
+        const numStr = String(c.numero_caso ?? '')
 
         return (
           nomeNorm.includes(q) ||
@@ -362,7 +372,8 @@ export default function TarefasPage() {
           ricciNorm.includes(q) ||
           respNorm.includes(q) ||
           execNorm.includes(q) ||
-          provsNorm.includes(q)
+          provsNorm.includes(q) ||
+          numStr === q
         )
       })
     }
@@ -434,12 +445,29 @@ export default function TarefasPage() {
       return dir === 'asc' ? cmp : -cmp
     }
 
+    // Se o usuário não escolheu uma ordenação manual explícita (sortField === null),
+    // a ordenação padrão dos casos dentro de cada Controle é crescente por numero_caso (numérico).
+    if (!sortField) {
+      list.sort((a, b) => {
+        // Ordena por Controle primeiro para manter grupos coesos, depois por numero_caso crescente
+        const ctrlCmp = (a.nome_controle || '').localeCompare(b.nome_controle || '', 'pt-BR')
+        if (ctrlCmp !== 0) return ctrlCmp
+        return (a.numero_caso ?? 0) - (b.numero_caso ?? 0)
+      })
+      return list
+    }
+
     list.sort((a, b) => {
       let comparison = 0
 
       switch (sortField) {
         case 'nome_controle':
           comparison = compareStringWithEmptiesLast(a.nome_controle, b.nome_controle, sortDirection)
+          break
+
+        case 'numero_caso':
+          comparison = (a.numero_caso ?? 0) - (b.numero_caso ?? 0)
+          if (sortDirection === 'desc') comparison = -comparison
           break
 
         case 'identificacao_caso':
@@ -539,8 +567,11 @@ export default function TarefasPage() {
           comparison = 0
       }
 
-      // Desempate: updated_at decrescente
+      // Desempate: numero_caso crescente se do mesmo controle, senão updated_at decrescente
       if (comparison === 0) {
+        if (a.nome_controle_id === b.nome_controle_id) {
+          return (a.numero_caso ?? 0) - (b.numero_caso ?? 0)
+        }
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
       }
       return comparison
@@ -580,14 +611,26 @@ export default function TarefasPage() {
     const groups: { id: string; nome: string; items: TaskControleRecord[] }[] = []
     for (const id of groupOrder) {
       const g = map.get(id)
-      if (g) groups.push(g)
+      if (g) {
+        // Se a ordenação ativa for a padrão (sem ordenação manual explícita),
+        // garante que os itens deste grupo estejam em ordem crescente numérica de numero_caso
+        if (!sortField) {
+          g.items.sort((a, b) => (a.numero_caso ?? 0) - (b.numero_caso ?? 0))
+        }
+        groups.push(g)
+      }
     }
     return groups
-  }, [filteredControles])
+  }, [filteredControles, sortField])
 
-  const currentSortKey = `${sortField}:${sortDirection}`
+  const currentSortKey = sortField ? `${sortField}:${sortDirection}` : 'padrao'
 
   const handleSelectSort = (val: string) => {
+    if (val === 'padrao') {
+      setSortField(null)
+      setSortDirection('asc')
+      return
+    }
     const [field, dir] = val.split(':') as [SortField, SortDirection]
     if (field && dir) {
       setSortField(field)
@@ -595,7 +638,7 @@ export default function TarefasPage() {
     }
   }
 
-  const isDefaultSorting = sortField === 'prazo_providencia' && sortDirection === 'asc'
+  const isDefaultSorting = sortField === null
 
   const hasActiveFilters = useMemo(() => {
     return (
@@ -1060,6 +1103,9 @@ export default function TarefasPage() {
                       <SelectValue placeholder="Ordenação" />
                     </SelectTrigger>
                     <SelectContent className="rounded-xl max-h-64">
+                      <SelectItem value="padrao">Padrão (Número do Caso crescente)</SelectItem>
+                      <SelectItem value="numero_caso:asc">Número do Caso — crescente</SelectItem>
+                      <SelectItem value="numero_caso:desc">Número do Caso — decrescente</SelectItem>
                       <SelectItem value="prazo_providencia:asc">
                         Prazo da Providência — crescente
                       </SelectItem>
@@ -1440,8 +1486,32 @@ export default function TarefasPage() {
                             {/* Expandir */}
                             <th className="py-2.5 px-2 w-9 text-center" aria-label="Expandir"></th>
 
+                            {/* Coluna CASO */}
+                            <th className="py-2.5 px-2 w-14 text-center">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('numero_caso', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center justify-center gap-1 font-bold uppercase tracking-wider transition-colors hover:text-foreground',
+                                  sortField === 'numero_caso' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por número do caso"
+                              >
+                                <span>CASO</span>
+                                {sortField === 'numero_caso' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
                             {/* 1. Identificação do Caso */}
-                            <th className="py-2.5 px-3 w-[320px]">
+                            <th className="py-2.5 px-3 w-[310px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('identificacao_caso', e)}
@@ -1699,6 +1769,13 @@ export default function TarefasPage() {
                                     </button>
                                   </td>
 
+                                  {/* Coluna CASO: Apenas o número */}
+                                  <td className="py-2.5 px-2 text-center">
+                                    <span className="font-semibold text-foreground/80 font-mono text-xs">
+                                      {c.numero_caso ?? '—'}
+                                    </span>
+                                  </td>
+
                                   {/* 1. Identificação do Caso */}
                                   <td className="py-2.5 px-3">
                                     <Tooltip>
@@ -1868,14 +1945,22 @@ export default function TarefasPage() {
                                 {/* DETALHE RÁPIDO EXPANDIDO */}
                                 {isExpanded && (
                                   <tr className="bg-muted/15 border-b border-border/80">
-                                    <td colSpan={10} className="py-4 px-5">
+                                    <td colSpan={11} className="py-4 px-5">
                                       <div className="bg-card border border-border/80 rounded-xl p-4 shadow-xs space-y-4 text-xs">
                                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-3">
                                           <div>
-                                            <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
-                                              Detalhes do Caso
-                                            </span>
-                                            <h3 className="text-sm font-bold text-foreground mt-0.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                                                Detalhes do Caso
+                                              </span>
+                                              <Badge
+                                                variant="outline"
+                                                className="text-[11px] font-semibold px-2 py-0.5 rounded-md border-border bg-muted/40 text-foreground"
+                                              >
+                                                Caso nº {c.numero_caso ?? '—'}
+                                              </Badge>
+                                            </div>
+                                            <h3 className="text-sm font-bold text-foreground mt-1">
                                               {c.identificacao_caso}
                                             </h3>
                                           </div>
@@ -2234,11 +2319,19 @@ export default function TarefasPage() {
                               </span>
                             </div>
 
-                            {/* Linha 2: Identificação do Caso */}
+                            {/* Linha 2: Identificação do Caso com Badge de Caso */}
                             <div
                               onClick={() => toggleRowExpanded(c.id)}
-                              className="cursor-pointer group"
+                              className="cursor-pointer group space-y-1"
                             >
+                              <div className="flex items-center gap-1.5">
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[10px] font-bold px-1.5 py-0 rounded bg-primary/10 text-primary border-transparent"
+                                >
+                                  Caso {c.numero_caso ?? '—'}
+                                </Badge>
+                              </div>
                               <h4 className="text-sm font-bold text-foreground group-hover:text-primary transition-colors leading-snug">
                                 {c.identificacao_caso}
                               </h4>
@@ -2347,6 +2440,11 @@ export default function TarefasPage() {
                             {/* Detalhes expandidos no mobile */}
                             {isExpanded && (
                               <div className="p-3.5 bg-muted/30 border border-border/60 rounded-xl space-y-3 text-xs mt-2 animate-fade-in">
+                                <div className="flex items-center justify-between pb-2 border-b border-border/40">
+                                  <span className="text-[11px] font-bold uppercase text-primary">
+                                    Caso nº {c.numero_caso ?? '—'}
+                                  </span>
+                                </div>
                                 <div className="grid grid-cols-2 gap-2 text-xs">
                                   <div>
                                     <span className="text-[10px] font-bold text-muted-foreground block">

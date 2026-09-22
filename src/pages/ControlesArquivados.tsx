@@ -139,16 +139,24 @@ export default function ControlesArquivadosPage() {
 
     if (busca.trim()) {
       const q = busca.trim().toLowerCase()
+      const matchNum = busca.trim().match(/^(?:caso\s*#?|#)?(\d+)$/i)
+      const numBuscado = matchNum ? parseInt(matchNum[1], 10) : null
+
       list = list.filter((c) => {
+        if (numBuscado !== null && c.numero_caso === numBuscado) {
+          return true
+        }
         const nomeControle = (c.nome_controle || '').toLowerCase()
         const identificacao = (c.identificacao_caso || '').toLowerCase()
         const responsavel = (c.responsavel_nome || '').toLowerCase()
         const executor = (c.executor_nome || '').toLowerCase()
+        const numStr = String(c.numero_caso ?? '')
         return (
           nomeControle.includes(q) ||
           identificacao.includes(q) ||
           responsavel.includes(q) ||
-          executor.includes(q)
+          executor.includes(q) ||
+          numStr === q
         )
       })
     }
@@ -287,12 +295,13 @@ export default function ControlesArquivadosPage() {
                 <thead>
                   <tr className="border-b border-border/80 bg-muted/40 text-xs font-semibold text-muted-foreground">
                     <th className="py-3 px-4 w-[160px]">Nome do Controle</th>
+                    <th className="py-3 px-2 w-14 text-center">Caso</th>
                     <th className="py-3 px-4 min-w-[240px]">Identificação do Caso</th>
                     <th className="py-3 px-4 w-[140px]">Responsável</th>
                     <th className="py-3 px-4 w-[140px]">Executor</th>
                     <th className="py-3 px-4 min-w-[220px]">Próxima Providência</th>
                     <th className="py-3 px-4 w-[130px]">Prazo Providência</th>
-                    <th className="py-3 px-4 w-[150px]">Data Arquivamento</th>
+                    <th className="py-3 px-4 w-[140px]">Data Arquivamento</th>
                     <th className="py-3 px-4 text-right w-[110px]">Ações</th>
                   </tr>
                 </thead>
@@ -312,6 +321,13 @@ export default function ControlesArquivadosPage() {
                           <span className="inline-flex items-center gap-1.5 text-xs text-primary font-bold">
                             <FolderKanban className="w-3.5 h-3.5 shrink-0" />
                             <span className="truncate">{item.nome_controle || '—'}</span>
+                          </span>
+                        </td>
+
+                        {/* Número do Caso */}
+                        <td className="py-3.5 px-2 text-center">
+                          <span className="font-semibold text-foreground/80 font-mono text-xs">
+                            {item.numero_caso ?? '—'}
                           </span>
                         </td>
 
@@ -449,10 +465,18 @@ export default function ControlesArquivadosPage() {
                     className="p-4 space-y-2.5 hover:bg-muted/20 transition-colors"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1 text-xs text-primary font-bold">
-                        <FolderKanban className="w-3.5 h-3.5" />
-                        <span>{item.nome_controle || '—'}</span>
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-xs text-primary font-bold">
+                          <FolderKanban className="w-3.5 h-3.5" />
+                          <span>{item.nome_controle || '—'}</span>
+                        </span>
+                        <Badge
+                          variant="secondary"
+                          className="text-[10px] font-bold px-1.5 py-0 rounded bg-primary/10 text-primary border-transparent"
+                        >
+                          Caso {item.numero_caso ?? '—'}
+                        </Badge>
+                      </div>
                       <span className="text-[11px] text-muted-foreground">
                         {item.arquivado_at ? formatDateBR(item.arquivado_at) : '—'}
                       </span>

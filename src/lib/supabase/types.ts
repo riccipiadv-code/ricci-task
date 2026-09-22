@@ -1811,6 +1811,35 @@ export type Database = {
           },
         ]
       }
+      task_controle_contadores_caso: {
+        Row: {
+          created_at: string
+          nome_controle_id: string
+          ultimo_numero: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          nome_controle_id: string
+          ultimo_numero?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          nome_controle_id?: string
+          ultimo_numero?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'task_controle_contadores_caso_nome_controle_fk'
+            columns: ['nome_controle_id']
+            isOneToOne: true
+            referencedRelation: 'task_nomes_controle'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       task_importacao_natura_pendencias: {
         Row: {
           andamentos_origem: string | null
@@ -2075,6 +2104,7 @@ export type Database = {
           id: string
           identificacao_caso: string
           nome_controle_id: string
+          numero_caso: number
           pasta_cliente: string | null
           pasta_ricci: string | null
           prazo_conclusao: string | null
@@ -2094,6 +2124,7 @@ export type Database = {
           id?: string
           identificacao_caso: string
           nome_controle_id: string
+          numero_caso?: number
           pasta_cliente?: string | null
           pasta_ricci?: string | null
           prazo_conclusao?: string | null
@@ -2113,6 +2144,7 @@ export type Database = {
           id?: string
           identificacao_caso?: string
           nome_controle_id?: string
+          numero_caso?: number
           pasta_cliente?: string | null
           pasta_ricci?: string | null
           prazo_conclusao?: string | null

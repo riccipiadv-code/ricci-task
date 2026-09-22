@@ -561,6 +561,7 @@ export const controleService = {
       return {
         id: t.id,
         nome_controle_id: t.nome_controle_id,
+        numero_caso: Number(t.numero_caso ?? 0),
         identificacao_caso: t.identificacao_caso,
         status_id: t.status_id,
         data_autorizacao: t.data_autorizacao,
@@ -680,6 +681,7 @@ export const controleService = {
     return {
       id: raw.id,
       nome_controle_id: raw.nome_controle_id,
+      numero_caso: Number(raw.numero_caso ?? 0),
       identificacao_caso: raw.identificacao_caso,
       status_id: raw.status_id,
       data_autorizacao: raw.data_autorizacao,

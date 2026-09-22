@@ -99,6 +99,7 @@ export interface TaskProvidenciaRecord {
 export interface TaskControleRecord {
   id: string
   nome_controle_id: string
+  numero_caso: number
   identificacao_caso: string
   status_id: string
   data_autorizacao: string | null
