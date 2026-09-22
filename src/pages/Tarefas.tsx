@@ -816,7 +816,7 @@ export default function TarefasPage() {
       {/* Header da Tela */}
       <PageHeader
         title="Controles"
-        subtitle="Gerenciamento de casos jurídicos agrupados por controle com providências operacionais"
+        subtitle="Gerenciamento de casos agrupados por controle com providências operacionais"
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -1487,7 +1487,7 @@ export default function TarefasPage() {
                   <>
                     {/* VISUALIZAÇÃO DESKTOP / TABLET (Tabela com 10 colunas: Inicia por Identificação do Caso) */}
                     <div className="hidden md:block overflow-x-auto w-full">
-                      <table className="w-full text-left border-collapse table-fixed min-w-[980px]">
+                      <table className="w-full text-left border-collapse table-fixed min-w-[890px]">
                         <thead>
                           <tr className="border-b border-border/80 bg-muted/20 text-[11px] font-bold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur-md select-none">
                             {/* Expandir */}
@@ -1518,7 +1518,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 1. Identificação do Caso */}
-                            <th className="py-2 px-2.5 w-[210px]">
+                            <th className="py-2 px-2 w-[190px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('identificacao_caso', e)}
@@ -1542,16 +1542,16 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 2. Próxima Providência */}
-                            <th className="py-2 px-2.5 w-[230px]">
+                            <th className="py-2 px-1.5 w-[170px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('providencia', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground leading-tight',
                                   sortField === 'providencia' && 'text-primary font-extrabold',
                                 )}
                               >
-                                <span>Próxima Providência</span>
+                                <span className="line-clamp-2">Próxima Providência</span>
                                 {sortField === 'providencia' ? (
                                   sortDirection === 'asc' ? (
                                     <ArrowUp className="w-3 h-3 text-primary shrink-0" />
@@ -1565,7 +1565,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 4. Prazo da Providência */}
-                            <th className="py-2 px-2 w-[100px]">
+                            <th className="py-2 px-1 w-[88px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('prazo_providencia', e)}
@@ -1589,7 +1589,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 5. Tipo de Prazo */}
-                            <th className="py-2 px-2 w-[85px]">
+                            <th className="py-2 px-1 w-[72px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('tipo_prazo', e)}
@@ -1612,7 +1612,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 6. Status da Providência */}
-                            <th className="py-2 px-2 w-[115px]">
+                            <th className="py-2 px-1 w-[105px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('status_providencia', e)}
@@ -1636,7 +1636,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 7. Responsável */}
-                            <th className="py-2 px-2 w-[105px]">
+                            <th className="py-2 px-1.5 w-[95px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('responsavel', e)}
@@ -1659,7 +1659,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 8. Executor */}
-                            <th className="py-2 px-2 w-[105px]">
+                            <th className="py-2 px-1.5 w-[95px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('executor', e)}
@@ -1682,7 +1682,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 9. Pasta Cliente */}
-                            <th className="py-2 px-1.5 w-[76px] text-center">
+                            <th className="py-2 px-1 w-[68px] text-center">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('pasta_cliente', e)}
@@ -1709,7 +1709,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 10. Pasta Ricci */}
-                            <th className="py-2 px-1.5 w-[76px] text-center">
+                            <th className="py-2 px-1 w-[68px] text-center">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('pasta_ricci', e)}
@@ -1736,7 +1736,7 @@ export default function TarefasPage() {
                             </th>
 
                             {/* 11. Ações (fixa à direita) */}
-                            <th className="py-2 px-2 w-[72px] text-right sticky right-0 bg-muted/30 backdrop-blur-md z-20">
+                            <th className="py-2 px-1.5 w-[68px] text-right sticky right-0 bg-muted/30 backdrop-blur-md z-20">
                               Ações
                             </th>
                           </tr>
@@ -1792,7 +1792,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 1. Identificação do Caso */}
-                                  <td className="py-2 px-2.5">
+                                  <td className="py-2 px-2">
                                     <Tooltip>
                                       <TooltipTrigger asChild>
                                         <div className="font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-3 leading-snug break-words">
@@ -1812,7 +1812,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 3. Próxima Providência */}
-                                  <td className="py-2 px-2.5">
+                                  <td className="py-2 px-1.5">
                                     {proxProv?.providencia ? (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
@@ -1838,7 +1838,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 4. Prazo da Providência (vermelho se vencido) */}
-                                  <td className="py-2 px-2">
+                                  <td className="py-2 px-1">
                                     {proxProv?.prazo_conclusao ? (
                                       <span
                                         className={cn(
@@ -1858,14 +1858,14 @@ export default function TarefasPage() {
 
                                   {/* 5. Tipo de Prazo */}
                                   <td
-                                    className="py-2 px-2 text-muted-foreground truncate text-[11.5px]"
+                                    className="py-2 px-1 text-muted-foreground truncate text-[11px]"
                                     title={proxProv?.tipo_prazo?.nome || ''}
                                   >
                                     {proxProv?.tipo_prazo?.nome || '—'}
                                   </td>
 
                                   {/* 6. Status da Providência */}
-                                  <td className="py-2 px-2">
+                                  <td className="py-2 px-1">
                                     {proxProv?.status ? (
                                       <span
                                         className={cn(
@@ -1890,7 +1890,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 7. Responsável */}
-                                  <td className="py-2 px-2 font-semibold text-foreground">
+                                  <td className="py-2 px-1.5 font-semibold text-foreground">
                                     <span
                                       className="line-clamp-2 leading-tight break-words text-[11.5px] block"
                                       title={c.responsavel_nome || ''}
@@ -1900,7 +1900,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 8. Executor */}
-                                  <td className="py-2 px-2 font-medium text-foreground">
+                                  <td className="py-2 px-1.5 font-medium text-foreground">
                                     <span
                                       className="line-clamp-2 leading-tight break-words text-[11.5px] block"
                                       title={c.executor_nome || ''}
@@ -1910,7 +1910,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 9. Pasta Cliente */}
-                                  <td className="py-2 px-1.5 font-mono font-medium text-foreground text-center">
+                                  <td className="py-2 px-1 font-mono font-medium text-foreground text-center">
                                     {c.pasta_cliente ? (
                                       <span
                                         className="truncate block font-semibold text-[11px]"
@@ -1926,7 +1926,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 10. Pasta Ricci */}
-                                  <td className="py-2 px-1.5 font-mono font-medium text-foreground text-center">
+                                  <td className="py-2 px-1 font-mono font-medium text-foreground text-center">
                                     {c.pasta_ricci ? (
                                       <span
                                         className="truncate block text-primary font-bold text-[11px]"
@@ -1942,7 +1942,7 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 11. Ações (fixa à direita) */}
-                                  <td className="py-2 px-2 text-right sticky right-0 bg-card/90 backdrop-blur-md z-10 group-hover:bg-muted/40 transition-colors">
+                                  <td className="py-2 px-1.5 text-right sticky right-0 bg-card/90 backdrop-blur-md z-10 group-hover:bg-muted/40 transition-colors">
                                     <div className="flex items-center justify-end gap-1">
                                       <Button
                                         type="button"
