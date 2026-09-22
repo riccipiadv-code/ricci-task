@@ -190,16 +190,17 @@ export default function TarefasPage() {
 
   // Resposta SIM no Modal 2: Encerrar controle
   const handleConfirmEncerrarControle = async () => {
-    if (!controlePendenteAcao) return
+    if (encerrandoControle || !controlePendenteAcao) return
+    const controleAlvo = controlePendenteAcao
     setEncerrandoControle(true)
     try {
       // Localiza status Concluído pelo código ('concluido' ou 'concluida')
       // e atualiza em UMA ÚNICA OPERAÇÃO: status_id = Concluído, arquivado_at = data/hora atual, updated_at e updated_by
-      await controleService.encerrarControle(controlePendenteAcao.id)
+      await controleService.encerrarControle(controleAlvo.id)
 
       toast({
         title: 'Controle encerrado com sucesso',
-        description: `O controle "${controlePendenteAcao.identificacao_caso}" foi concluído e arquivado.`,
+        description: `O controle "${controleAlvo.identificacao_caso}" foi concluído e arquivado.`,
       })
 
       setDialogEncerrarControleOpen(false)
@@ -2661,10 +2662,7 @@ export default function TarefasPage() {
       <AlertDialog
         open={dialogNovaProvidenciaOpen}
         onOpenChange={(isOpen) => {
-          if (!isOpen) {
-            setDialogNovaProvidenciaOpen(false)
-            setControlePendenteAcao(null)
-          }
+          setDialogNovaProvidenciaOpen(isOpen)
         }}
       >
         <AlertDialogContent className="rounded-2xl max-w-md">
