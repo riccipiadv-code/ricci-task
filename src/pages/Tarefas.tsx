@@ -1487,25 +1487,49 @@ export default function TarefasPage() {
                   <>
                     {/* VISUALIZAÇÃO DESKTOP / TABLET (Tabela com 10 colunas: Inicia por Identificação do Caso) */}
                     <div className="hidden md:block overflow-x-auto w-full">
-                      <table className="w-full text-left border-collapse table-fixed min-w-[1020px]">
+                      <table className="w-full text-left border-collapse table-fixed min-w-[980px]">
                         <thead>
                           <tr className="border-b border-border/80 bg-muted/20 text-[11px] font-bold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur-md select-none">
                             {/* Expandir */}
-                            <th className="py-2.5 px-2 w-9 text-center" aria-label="Expandir"></th>
+                            <th className="py-2 px-1 w-8 text-center" aria-label="Expandir"></th>
 
                             {/* Coluna CASO */}
-                            <th className="py-2.5 px-2 w-14 text-center">
+                            <th className="py-2 px-1.5 w-11 text-center">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('numero_caso', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center justify-center gap-1 font-bold uppercase tracking-wider transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center justify-center gap-0.5 font-bold uppercase tracking-wider transition-colors hover:text-foreground',
                                   sortField === 'numero_caso' && 'text-primary font-extrabold',
                                 )}
                                 title="Ordenar por número do caso"
                               >
                                 <span>CASO</span>
                                 {sortField === 'numero_caso' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-2.5 h-2.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-2.5 h-2.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-2.5 h-2.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
+                              </button>
+                            </th>
+
+                            {/* 1. Identificação do Caso */}
+                            <th className="py-2 px-2.5 w-[210px]">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('identificacao_caso', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  sortField === 'identificacao_caso' &&
+                                    'text-primary font-extrabold',
+                                )}
+                              >
+                                <span>Identificação do Caso</span>
+                                {sortField === 'identificacao_caso' ? (
                                   sortDirection === 'asc' ? (
                                     <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
@@ -1517,60 +1541,36 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 1. Identificação do Caso */}
-                            <th className="py-2.5 px-3 w-[310px]">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('identificacao_caso', e)}
-                                className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
-                                  sortField === 'identificacao_caso' &&
-                                    'text-primary font-extrabold',
-                                )}
-                              >
-                                <span>Identificação do Caso</span>
-                                {sortField === 'identificacao_caso' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
-                              </button>
-                            </th>
-
                             {/* 2. Próxima Providência */}
-                            <th className="py-2.5 px-3 w-[340px]">
+                            <th className="py-2 px-2.5 w-[230px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('providencia', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
                                   sortField === 'providencia' && 'text-primary font-extrabold',
                                 )}
                               >
                                 <span>Próxima Providência</span>
                                 {sortField === 'providencia' ? (
                                   sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
                                   )
                                 ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
                                 )}
                               </button>
                             </th>
 
                             {/* 4. Prazo da Providência */}
-                            <th className="py-2.5 px-3 w-32">
+                            <th className="py-2 px-2 w-[100px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('prazo_providencia', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
                                   sortField === 'prazo_providencia' &&
                                     'text-primary font-extrabold',
                                 )}
@@ -1578,46 +1578,46 @@ export default function TarefasPage() {
                                 <span>Prazo Providência</span>
                                 {sortField === 'prazo_providencia' ? (
                                   sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
                                   )
                                 ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
                                 )}
                               </button>
                             </th>
 
                             {/* 5. Tipo de Prazo */}
-                            <th className="py-2.5 px-3 w-28">
+                            <th className="py-2 px-2 w-[85px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('tipo_prazo', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
                                   sortField === 'tipo_prazo' && 'text-primary font-extrabold',
                                 )}
                               >
                                 <span>Tipo Prazo</span>
                                 {sortField === 'tipo_prazo' ? (
                                   sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
                                   )
                                 ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
                                 )}
                               </button>
                             </th>
 
                             {/* 6. Status da Providência */}
-                            <th className="py-2.5 px-3 w-36">
+                            <th className="py-2 px-2 w-[115px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('status_providencia', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
                                   sortField === 'status_providencia' &&
                                     'text-primary font-extrabold',
                                 )}
@@ -1625,110 +1625,118 @@ export default function TarefasPage() {
                                 <span>Status Providência</span>
                                 {sortField === 'status_providencia' ? (
                                   sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
                                   )
                                 ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
                                 )}
                               </button>
                             </th>
 
                             {/* 7. Responsável */}
-                            <th className="py-2.5 px-3 w-36">
+                            <th className="py-2 px-2 w-[105px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('responsavel', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
                                   sortField === 'responsavel' && 'text-primary font-extrabold',
                                 )}
                               >
                                 <span>Responsável</span>
                                 {sortField === 'responsavel' ? (
                                   sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
                                   )
                                 ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
                                 )}
                               </button>
                             </th>
 
                             {/* 8. Executor */}
-                            <th className="py-2.5 px-3 w-36">
+                            <th className="py-2 px-2 w-[105px]">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('executor', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex items-center gap-1 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
                                   sortField === 'executor' && 'text-primary font-extrabold',
                                 )}
                               >
                                 <span>Executor</span>
                                 {sortField === 'executor' ? (
                                   sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowUp className="w-3 h-3 text-primary shrink-0" />
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <ArrowDown className="w-3 h-3 text-primary shrink-0" />
                                   )
                                 ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  <ArrowUpDown className="w-3 h-3 opacity-40 group-hover/sort:opacity-80 shrink-0" />
                                 )}
                               </button>
                             </th>
 
                             {/* 9. Pasta Cliente */}
-                            <th className="py-2.5 px-3 w-32">
+                            <th className="py-2 px-1.5 w-[76px] text-center">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('pasta_cliente', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex flex-col items-center justify-center font-bold uppercase tracking-wider transition-colors hover:text-foreground leading-tight w-full',
                                   sortField === 'pasta_cliente' && 'text-primary font-extrabold',
                                 )}
+                                title="Ordenar por Pasta Cliente"
                               >
-                                <span>Pasta Cliente</span>
-                                {sortField === 'pasta_cliente' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                <span className="inline-flex items-center gap-0.5">
+                                  <span>PASTA</span>
+                                  {sortField === 'pasta_cliente' ? (
+                                    sortDirection === 'asc' ? (
+                                      <ArrowUp className="w-2.5 h-2.5 text-primary shrink-0" />
+                                    ) : (
+                                      <ArrowDown className="w-2.5 h-2.5 text-primary shrink-0" />
+                                    )
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
+                                    <ArrowUpDown className="w-2.5 h-2.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  )}
+                                </span>
+                                <span>CLIENTE</span>
                               </button>
                             </th>
 
                             {/* 10. Pasta Ricci */}
-                            <th className="py-2.5 px-3 w-32">
+                            <th className="py-2 px-1.5 w-[76px] text-center">
                               <button
                                 type="button"
                                 onClick={(e) => handleSortColumn('pasta_ricci', e)}
                                 className={cn(
-                                  'group/sort inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-left transition-colors hover:text-foreground',
+                                  'group/sort inline-flex flex-col items-center justify-center font-bold uppercase tracking-wider transition-colors hover:text-foreground leading-tight w-full',
                                   sortField === 'pasta_ricci' && 'text-primary font-extrabold',
                                 )}
+                                title="Ordenar por Pasta Ricci"
                               >
-                                <span>Pasta Ricci</span>
-                                {sortField === 'pasta_ricci' ? (
-                                  sortDirection === 'asc' ? (
-                                    <ArrowUp className="w-3.5 h-3.5 text-primary shrink-0" />
+                                <span className="inline-flex items-center gap-0.5">
+                                  <span>PASTA</span>
+                                  {sortField === 'pasta_ricci' ? (
+                                    sortDirection === 'asc' ? (
+                                      <ArrowUp className="w-2.5 h-2.5 text-primary shrink-0" />
+                                    ) : (
+                                      <ArrowDown className="w-2.5 h-2.5 text-primary shrink-0" />
+                                    )
                                   ) : (
-                                    <ArrowDown className="w-3.5 h-3.5 text-primary shrink-0" />
-                                  )
-                                ) : (
-                                  <ArrowUpDown className="w-3.5 h-3.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                )}
+                                    <ArrowUpDown className="w-2.5 h-2.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                  )}
+                                </span>
+                                <span>RICCI</span>
                               </button>
                             </th>
 
                             {/* 11. Ações (fixa à direita) */}
-                            <th className="py-2.5 px-3 w-20 text-right sticky right-0 bg-muted/30 backdrop-blur-md z-20">
+                            <th className="py-2 px-2 w-[72px] text-right sticky right-0 bg-muted/30 backdrop-blur-md z-20">
                               Ações
                             </th>
                           </tr>
@@ -1758,7 +1766,7 @@ export default function TarefasPage() {
                                 >
                                   {/* Expandir */}
                                   <td
-                                    className="py-2.5 px-2 text-center"
+                                    className="py-2 px-1 text-center"
                                     onClick={(e) => toggleRowExpanded(c.id, e)}
                                   >
                                     <button
@@ -1769,25 +1777,25 @@ export default function TarefasPage() {
                                       }
                                     >
                                       {isExpanded ? (
-                                        <ChevronDown className="w-4 h-4 text-primary" />
+                                        <ChevronDown className="w-3.5 h-3.5 text-primary" />
                                       ) : (
-                                        <ChevronRight className="w-4 h-4" />
+                                        <ChevronRight className="w-3.5 h-3.5" />
                                       )}
                                     </button>
                                   </td>
 
                                   {/* Coluna CASO: Apenas o número */}
-                                  <td className="py-2.5 px-2 text-center">
+                                  <td className="py-2 px-1.5 text-center">
                                     <span className="font-semibold text-foreground/80 font-mono text-xs">
                                       {c.numero_caso ?? '—'}
                                     </span>
                                   </td>
 
                                   {/* 1. Identificação do Caso */}
-                                  <td className="py-2.5 px-3">
+                                  <td className="py-2 px-2.5">
                                     <Tooltip>
                                       <TooltipTrigger asChild>
-                                        <div className="font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-2 leading-relaxed">
+                                        <div className="font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-3 leading-snug break-words">
                                           {c.identificacao_caso || '—'}
                                         </div>
                                       </TooltipTrigger>
@@ -1804,11 +1812,11 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 3. Próxima Providência */}
-                                  <td className="py-2.5 px-3">
+                                  <td className="py-2 px-2.5">
                                     {proxProv?.providencia ? (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
-                                          <div className="text-muted-foreground line-clamp-2 leading-relaxed">
+                                          <div className="text-muted-foreground line-clamp-3 leading-snug break-words">
                                             {proxProv.providencia}
                                           </div>
                                         </TooltipTrigger>
@@ -1830,11 +1838,11 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 4. Prazo da Providência (vermelho se vencido) */}
-                                  <td className="py-2.5 px-3">
+                                  <td className="py-2 px-2">
                                     {proxProv?.prazo_conclusao ? (
                                       <span
                                         className={cn(
-                                          'font-bold inline-flex items-center gap-1',
+                                          'font-bold inline-flex items-center gap-1 text-[11.5px] whitespace-nowrap',
                                           proxVencida ? 'text-destructive' : 'text-foreground',
                                         )}
                                       >
@@ -1849,30 +1857,32 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 5. Tipo de Prazo */}
-                                  <td className="py-2.5 px-3 text-muted-foreground truncate">
+                                  <td
+                                    className="py-2 px-2 text-muted-foreground truncate text-[11.5px]"
+                                    title={proxProv?.tipo_prazo?.nome || ''}
+                                  >
                                     {proxProv?.tipo_prazo?.nome || '—'}
                                   </td>
 
                                   {/* 6. Status da Providência */}
-                                  <td className="py-2.5 px-3">
+                                  <td className="py-2 px-2">
                                     {proxProv?.status ? (
                                       <span
                                         className={cn(
-                                          'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border',
+                                          'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10.5px] font-semibold border max-w-full',
                                           provStatusBadge.bg,
                                           provStatusBadge.text,
                                           provStatusBadge.border,
                                         )}
+                                        title={proxProv.status.nome}
                                       >
                                         <span
                                           className={cn(
-                                            'w-1.5 h-1.5 rounded-full',
+                                            'w-1.5 h-1.5 rounded-full shrink-0',
                                             provStatusBadge.dot,
                                           )}
                                         />
-                                        <span className="truncate max-w-[100px]">
-                                          {proxProv.status.nome}
-                                        </span>
+                                        <span className="truncate">{proxProv.status.nome}</span>
                                       </span>
                                     ) : (
                                       <span className="text-muted-foreground/60">—</span>
@@ -1880,49 +1890,59 @@ export default function TarefasPage() {
                                   </td>
 
                                   {/* 7. Responsável */}
-                                  <td className="py-2.5 px-3 font-semibold text-foreground truncate">
-                                    <span title={c.responsavel_nome || ''}>
+                                  <td className="py-2 px-2 font-semibold text-foreground">
+                                    <span
+                                      className="line-clamp-2 leading-tight break-words text-[11.5px] block"
+                                      title={c.responsavel_nome || ''}
+                                    >
                                       {c.responsavel_nome || '—'}
                                     </span>
                                   </td>
 
                                   {/* 8. Executor */}
-                                  <td className="py-2.5 px-3 font-medium text-foreground truncate">
-                                    <span title={c.executor_nome || ''}>
+                                  <td className="py-2 px-2 font-medium text-foreground">
+                                    <span
+                                      className="line-clamp-2 leading-tight break-words text-[11.5px] block"
+                                      title={c.executor_nome || ''}
+                                    >
                                       {c.executor_nome || '—'}
                                     </span>
                                   </td>
 
                                   {/* 9. Pasta Cliente */}
-                                  <td className="py-2.5 px-3 font-mono font-medium text-foreground">
+                                  <td className="py-2 px-1.5 font-mono font-medium text-foreground text-center">
                                     {c.pasta_cliente ? (
                                       <span
-                                        className="whitespace-nowrap inline-block font-semibold"
+                                        className="truncate block font-semibold text-[11px]"
                                         title={c.pasta_cliente}
                                       >
                                         {c.pasta_cliente}
                                       </span>
                                     ) : (
-                                      <span className="text-muted-foreground/60">—</span>
+                                      <span className="text-muted-foreground/60 text-center block">
+                                        —
+                                      </span>
                                     )}
                                   </td>
 
                                   {/* 10. Pasta Ricci */}
-                                  <td className="py-2.5 px-3 font-mono font-medium text-foreground">
+                                  <td className="py-2 px-1.5 font-mono font-medium text-foreground text-center">
                                     {c.pasta_ricci ? (
                                       <span
-                                        className="whitespace-nowrap inline-block text-primary font-bold"
+                                        className="truncate block text-primary font-bold text-[11px]"
                                         title={c.pasta_ricci}
                                       >
                                         {c.pasta_ricci}
                                       </span>
                                     ) : (
-                                      <span className="text-muted-foreground/60">—</span>
+                                      <span className="text-muted-foreground/60 text-center block">
+                                        —
+                                      </span>
                                     )}
                                   </td>
 
                                   {/* 11. Ações (fixa à direita) */}
-                                  <td className="py-2.5 px-3 text-right sticky right-0 bg-card/90 backdrop-blur-md z-10 group-hover:bg-muted/40 transition-colors">
+                                  <td className="py-2 px-2 text-right sticky right-0 bg-card/90 backdrop-blur-md z-10 group-hover:bg-muted/40 transition-colors">
                                     <div className="flex items-center justify-end gap-1">
                                       <Button
                                         type="button"
