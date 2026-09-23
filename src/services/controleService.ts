@@ -1020,4 +1020,52 @@ export const controleService = {
       concluidos,
     }
   },
+
+  /**
+   * Notifica a atribuição de uma tarefa/caso via Edge Function exclusiva (notify-task-assignment).
+   * A função backend consulta todos os dados e dispara por e-mail com segurança.
+   */
+  async notifyAssignment(
+    tarefaId: string,
+    tipo: 'nova_atribuicao' | 'alteracao_atribuicao',
+  ): Promise<{
+    success: boolean
+    sent?: boolean
+    reason?: string
+    error?: string
+    message?: string
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke('notify-task-assignment', {
+        body: {
+          tarefa_id: tarefaId,
+          tipo,
+        },
+      })
+
+      if (error) {
+        console.error('Erro na chamada da Edge Function notify-task-assignment:', error)
+        return {
+          success: false,
+          sent: false,
+          error: error.message || 'Erro ao invocar função de notificação.',
+        }
+      }
+
+      return {
+        success: data?.success ?? true,
+        sent: data?.sent ?? false,
+        reason: data?.reason,
+        message: data?.message,
+        error: data?.error,
+      }
+    } catch (err: any) {
+      console.error('Falha de rede ou execução ao notificar atribuição:', err)
+      return {
+        success: false,
+        sent: false,
+        error: err?.message || 'Falha ao conectar com o serviço de notificação.',
+      }
+    }
+  },
 }

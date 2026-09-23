@@ -607,6 +607,23 @@ export function ControleModal({
       pasta_ricci: pastaRicci.trim() || null,
     }
 
+    // Captura os IDs anteriores ANTES do salvamento para comparar com segurança
+    const isEdicao = Boolean(controleToEdit?.id)
+    const prevExecutorId = controleToEdit?.executor_usuario_id || null
+    const prevResponsavelId = controleToEdit?.responsavel_usuario_id || null
+
+    // Determina se deve notificar e qual o tipo
+    let tipoNotificacao: 'nova_atribuicao' | 'alteracao_atribuicao' | null = null
+    if (!isEdicao) {
+      tipoNotificacao = 'nova_atribuicao'
+    } else {
+      const mudouExecutor = prevExecutorId !== executorUsuarioId
+      const mudouResponsavel = prevResponsavelId !== responsavelUsuarioId
+      if (mudouExecutor || mudouResponsavel) {
+        tipoNotificacao = 'alteracao_atribuicao'
+      }
+    }
+
     setSaving(true)
     try {
       // 1. Salva o controle principal em task_tarefas
@@ -637,10 +654,46 @@ export function ControleModal({
       const fullyLoaded = await controleService.getControleById(savedControle.id, usuariosLista)
       onSaved(fullyLoaded || savedControle)
 
-      toast({
-        title: controleToEdit ? 'Controle atualizado' : 'Controle criado com sucesso',
-        description: `Caso: ${savedControle.identificacao_caso}`,
-      })
+      // 4. Disparo de notificação por e-mail DEPOIS que controle e todas as providências foram salvos com sucesso
+      let emailFalhou = false
+      if (tipoNotificacao) {
+        try {
+          const notifResult = await controleService.notifyAssignment(
+            savedControle.id,
+            tipoNotificacao,
+          )
+          if (!notifResult.success) {
+            emailFalhou = true
+            console.warn(
+              'Aviso: notificação de atribuição por e-mail não pôde ser enviada:',
+              notifResult.error || notifResult.reason,
+            )
+          } else if (notifResult.sent === false && notifResult.reason) {
+            console.log(
+              'Notificação não enviada (motivo controlado):',
+              notifResult.reason,
+              notifResult.message,
+            )
+          }
+        } catch (notifErr) {
+          emailFalhou = true
+          console.error('Falha segura ao disparar notificação de atribuição:', notifErr)
+        }
+      }
+
+      if (emailFalhou) {
+        toast({
+          variant: 'destructive',
+          title: controleToEdit ? 'Controle atualizado' : 'Controle criado com sucesso',
+          description: 'Controle salvo, mas não foi possível enviar a notificação por e-mail.',
+        })
+      } else {
+        toast({
+          title: controleToEdit ? 'Controle atualizado' : 'Controle criado com sucesso',
+          description: `Caso: ${savedControle.identificacao_caso}`,
+        })
+      }
+
       onOpenChange(false)
     } catch (err: any) {
       console.error('Erro ao salvar controle:', err)
