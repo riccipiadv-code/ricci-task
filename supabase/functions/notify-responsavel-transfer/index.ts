@@ -157,17 +157,48 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    // 5. Buscar o contato em manychat_contatos
+    // 5. Buscar o contato em manychat_contatos com serviço e origem
     const { data: contato, error: contatoError } = await supabase
       .from('manychat_contatos')
       .select(
-        'controle, lead_nome, lead_empresa_pf, lead_servico, manychat_live_chat_url, manychat_servicos(descricao)',
+        'controle, lead_nome, lead_empresa_pf, lead_servico, origem, manychat_live_chat_url, manychat_servicos(descricao), manychat_origens(nome)',
       )
       .eq('id', contato_id)
       .maybeSingle()
 
     if (contatoError) throw contatoError
     if (!contato) throw new Error('Contato não encontrado.')
+
+    // 5.1. Buscar gestor vinculado ao responsável (profiles.legaldesk_usuario_id -> profiles.gestor_id)
+    let gestorEmail: string | null = null
+    try {
+      const { data: respProfile, error: profileError } = await supabase
+        .from('profiles')
+        .select('gestor_id')
+        .eq('legaldesk_usuario_id', targetResponsavelId)
+        .maybeSingle()
+
+      if (profileError) {
+        console.warn('Erro ao consultar profile do responsável para obter gestor:', profileError)
+      } else if (respProfile?.gestor_id) {
+        const { data: gestorProfile, error: gestorError } = await supabase
+          .from('profiles')
+          .select('email, name, perfil')
+          .eq('id', respProfile.gestor_id)
+          .maybeSingle()
+
+        if (gestorError) {
+          console.warn('Erro ao consultar profile do gestor:', gestorError)
+        } else if (gestorProfile?.email) {
+          const candidateEmail = gestorProfile.email.trim()
+          if (candidateEmail && candidateEmail.toLowerCase() !== destEmail.toLowerCase()) {
+            gestorEmail = candidateEmail
+          }
+        }
+      }
+    } catch (gestorLookupError) {
+      console.warn('Falha segura na busca de gestor:', gestorLookupError)
+    }
 
     // 6. Buscar configuração ativa do E-mail Geral
     const { data: setting, error: settingError } = await supabase
@@ -220,6 +251,18 @@ Deno.serve(async (req: Request) => {
     const contatoNome = (contato.lead_nome || '').trim()
     const liveChatUrl = (contato.manychat_live_chat_url || '').trim()
 
+    // Determinar Origem: manychat_origens.nome ou contato.origem
+    let origemNome = ''
+    const mo = contato.manychat_origens as any
+    if (Array.isArray(mo) && mo.length > 0) {
+      origemNome = (mo[0]?.nome || '').trim()
+    } else if (mo?.nome) {
+      origemNome = (mo.nome || '').trim()
+    }
+    if (!origemNome && contato.origem) {
+      origemNome = String(contato.origem).trim()
+    }
+
     // Montar corpo (texto simples)
     const openingLine = isReabertura
       ? 'Um atendimento sob sua responsabilidade foi reaberto no Conectaí.'
@@ -240,6 +283,10 @@ Deno.serve(async (req: Request) => {
 
     if (servicoNome) {
       bodyLines.push(`Serviço: ${servicoNome}`)
+    }
+
+    if (origemNome) {
+      bodyLines.push(`Origem: ${origemNome}`)
     }
 
     bodyLines.push('')
@@ -273,9 +320,17 @@ Deno.serve(async (req: Request) => {
 
     const transporter = nodemailer.createTransport(transporterOptions)
 
-    const mailOptions = {
+    const mailOptions: {
+      from: string
+      to: string
+      cc?: string
+      replyTo?: string
+      subject: string
+      text: string
+    } = {
       from: `"${setting.sender_name}" <${setting.sender_email}>`,
       to: destEmail,
+      ...(gestorEmail ? { cc: gestorEmail } : {}),
       replyTo: setting.reply_to || undefined,
       subject,
       text: emailText,

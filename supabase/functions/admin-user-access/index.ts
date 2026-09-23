@@ -39,7 +39,7 @@ Deno.serve(async (req: Request) => {
     if (userError || !user) throw new Error('Não autorizado.')
 
     const body = await req.json()
-    const { action, legaldesk_id, email, name, perfil } = body
+    const { action, legaldesk_id, email, name, perfil, gestor_id } = body
 
     if (!action) {
       throw new Error('Parâmetro obrigatório ausente: action.')
@@ -54,6 +54,7 @@ Deno.serve(async (req: Request) => {
     const adminActions = [
       'list_users',
       'list_perfis',
+      'list_gestores',
       'list_hidden_users',
       'create_user',
       'grant_access',
@@ -110,6 +111,17 @@ Deno.serve(async (req: Request) => {
         const profileId = prof?.id || null
         const perfilVal = prof?.perfil || null
         const ativoSys = prof?.ativo ?? false
+        const gestorId = prof?.gestor_id || null
+
+        // Resolver nome do gestor vinculado (mesmo se o gestor foi inativado no passado)
+        let gestorNome: string | null = null
+        if (gestorId) {
+          const gestorProf = profiles?.find((p) => p.id === gestorId)
+          if (gestorProf?.name) {
+            gestorNome = gestorProf.name
+          }
+        }
+
         const authUserExists = profileId ? authUserIdsSet.has(profileId) : false
 
         let status: 'sem_acesso' | 'ativo' | 'bloqueado' | 'inconsistente'
@@ -136,6 +148,8 @@ Deno.serve(async (req: Request) => {
           profile_id: profileId,
           perfil: perfilVal,
           ativo_sys: ativoSys,
+          gestor_id: gestorId,
+          gestor_nome: gestorNome,
           auth_user_exists: authUserExists,
           status,
           tem_acesso: temAcesso,
@@ -158,6 +172,22 @@ Deno.serve(async (req: Request) => {
       if (perfisError) throw perfisError
 
       return new Response(JSON.stringify({ perfis: perfis || [] }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (action === 'list_gestores') {
+      // Carregar dinamicamente da tabela profiles: usuários ATIVOS com perfil IN ('gestor', 'administrador')
+      const { data: gestores, error: gestoresError } = await supabase
+        .from('profiles')
+        .select('id, name, email')
+        .in('perfil', ['gestor', 'administrador'])
+        .eq('ativo', true)
+        .order('name', { ascending: true })
+
+      if (gestoresError) throw gestoresError
+
+      return new Response(JSON.stringify({ gestores: gestores || [] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
@@ -235,7 +265,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === 'create_user') {
-      const { nome, sigla, email: inputEmail, perfil: inputPerfil } = body
+      const { nome, sigla, email: inputEmail, perfil: inputPerfil, gestor_id: inputGestorId } = body
 
       if (!nome || !sigla || !inputEmail || !inputPerfil) {
         throw new Error('Parâmetros obrigatórios ausentes: nome, sigla, email e perfil.')
@@ -362,7 +392,28 @@ Deno.serve(async (req: Request) => {
         throw new Error('Não foi possível obter o ID do usuário Auth.')
       }
 
-      // 1g. Completar Profile
+      // 1g. Validar gestor_id se fornecido
+      let validatedGestorId: string | null = null
+      if (inputGestorId && typeof inputGestorId === 'string' && inputGestorId.trim()) {
+        const trimmedGId = inputGestorId.trim()
+        const { data: gestorProfile, error: gestorErr } = await supabase
+          .from('profiles')
+          .select('id, perfil, ativo')
+          .eq('id', trimmedGId)
+          .maybeSingle()
+
+        if (
+          gestorErr ||
+          !gestorProfile ||
+          !gestorProfile.ativo ||
+          !['gestor', 'administrador'].includes(gestorProfile.perfil)
+        ) {
+          throw new Error('Gestor selecionado inválido ou inativo.')
+        }
+        validatedGestorId = trimmedGId
+      }
+
+      // 1h. Completar Profile
       // O trigger on_auth_user_created -> handle_new_user() pode já ter inserido o profile correspondente pelo authUserId.
       // Usamos upsert ou update por id.
       const { error: profileUpsertErr } = await supabase.from('profiles').upsert(
@@ -373,6 +424,7 @@ Deno.serve(async (req: Request) => {
           legaldesk_usuario_id: newLdId,
           perfil: targetPerfil,
           ativo: true,
+          gestor_id: validatedGestorId,
         },
         { onConflict: 'id' },
       )
@@ -424,6 +476,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'grant_access') {
       const targetLegaldeskId = body.legaldesk_usuario_id || legaldesk_id
       const targetPerfil = String(perfil || '').trim()
+      const inputGestorId = body.gestor_id
 
       if (!targetLegaldeskId) {
         throw new Error('Parâmetro obrigatório ausente: legaldesk_usuario_id.')
@@ -531,7 +584,31 @@ Deno.serve(async (req: Request) => {
         throw new Error('Não foi possível obter o ID do usuário criado no Auth.')
       }
 
-      // 8. Criar/completar o profile correspondente
+      // 8. Validar gestor_id se fornecido
+      let validatedGestorId: string | null = null
+      if (inputGestorId && typeof inputGestorId === 'string' && inputGestorId.trim()) {
+        const trimmedGId = inputGestorId.trim()
+        if (trimmedGId === authUserId) {
+          throw new Error('O usuário não pode ser gestor de si próprio.')
+        }
+        const { data: gestorProfile, error: gestorErr } = await supabase
+          .from('profiles')
+          .select('id, perfil, ativo')
+          .eq('id', trimmedGId)
+          .maybeSingle()
+
+        if (
+          gestorErr ||
+          !gestorProfile ||
+          !gestorProfile.ativo ||
+          !['gestor', 'administrador'].includes(gestorProfile.perfil)
+        ) {
+          throw new Error('Gestor selecionado inválido ou inativo.')
+        }
+        validatedGestorId = trimmedGId
+      }
+
+      // 9. Criar/completar o profile correspondente
       // Nota: trigger handle_new_user pode ter inserido esqueleto de profile no insert do auth.users,
       // então utilizamos upsert por id.
       const { error: profileUpsertErr } = await supabase.from('profiles').upsert(
@@ -542,6 +619,7 @@ Deno.serve(async (req: Request) => {
           legaldesk_usuario_id: targetLegaldeskId,
           perfil: targetPerfil,
           ativo: true,
+          gestor_id: validatedGestorId,
         },
         { onConflict: 'id' },
       )
@@ -696,6 +774,39 @@ Deno.serve(async (req: Request) => {
       const previousLdEmail = currentLdUser.email
       const previousProfEmail = currentProfile.email
 
+      // Validar gestor_id no change_perfil
+      // gestor_id pode ser: string (UUID), null, ou undefined (não alterado se não passado)
+      let updateGestor = false
+      let newGestorId: string | null = null
+
+      if ('gestor_id' in body) {
+        updateGestor = true
+        if (gestor_id && typeof gestor_id === 'string' && gestor_id.trim()) {
+          const trimmedGId = gestor_id.trim()
+          if (trimmedGId === currentProfile.id) {
+            throw new Error('O usuário não pode ser gestor de si próprio.')
+          }
+
+          const { data: gestorProfile, error: gestorErr } = await supabase
+            .from('profiles')
+            .select('id, perfil, ativo')
+            .eq('id', trimmedGId)
+            .maybeSingle()
+
+          if (
+            gestorErr ||
+            !gestorProfile ||
+            !gestorProfile.ativo ||
+            !['gestor', 'administrador'].includes(gestorProfile.perfil)
+          ) {
+            throw new Error('Gestor selecionado inválido ou inativo.')
+          }
+          newGestorId = trimmedGId
+        } else {
+          newGestorId = null
+        }
+      }
+
       if (isEmailChanged) {
         // Etapa 1: Atualizar Auth via API administrativa
         const { error: authUpdateErr } = await supabase.auth.admin.updateUserById(
@@ -709,13 +820,18 @@ Deno.serve(async (req: Request) => {
           throw new Error(`Falha ao atualizar e-mail no Auth: ${authUpdateErr.message}`)
         }
 
-        // Etapa 2: Atualizar profiles (email e perfil)
+        // Etapa 2: Atualizar profiles (email, perfil e opcionalmente gestor_id)
+        const profileUpdatePayload: Record<string, any> = {
+          email: normNewEmail,
+          perfil,
+        }
+        if (updateGestor) {
+          profileUpdatePayload.gestor_id = newGestorId
+        }
+
         const { error: profUpdateErr } = await supabase
           .from('profiles')
-          .update({
-            email: normNewEmail,
-            perfil,
-          })
+          .update(profileUpdatePayload)
           .eq('id', currentProfile.id)
 
         if (profUpdateErr) {
@@ -771,10 +887,15 @@ Deno.serve(async (req: Request) => {
           )
         }
       } else {
-        // Se o e-mail não foi alterado, atualizar apenas o perfil em profiles
+        // Se o e-mail não foi alterado, atualizar perfil e opcionalmente gestor_id em profiles
+        const profileUpdatePayload: Record<string, any> = { perfil }
+        if (updateGestor) {
+          profileUpdatePayload.gestor_id = newGestorId
+        }
+
         const { error: updateError } = await supabase
           .from('profiles')
-          .update({ perfil })
+          .update(profileUpdatePayload)
           .eq('id', currentProfile.id)
 
         if (updateError) throw updateError
