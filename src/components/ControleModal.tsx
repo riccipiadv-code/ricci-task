@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Plus,
   Trash2,
@@ -33,6 +34,7 @@ import {
   AlertCircle,
   Search,
   FolderKanban,
+  Bell,
 } from 'lucide-react'
 import {
   TaskControleRecord,
@@ -71,6 +73,10 @@ interface DraftProvidenciaItem {
   status_id: string
   ordem: number
   data_conclusao?: string | null
+  email_alertas?: boolean
+  email_alerta_inclusao?: boolean
+  email_alerta_atraso?: boolean
+  email_alerta_atualizacao?: boolean
   isPersisted?: boolean
 }
 
@@ -265,6 +271,10 @@ export function ControleModal({
           status_id: p.status_id || statusProvPadraoId,
           ordem: p.ordem ?? idx,
           data_conclusao: p.data_conclusao ? p.data_conclusao.split('T')[0] : '',
+          email_alertas: p.email_alertas ?? false,
+          email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+          email_alerta_atraso: p.email_alerta_atraso ?? false,
+          email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
           isPersisted: true,
         }),
       )
@@ -280,6 +290,10 @@ export function ControleModal({
           status_id: statusProvPadraoId,
           ordem: maiorOrdem + 1,
           data_conclusao: null,
+          email_alertas: false,
+          email_alerta_inclusao: false,
+          email_alerta_atraso: false,
+          email_alerta_atualizacao: false,
           isPersisted: false,
         })
         setFocusNewProvId(autoTempId)
@@ -414,6 +428,10 @@ export function ControleModal({
       status_id: statusProvPadraoId,
       ordem: proximaOrdem,
       data_conclusao: null,
+      email_alertas: false,
+      email_alerta_inclusao: false,
+      email_alerta_atraso: false,
+      email_alerta_atualizacao: false,
       isPersisted: false,
     }
 
@@ -646,6 +664,10 @@ export function ControleModal({
             status_id: p.status_id,
             ordem: p.ordem ?? 0,
             data_conclusao: dtConclusao,
+            email_alertas: p.email_alertas ?? false,
+            email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+            email_alerta_atraso: p.email_alerta_atraso ?? false,
+            email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
           })
         }
       }
@@ -1389,7 +1411,7 @@ export function ControleModal({
                                 if (!exigeData) return null
 
                                 return (
-                                  <div className="space-y-1 animate-fade-in">
+                                  <div className="space-y-1 animate-fade-in sm:col-span-3">
                                     <Label className="text-xs font-semibold flex items-center gap-1 text-primary">
                                       <CalendarIcon className="w-3.5 h-3.5" />
                                       <span>Data de Conclusão</span>
@@ -1405,11 +1427,130 @@ export function ControleModal({
                                           e.target.value,
                                         )
                                       }
-                                      className="h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary"
+                                      className="h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary sm:max-w-xs"
                                     />
                                   </div>
                                 )
                               })()}
+                            </div>
+
+                            {/* Seção de Preferências de Alerta por E-mail (sutil e compacta) */}
+                            <div className="pt-2 border-t border-border/40">
+                              <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-2">
+                                {/* Checkbox Principal: Receber alertas */}
+                                <div className="flex items-center gap-2">
+                                  <Checkbox
+                                    id={`email-alertas-${item.tempId}`}
+                                    checked={Boolean(item.email_alertas)}
+                                    onCheckedChange={(checked) =>
+                                      handleUpdateProvidencia(
+                                        item.tempId,
+                                        'email_alertas',
+                                        checked === true,
+                                      )
+                                    }
+                                  />
+                                  <Label
+                                    htmlFor={`email-alertas-${item.tempId}`}
+                                    className="text-xs font-semibold text-foreground cursor-pointer flex items-center gap-1.5 select-none"
+                                  >
+                                    <Bell className="w-3.5 h-3.5 text-primary" />
+                                    <span>Receber alertas</span>
+                                  </Label>
+                                </div>
+
+                                {/* Subtipos de alerta: Inclusão, Atraso, Atualização */}
+                                <div
+                                  className={cn(
+                                    'pl-6 flex flex-wrap items-center gap-x-5 gap-y-1.5 transition-opacity duration-150',
+                                    !item.email_alertas && 'opacity-40 pointer-events-none',
+                                  )}
+                                >
+                                  {/* Subtipo 1: Inclusão / início */}
+                                  <div className="flex items-center gap-1.5">
+                                    <Checkbox
+                                      id={`alerta-inclusao-${item.tempId}`}
+                                      disabled={!item.email_alertas}
+                                      checked={Boolean(item.email_alerta_inclusao)}
+                                      onCheckedChange={(checked) =>
+                                        handleUpdateProvidencia(
+                                          item.tempId,
+                                          'email_alerta_inclusao',
+                                          checked === true,
+                                        )
+                                      }
+                                      className="h-3.5 w-3.5 rounded"
+                                    />
+                                    <Label
+                                      htmlFor={`alerta-inclusao-${item.tempId}`}
+                                      className={cn(
+                                        'text-[11px] text-muted-foreground select-none',
+                                        item.email_alertas
+                                          ? 'cursor-pointer hover:text-foreground'
+                                          : 'cursor-not-allowed',
+                                      )}
+                                    >
+                                      Inclusão / início
+                                    </Label>
+                                  </div>
+
+                                  {/* Subtipo 2: Providência atrasada */}
+                                  <div className="flex items-center gap-1.5">
+                                    <Checkbox
+                                      id={`alerta-atraso-${item.tempId}`}
+                                      disabled={!item.email_alertas}
+                                      checked={Boolean(item.email_alerta_atraso)}
+                                      onCheckedChange={(checked) =>
+                                        handleUpdateProvidencia(
+                                          item.tempId,
+                                          'email_alerta_atraso',
+                                          checked === true,
+                                        )
+                                      }
+                                      className="h-3.5 w-3.5 rounded"
+                                    />
+                                    <Label
+                                      htmlFor={`alerta-atraso-${item.tempId}`}
+                                      className={cn(
+                                        'text-[11px] text-muted-foreground select-none',
+                                        item.email_alertas
+                                          ? 'cursor-pointer hover:text-foreground'
+                                          : 'cursor-not-allowed',
+                                      )}
+                                    >
+                                      Providência atrasada
+                                    </Label>
+                                  </div>
+
+                                  {/* Subtipo 3: Atualização da providência */}
+                                  <div className="flex items-center gap-1.5">
+                                    <Checkbox
+                                      id={`alerta-atualizacao-${item.tempId}`}
+                                      disabled={!item.email_alertas}
+                                      checked={Boolean(item.email_alerta_atualizacao)}
+                                      onCheckedChange={(checked) =>
+                                        handleUpdateProvidencia(
+                                          item.tempId,
+                                          'email_alerta_atualizacao',
+                                          checked === true,
+                                        )
+                                      }
+                                      className="h-3.5 w-3.5 rounded"
+                                    />
+                                    <Label
+                                      htmlFor={`alerta-atualizacao-${item.tempId}`}
+                                      className={cn(
+                                        'text-[11px] text-muted-foreground select-none',
+                                        item.email_alertas
+                                          ? 'cursor-pointer hover:text-foreground'
+                                          : 'cursor-not-allowed',
+                                      )}
+                                    >
+                                      Atualização da providência
+                                    </Label>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>

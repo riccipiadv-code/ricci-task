@@ -84,6 +84,10 @@ export interface TaskProvidenciaRecord {
   status_id: string
   ordem: number
   data_conclusao?: string | null
+  email_alertas?: boolean
+  email_alerta_inclusao?: boolean
+  email_alerta_atraso?: boolean
+  email_alerta_atualizacao?: boolean
   created_at?: string
   created_by?: string | null
   updated_at?: string
@@ -152,6 +156,10 @@ export interface SaveProvidenciaInput {
   status_id: string
   ordem?: number
   data_conclusao?: string | null
+  email_alertas?: boolean
+  email_alerta_inclusao?: boolean
+  email_alerta_atraso?: boolean
+  email_alerta_atualizacao?: boolean
 }
 
 export interface DraftProvidencia {
@@ -163,6 +171,10 @@ export interface DraftProvidencia {
   status_id: string
   ordem?: number
   data_conclusao?: string | null
+  email_alertas?: boolean
+  email_alerta_inclusao?: boolean
+  email_alerta_atraso?: boolean
+  email_alerta_atualizacao?: boolean
   deleted?: boolean
 }
 

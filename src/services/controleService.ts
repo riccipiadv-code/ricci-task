@@ -355,6 +355,10 @@ export const controleService = {
           status_id: input.status_id,
           ordem: input.ordem ?? 0,
           data_conclusao: input.data_conclusao !== undefined ? input.data_conclusao : null,
+          email_alertas: input.email_alertas ?? false,
+          email_alerta_inclusao: input.email_alerta_inclusao ?? false,
+          email_alerta_atraso: input.email_alerta_atraso ?? false,
+          email_alerta_atualizacao: input.email_alerta_atualizacao ?? false,
           updated_at: new Date().toISOString(),
           updated_by: userId,
         })
@@ -379,6 +383,10 @@ export const controleService = {
           status_id: input.status_id,
           ordem: input.ordem ?? 0,
           data_conclusao: input.data_conclusao !== undefined ? input.data_conclusao : null,
+          email_alertas: input.email_alertas ?? false,
+          email_alerta_inclusao: input.email_alerta_inclusao ?? false,
+          email_alerta_atraso: input.email_alerta_atraso ?? false,
+          email_alerta_atualizacao: input.email_alerta_atualizacao ?? false,
           created_by: userId,
           updated_by: userId,
         })
