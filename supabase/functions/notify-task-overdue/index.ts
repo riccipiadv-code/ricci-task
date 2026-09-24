@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers':
-    'authorization, x-client-info, x-supabase-client-platform, apikey, content-type',
+    'authorization, x-client-info, x-supabase-client-platform, apikey, content-type, x-task-cron-secret',
 }
 
 function isValidEmail(email?: string | null): boolean {
@@ -66,16 +66,9 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  const authHeader = req.headers.get('Authorization')
-  if (!authHeader) {
-    return new Response(JSON.stringify({ error: 'Token de autenticação não encontrado' }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
-  }
-
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const TASK_OVERDUE_CRON_SECRET = Deno.env.get('TASK_OVERDUE_CRON_SECRET')
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     return new Response(
@@ -91,14 +84,75 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
   try {
-    // 1. Validar autenticação: aceita usuário autenticado (JWT) OU service role / cron secret
-    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+    // Comparação em tempo constante para mitigar timing attacks
+    const timingSafeEqual = (a: string, b: string): boolean => {
+      if (a.length !== b.length) return false
+      let diff = 0
+      for (let i = 0; i < a.length; i++) {
+        diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+      }
+      return diff === 0
+    }
+
+    // 1. Autorização segregada:
+    // A) Execução automática do cron:
+    //    Identificada pelo header dedicado 'x-task-cron-secret'.
+    //    Comparada exclusivamente com TASK_OVERDUE_CRON_SECRET (deve estar configurado).
+    // B) Execução manual de teste:
+    //    Permitida somente para usuário autenticado com perfil administrativo
+    //    validado no backend (tabela profiles / task_usuarios perfil admin). Usuário comum autenticado recebe 403.
+    const cronSecretHeader = req.headers.get('x-task-cron-secret')
+    const authHeader = req.headers.get('Authorization')
+
+    let isCronExecution = false
     let callerUserId: string | null = null
 
-    if (token === SUPABASE_SERVICE_ROLE_KEY) {
-      // Invocação por cron, worker agendado ou serviço do sistema
+    if (cronSecretHeader !== null) {
+      // Tentativa de execução via cron secret
+      const headerSecretTrimmed = cronSecretHeader.trim()
+      const envSecretTrimmed = (TASK_OVERDUE_CRON_SECRET || '').trim()
+
+      if (
+        !envSecretTrimmed ||
+        !headerSecretTrimmed ||
+        !timingSafeEqual(headerSecretTrimmed, envSecretTrimmed)
+      ) {
+        console.warn('Acesso negado: segredo de cron TASK_OVERDUE_CRON_SECRET ausente ou inválido.')
+        return new Response(
+          JSON.stringify({
+            error: 'Não autorizado. Segredo do cron inválido ou não configurado.',
+          }),
+          {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      isCronExecution = true
       callerUserId = null
-    } else {
+    }
+
+    if (!isCronExecution) {
+      // Tentativa de execução manual: exige token JWT de usuário autenticado
+      if (!authHeader) {
+        return new Response(
+          JSON.stringify({ error: 'Token de autenticação ou segredo de cron não fornecido.' }),
+          {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+      if (!token) {
+        return new Response(JSON.stringify({ error: 'Token de autenticação Bearer vazio.' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
       const {
         data: { user },
         error: userError,
@@ -113,6 +167,51 @@ Deno.serve(async (req: Request) => {
           },
         )
       }
+
+      // Validar no backend se o usuário possui perfil administrativo.
+      // 1. Consulta em profiles por id = user.id
+      let isAdmin = false
+      const { data: profileData, error: profileErr } = await supabase
+        .from('profiles')
+        .select('id, perfil, ativo')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (profileErr) {
+        console.warn('Aviso ao consultar perfil em profiles para autorização manual:', profileErr)
+      }
+
+      if (profileData && profileData.ativo && profileData.perfil === 'administrador') {
+        isAdmin = true
+      } else if (user.email) {
+        // Fallback por e-mail em profiles
+        const { data: profileByEmail } = await supabase
+          .from('profiles')
+          .select('id, perfil, ativo')
+          .ilike('email', user.email.trim())
+          .maybeSingle()
+
+        if (profileByEmail && profileByEmail.ativo && profileByEmail.perfil === 'administrador') {
+          isAdmin = true
+        }
+      }
+
+      if (!isAdmin) {
+        console.warn(
+          `Acesso proibido: usuário ${user.id} (${user.email}) não possui perfil administrativo para execução manual de atrasos.`,
+        )
+        return new Response(
+          JSON.stringify({
+            error:
+              'Permissão negada. Apenas usuários administradores podem disparar manualmente a rotina de alertas de atraso.',
+          }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
       callerUserId = user.id
     }
 

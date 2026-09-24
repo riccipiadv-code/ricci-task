@@ -137,7 +137,7 @@ Deno.serve(async (req: Request) => {
       dbTipoEvento = 'providencia_atualizacao'
     }
 
-    // 3. Buscar dados de task_tarefas com nome do controle
+    // 3. Buscar dados de task_tarefas com nome do controle e updated_at estável
     const { data: tarefa, error: tarefaError } = await supabase
       .from('task_tarefas')
       .select(`
@@ -147,6 +147,8 @@ Deno.serve(async (req: Request) => {
         nome_controle_id,
         executor_usuario_id,
         responsavel_usuario_id,
+        created_at,
+        updated_at,
         deleted_at,
         nome_controle:task_nomes_controle(nome)
       `)
@@ -366,7 +368,11 @@ Deno.serve(async (req: Request) => {
     }
 
     // 5. Chave de idempotência (event_key)
-    // - Atribuição: caso + composição atual de Executor/Responsável
+    // - Atribuição: ocorrência específica da alteração via timestamp estável de salvamento no Supabase (updated_at ou created_at)
+    //   combinado com tarefa e destinatários (executor e responsável).
+    //   Formato: atribuicao:{tarefa.id}:{tarefa.updated_at}:{currentExecId}:{currentRespId}
+    //   Permite que retorno a combinações anteriores gere novo envio, enquanto saves sem alteração
+    //   de destinatários e retries preservam a idempotência.
     // - Inclusão: ID único da providência
     // - Atualização: ID da providência + timestamp de updated_at
     let eventKey = ''
@@ -374,7 +380,8 @@ Deno.serve(async (req: Request) => {
     const currentRespId = tarefa.responsavel_usuario_id || 'sem_resp'
 
     if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
-      eventKey = `atribuicao:${tarefa.id}:${currentExecId}:${currentRespId}`
+      const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
+      eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecId}:${currentRespId}`
     } else if (dbTipoEvento === 'providencia_inclusao') {
       eventKey = `providencia_inclusao:${providenciaAlvo.id}`
     } else {
