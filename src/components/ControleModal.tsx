@@ -131,6 +131,7 @@ export function ControleModal({
   const [prazoConclusao, setPrazoConclusao] = useState('')
   const [responsavelUsuarioId, setResponsavelUsuarioId] = useState('')
   const [executorUsuarioId, setExecutorUsuarioId] = useState('')
+  const [executorIsResponsavel, setExecutorIsResponsavel] = useState(false)
   const [pastaCliente, setPastaCliente] = useState('')
   const [pastaRicci, setPastaRicci] = useState('')
   const [updatedAtDisplay, setUpdatedAtDisplay] = useState<string | null>(null)
@@ -254,8 +255,12 @@ export function ControleModal({
       setPrazoConclusao(
         controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
       )
-      setResponsavelUsuarioId(controleToEdit.responsavel_usuario_id || '')
-      setExecutorUsuarioId(controleToEdit.executor_usuario_id || '')
+      const editRespId = controleToEdit.responsavel_usuario_id || ''
+      const editExecId = controleToEdit.executor_usuario_id || ''
+      setResponsavelUsuarioId(editRespId)
+      setExecutorUsuarioId(editExecId)
+      const sameUser = Boolean(editRespId && editExecId && editRespId === editExecId)
+      setExecutorIsResponsavel(sameUser)
       setPastaCliente(controleToEdit.pasta_cliente || '')
       setPastaRicci(controleToEdit.pasta_ricci || '')
       setUpdatedAtDisplay(controleToEdit.updated_at || null)
@@ -309,6 +314,7 @@ export function ControleModal({
       setPrazoConclusao('')
       setResponsavelUsuarioId('')
       setExecutorUsuarioId('')
+      setExecutorIsResponsavel(false)
       setPastaCliente('')
       setPastaRicci('')
       setUpdatedAtDisplay(null)
@@ -460,6 +466,13 @@ export function ControleModal({
   ) => {
     setProvidencias((prev) =>
       prev.map((item) => (item.tempId === tempId ? { ...item, [field]: value } : item)),
+    )
+  }
+
+  // Atualizar múltiplos campos de uma providência específica
+  const handleBatchUpdateProvidencia = (tempId: string, updates: Partial<DraftProvidenciaItem>) => {
+    setProvidencias((prev) =>
+      prev.map((item) => (item.tempId === tempId ? { ...item, ...updates } : item)),
     )
   }
 
@@ -1013,6 +1026,10 @@ export function ControleModal({
                         value={responsavelUsuarioId}
                         onValueChange={(val) => {
                           setResponsavelUsuarioId(val)
+                          if (executorIsResponsavel) {
+                            setExecutorUsuarioId(val)
+                            if (val && executorError) setExecutorError(false)
+                          }
                           if (responsavelError) setResponsavelError(false)
                         }}
                       >
@@ -1087,26 +1104,52 @@ export function ControleModal({
 
                   {/* Executor */}
                   <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
                         <UserCheck className="w-4 h-4 text-primary" />
                         <span>
                           Executor <span className="text-destructive">*</span>
                         </span>
                       </div>
+
+                      {/* Opção sutil: Executor é o Responsável */}
+                      <label
+                        htmlFor="executor-is-responsavel-checkbox"
+                        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer select-none font-normal"
+                      >
+                        <Checkbox
+                          id="executor-is-responsavel-checkbox"
+                          checked={executorIsResponsavel}
+                          onCheckedChange={(checked) => {
+                            const isChecked = checked === true
+                            setExecutorIsResponsavel(isChecked)
+                            if (isChecked) {
+                              setExecutorUsuarioId(responsavelUsuarioId)
+                              if (responsavelUsuarioId && executorError) {
+                                setExecutorError(false)
+                              }
+                            }
+                          }}
+                          className="h-3.5 w-3.5 rounded"
+                        />
+                        <span>Executor é o Responsável</span>
+                      </label>
                     </div>
 
                     <div className="relative">
                       <Select
                         value={executorUsuarioId}
+                        disabled={executorIsResponsavel}
                         onValueChange={(val) => {
                           setExecutorUsuarioId(val)
                           if (executorError) setExecutorError(false)
                         }}
                       >
                         <SelectTrigger
+                          disabled={executorIsResponsavel}
                           className={cn(
                             'h-12 rounded-xl bg-background text-sm font-medium',
+                            executorIsResponsavel && 'opacity-70 cursor-not-allowed bg-muted/50',
                             executorError && 'border-destructive focus-visible:ring-destructive',
                           )}
                         >
@@ -1437,26 +1480,58 @@ export function ControleModal({
                             {/* Seção de Preferências de Alerta por E-mail (sutil e compacta) */}
                             <div className="pt-2 border-t border-border/40">
                               <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-2">
-                                {/* Checkbox Principal: Receber alertas */}
-                                <div className="flex items-center gap-2">
-                                  <Checkbox
-                                    id={`email-alertas-${item.tempId}`}
-                                    checked={Boolean(item.email_alertas)}
-                                    onCheckedChange={(checked) =>
-                                      handleUpdateProvidencia(
-                                        item.tempId,
-                                        'email_alertas',
-                                        checked === true,
-                                      )
-                                    }
-                                  />
-                                  <Label
-                                    htmlFor={`email-alertas-${item.tempId}`}
-                                    className="text-xs font-semibold text-foreground cursor-pointer flex items-center gap-1.5 select-none"
-                                  >
-                                    <Bell className="w-3.5 h-3.5 text-primary" />
-                                    <span>Receber alertas</span>
-                                  </Label>
+                                {/* Checkbox Principal: Receber alertas + Controles discretos Marcar todos / Desmarcar todos */}
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <Checkbox
+                                      id={`email-alertas-${item.tempId}`}
+                                      checked={Boolean(item.email_alertas)}
+                                      onCheckedChange={(checked) =>
+                                        handleUpdateProvidencia(
+                                          item.tempId,
+                                          'email_alertas',
+                                          checked === true,
+                                        )
+                                      }
+                                    />
+                                    <Label
+                                      htmlFor={`email-alertas-${item.tempId}`}
+                                      className="text-xs font-semibold text-foreground cursor-pointer flex items-center gap-1.5 select-none"
+                                    >
+                                      <Bell className="w-3.5 h-3.5 text-primary" />
+                                      <span>Receber alertas</span>
+                                    </Label>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleBatchUpdateProvidencia(item.tempId, {
+                                          email_alerta_inclusao: true,
+                                          email_alerta_atraso: true,
+                                          email_alerta_atualizacao: true,
+                                        })
+                                      }
+                                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer select-none underline-offset-2 hover:underline"
+                                    >
+                                      Marcar todos
+                                    </button>
+                                    <span className="text-muted-foreground/40 text-[10px]">•</span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleBatchUpdateProvidencia(item.tempId, {
+                                          email_alerta_inclusao: false,
+                                          email_alerta_atraso: false,
+                                          email_alerta_atualizacao: false,
+                                        })
+                                      }
+                                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer select-none underline-offset-2 hover:underline"
+                                    >
+                                      Desmarcar todos
+                                    </button>
+                                  </div>
                                 </div>
 
                                 {/* Subtipos de alerta: Inclusão, Atraso, Atualização */}
