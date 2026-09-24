@@ -1138,4 +1138,48 @@ export const controleService = {
       }
     }
   },
+
+  /**
+   * Executa a rotina de alertas diários de providências atrasadas via Edge Function (notify-task-overdue).
+   * Processa com idempotência diária na tabela task_email_eventos.
+   */
+  async triggerOverdueNotifications(): Promise<{
+    success: boolean
+    message?: string
+    processed?: number
+    sent?: number
+    skipped?: number
+    errors?: number
+    error?: string
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke('notify-task-overdue', {
+        body: {},
+      })
+
+      if (error) {
+        console.error('Erro na chamada da Edge Function notify-task-overdue:', error)
+        return {
+          success: false,
+          error: error.message || 'Erro ao invocar rotina de alertas de atraso.',
+        }
+      }
+
+      return {
+        success: data?.success ?? true,
+        message: data?.message,
+        processed: data?.processed ?? 0,
+        sent: data?.sent ?? 0,
+        skipped: data?.skipped ?? 0,
+        errors: data?.errors ?? 0,
+        error: data?.error,
+      }
+    } catch (err: any) {
+      console.error('Falha de rede ou execução ao processar providências atrasadas:', err)
+      return {
+        success: false,
+        error: err?.message || 'Falha ao conectar com o serviço de alertas de atraso.',
+      }
+    }
+  },
 }

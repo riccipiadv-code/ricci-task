@@ -1,7 +1,7 @@
 {
   "_versions": {
-    "sync-manychat": 181,
-    "manychat-webhook": 181,
+    "sync-manychat": 182,
+    "manychat-webhook": 182,
     "send-test-email": 10,
     "save-email-settings": 8,
     "admin-user-access": 29,
@@ -9,6 +9,7 @@
     "save-email-reading-settings": 2,
     "search-conectai-email": 4,
     "notify-responsavel-transfer": 8,
-    "notify-task-assignment": 2
+    "notify-task-assignment": 2,
+    "notify-task-overdue": 1
   }
 }
