@@ -1030,13 +1030,78 @@ export const controleService = {
   },
 
   /**
-   * Notifica a atribuição de uma tarefa/caso via Edge Function exclusiva (notify-task-assignment).
-   * A função backend consulta todos os dados e dispara por e-mail com segurança.
+   * Notifica a atribuição de uma tarefa/caso via Edge Function (notify-task-assignment).
+   * A função backend consulta todos os dados e dispara por e-mail com idempotência e segurança.
    */
   async notifyAssignment(
     tarefaId: string,
-    tipo: 'nova_atribuicao' | 'alteracao_atribuicao',
+    tipo: 'nova_atribuicao' | 'alteracao_atribuicao' | 'atribuicao',
   ): Promise<{
+    success: boolean
+    sent?: boolean
+    reason?: string
+    error?: string
+    message?: string
+  }> {
+    return this.invokeTaskEmailNotification({
+      tarefa_id: tarefaId,
+      tipo,
+    })
+  },
+
+  /**
+   * Notifica a inclusão de uma nova providência com alertas ativos via Edge Function.
+   */
+  async notifyProvidenciaInclusao(
+    tarefaId: string,
+    providenciaId: string,
+  ): Promise<{
+    success: boolean
+    sent?: boolean
+    reason?: string
+    error?: string
+    message?: string
+  }> {
+    return this.invokeTaskEmailNotification({
+      tarefa_id: tarefaId,
+      providencia_id: providenciaId,
+      tipo: 'providencia_inclusao',
+    })
+  },
+
+  /**
+   * Notifica a atualização relevante de uma providência com alertas ativos via Edge Function.
+   */
+  async notifyProvidenciaAtualizacao(
+    tarefaId: string,
+    providenciaId: string,
+  ): Promise<{
+    success: boolean
+    sent?: boolean
+    reason?: string
+    error?: string
+    message?: string
+  }> {
+    return this.invokeTaskEmailNotification({
+      tarefa_id: tarefaId,
+      providencia_id: providenciaId,
+      tipo: 'providencia_atualizacao',
+    })
+  },
+
+  /**
+   * Disparo genérico e seguro de notificações por e-mail do Ricci Task.
+   */
+  async invokeTaskEmailNotification(payload: {
+    tarefa_id: string
+    providencia_id?: string
+    tipo:
+      | 'nova_atribuicao'
+      | 'alteracao_atribuicao'
+      | 'atribuicao'
+      | 'providencia_inclusao'
+      | 'providencia_atualizacao'
+  }): Promise<{
     success: boolean
     sent?: boolean
     reason?: string
@@ -1045,10 +1110,7 @@ export const controleService = {
   }> {
     try {
       const { data, error } = await supabase.functions.invoke('notify-task-assignment', {
-        body: {
-          tarefa_id: tarefaId,
-          tipo,
-        },
+        body: payload,
       })
 
       if (error) {
@@ -1068,7 +1130,7 @@ export const controleService = {
         error: data?.error,
       }
     } catch (err: any) {
-      console.error('Falha de rede ou execução ao notificar atribuição:', err)
+      console.error('Falha de rede ou execução ao notificar Ricci Task:', err)
       return {
         success: false,
         sent: false,

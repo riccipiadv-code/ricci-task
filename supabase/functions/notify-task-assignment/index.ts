@@ -13,7 +13,6 @@ function isValidEmail(email?: string | null): boolean {
   if (!email) return false
   const trimmed = email.trim()
   if (!trimmed) return false
-  // Validação simples e segura de formato de e-mail
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
 }
 
@@ -75,7 +74,7 @@ Deno.serve(async (req: Request) => {
 
     // 2. Extrair parâmetros
     const body = await req.json().catch(() => ({}))
-    const { tarefa_id, tipo } = body
+    const { tarefa_id, providencia_id, tipo } = body
 
     if (!tarefa_id) {
       return new Response(JSON.stringify({ error: 'Parâmetro tarefa_id é obrigatório.' }), {
@@ -84,17 +83,58 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    if (tipo !== 'nova_atribuicao' && tipo !== 'alteracao_atribuicao') {
+    // Tipos suportados:
+    // Legados/Atribuição: 'nova_atribuicao', 'alteracao_atribuicao', 'atribuicao'
+    // Providências: 'providencia_inclusao', 'providencia_atualizacao'
+    const allowedTipos = [
+      'nova_atribuicao',
+      'alteracao_atribuicao',
+      'atribuicao',
+      'providencia_inclusao',
+      'providencia_atualizacao',
+    ]
+
+    if (!tipo || !allowedTipos.includes(tipo)) {
       return new Response(
         JSON.stringify({
-          error:
-            "Parâmetro tipo inválido. Valores aceitos: 'nova_atribuicao' ou 'alteracao_atribuicao'.",
+          error: `Parâmetro tipo inválido. Valores aceitos: ${allowedTipos.join(', ')}`,
         }),
         {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
       )
+    }
+
+    if (
+      (tipo === 'providencia_inclusao' || tipo === 'providencia_atualizacao') &&
+      !providencia_id
+    ) {
+      return new Response(
+        JSON.stringify({
+          error: `Parâmetro providencia_id é obrigatório para notificações do tipo ${tipo}.`,
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // Normalização do tipo_evento para a tabela task_email_eventos (check constraint: atribuicao, alteracao_atribuicao, providencia_inclusao, providencia_atualizacao, providencia_atraso)
+    let dbTipoEvento:
+      | 'atribuicao'
+      | 'alteracao_atribuicao'
+      | 'providencia_inclusao'
+      | 'providencia_atualizacao'
+    if (tipo === 'nova_atribuicao' || tipo === 'atribuicao') {
+      dbTipoEvento = 'atribuicao'
+    } else if (tipo === 'alteracao_atribuicao') {
+      dbTipoEvento = 'alteracao_atribuicao'
+    } else if (tipo === 'providencia_inclusao') {
+      dbTipoEvento = 'providencia_inclusao'
+    } else {
+      dbTipoEvento = 'providencia_atualizacao'
     }
 
     // 3. Buscar dados de task_tarefas com nome do controle
@@ -140,6 +180,107 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    // Se for evento de providência, carregar a providência específica e validar
+    let providenciaAlvo: any = null
+    if (providencia_id) {
+      const { data: provData, error: provFetchError } = await supabase
+        .from('task_providencias')
+        .select(`
+          id,
+          tarefa_id,
+          providencia,
+          prazo_conclusao,
+          tipo_prazo_id,
+          status_id,
+          ordem,
+          created_at,
+          updated_at,
+          deleted_at,
+          email_alertas,
+          email_alerta_inclusao,
+          email_alerta_atualizacao,
+          status:task_status_providencia(id, codigo, nome, finaliza),
+          tipo_prazo:task_tipos_prazo(id, nome)
+        `)
+        .eq('id', providencia_id)
+        .maybeSingle()
+
+      if (provFetchError) {
+        console.error('Erro ao buscar task_providencias:', provFetchError)
+        throw new Error(`Erro ao buscar providência: ${provFetchError.message}`)
+      }
+
+      if (!provData) {
+        return new Response(JSON.stringify({ error: 'Providência não encontrada.' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      if (provData.deleted_at) {
+        return new Response(
+          JSON.stringify({
+            triggered: false,
+            sent: false,
+            reason: 'providencia_excluida',
+            message: 'A providência informada foi excluída.',
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      // Validação de flags de e-mail na providência
+      if (!provData.email_alertas) {
+        return new Response(
+          JSON.stringify({
+            triggered: false,
+            sent: false,
+            reason: 'email_alertas_desativado',
+            message: 'A providência não está configurada para receber alertas por e-mail.',
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      if (dbTipoEvento === 'providencia_inclusao' && !provData.email_alerta_inclusao) {
+        return new Response(
+          JSON.stringify({
+            triggered: false,
+            sent: false,
+            reason: 'alerta_inclusao_desativado',
+            message: 'O alerta de inclusão desta providência está desativado.',
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      if (dbTipoEvento === 'providencia_atualizacao' && !provData.email_alerta_atualizacao) {
+        return new Response(
+          JSON.stringify({
+            triggered: false,
+            sent: false,
+            reason: 'alerta_atualizacao_desativado',
+            message: 'O alerta de atualização desta providência está desativado.',
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      providenciaAlvo = provData
+    }
+
     // Resolver nome do controle
     let nomeControle = ''
     if (tarefa.nome_controle) {
@@ -154,7 +295,7 @@ Deno.serve(async (req: Request) => {
       nomeControle = (ncData?.nome || '').trim()
     }
 
-    // 4. Buscar Executor e Responsável em task_usuarios (NÃO em profiles / legaldesk_usuarios)
+    // 4. Buscar Executor e Responsável em task_usuarios (regra única de destinatários)
     const userIdsToFetch: string[] = []
     if (tarefa.executor_usuario_id) userIdsToFetch.push(tarefa.executor_usuario_id)
     if (tarefa.responsavel_usuario_id && !userIdsToFetch.includes(tarefa.responsavel_usuario_id)) {
@@ -193,7 +334,10 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Regra 1: Validar e-mail do Executor
+    // REGRA ÚNICA DE DESTINATÁRIOS:
+    // - TO = Executor, CC = Responsável. E-mails sempre obtidos de task_usuarios.
+    // - Normalizar endereços com trim().toLowerCase() antes de enviar.
+    // - Se TO e CC forem iguais: TO = Executor, CC = vazio (não duplicar).
     const toEmail = executorUser?.email?.trim().toLowerCase() || ''
     if (!isValidEmail(toEmail)) {
       console.warn('Envio abortado: Executor não possui e-mail válido.', {
@@ -215,64 +359,233 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // Regra 1: Determinar CC (Responsável)
     const respEmailRaw = responsavelUser?.email?.trim().toLowerCase() || ''
     let ccEmail: string | null = null
     if (isValidEmail(respEmailRaw) && respEmailRaw !== toEmail) {
       ccEmail = respEmailRaw
     }
 
-    // 5. Buscar providências não excluídas e identificar a próxima providência aberta
-    // Regra operacional: deleted_at IS NULL, status com finaliza != true, priorizando menor prazo_conclusao
-    const { data: providenciasRaw, error: provError } = await supabase
-      .from('task_providencias')
-      .select(`
-        id,
-        providencia,
-        prazo_conclusao,
-        ordem,
-        deleted_at,
-        status:task_status_providencia(id, codigo, nome, finaliza)
-      `)
-      .eq('tarefa_id', tarefa_id)
-      .is('deleted_at', null)
-      .order('prazo_conclusao', { ascending: true })
-      .order('ordem', { ascending: true })
+    // 5. Chave de idempotência (event_key)
+    // - Atribuição: caso + composição atual de Executor/Responsável
+    // - Inclusão: ID único da providência
+    // - Atualização: ID da providência + timestamp de updated_at
+    let eventKey = ''
+    const currentExecId = tarefa.executor_usuario_id || 'sem_exec'
+    const currentRespId = tarefa.responsavel_usuario_id || 'sem_resp'
 
-    if (provError) {
-      console.warn('Aviso ao consultar task_providencias:', provError)
+    if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
+      eventKey = `atribuicao:${tarefa.id}:${currentExecId}:${currentRespId}`
+    } else if (dbTipoEvento === 'providencia_inclusao') {
+      eventKey = `providencia_inclusao:${providenciaAlvo.id}`
+    } else {
+      // providencia_atualizacao
+      const provUpdatedAt =
+        providenciaAlvo.updated_at || providenciaAlvo.created_at || new Date().toISOString()
+      eventKey = `providencia_atualizacao:${providenciaAlvo.id}:${provUpdatedAt}`
     }
 
-    let proximaProvidenciaAberta: { providencia: string; prazo_conclusao: string | null } | null =
-      null
-    if (providenciasRaw && providenciasRaw.length > 0) {
-      const abertas = providenciasRaw.filter((p: any) => {
-        const finaliza = Boolean(p.status?.finaliza)
-        return !finaliza
-      })
+    // 6. Verificar/Registrar chave de idempotência na tabela task_email_eventos
+    const { data: existingEvent, error: checkEventError } = await supabase
+      .from('task_email_eventos')
+      .select('id, event_key, status, sent_at')
+      .eq('event_key', eventKey)
+      .maybeSingle()
 
-      // Ordenar por menor prazo_conclusao (mesmo padrão de controleService)
-      abertas.sort((a: any, b: any) => {
-        const prazoA = a.prazo_conclusao || ''
-        const prazoB = b.prazo_conclusao || ''
-        if (prazoA && prazoB) {
-          if (prazoA !== prazoB) return prazoA.localeCompare(prazoB)
+    if (checkEventError) {
+      console.warn('Aviso ao consultar task_email_eventos:', checkEventError)
+    }
+
+    // Se já foi enviado com sucesso, abortar envio imediatamente
+    if (existingEvent && existingEvent.status === 'success') {
+      return new Response(
+        JSON.stringify({
+          triggered: true,
+          sent: false,
+          reason: 'already_sent',
+          message: 'Notificação já enviada anteriormente para este evento.',
+          event_key: eventKey,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // Se não existir, inserir como pending para travar concorrência
+    let eventoId = existingEvent?.id
+    if (!existingEvent) {
+      const { data: insertedEvent, error: insertEventError } = await supabase
+        .from('task_email_eventos')
+        .insert({
+          tarefa_id: tarefa.id,
+          providencia_id: providenciaAlvo ? providenciaAlvo.id : null,
+          tipo_evento: dbTipoEvento,
+          event_key: eventKey,
+          to_email: toEmail,
+          cc_email: ccEmail,
+          status: 'pending',
+          data_referencia: new Date().toISOString().split('T')[0],
+        })
+        .select('id')
+        .maybeSingle()
+
+      if (insertEventError) {
+        // Se deu erro de constraint de chave única (concorrência de disparos simultâneos)
+        if (insertEventError.code === '23505' || insertEventError.message?.includes('23505')) {
+          const { data: raceEvent } = await supabase
+            .from('task_email_eventos')
+            .select('id, status')
+            .eq('event_key', eventKey)
+            .maybeSingle()
+
+          if (raceEvent && raceEvent.status === 'success') {
+            return new Response(
+              JSON.stringify({
+                triggered: true,
+                sent: false,
+                reason: 'already_sent',
+                message: 'Notificação já enviada concorrentemente.',
+                event_key: eventKey,
+              }),
+              {
+                status: 200,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+              },
+            )
+          }
+          eventoId = raceEvent?.id
+        } else {
+          console.warn(
+            'Aviso ao registrar evento pendente em task_email_eventos:',
+            insertEventError,
+          )
+        }
+      } else if (insertedEvent) {
+        eventoId = insertedEvent.id
+      }
+    } else {
+      // Já existia com status pending ou error, reusar eventoId
+      eventoId = existingEvent.id
+    }
+
+    // 7. Preparar conteúdo de e-mail de acordo com o tipo
+    // Dados gerais
+    const execNomeFull = (executorUser?.nome || '').trim()
+    const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
+    const respNomeFull = (responsavelUser?.nome || '').trim()
+    const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
+
+    let subject = ''
+    const bodyLines: string[] = []
+
+    if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
+      // 5. Buscar providências não excluídas e identificar a próxima providência aberta
+      const { data: providenciasRaw } = await supabase
+        .from('task_providencias')
+        .select(`
+          id,
+          providencia,
+          prazo_conclusao,
+          ordem,
+          deleted_at,
+          status:task_status_providencia(id, codigo, nome, finaliza)
+        `)
+        .eq('tarefa_id', tarefa.id)
+        .is('deleted_at', null)
+        .order('prazo_conclusao', { ascending: true })
+        .order('ordem', { ascending: true })
+
+      let proximaProvidenciaAberta: { providencia: string; prazo_conclusao: string | null } | null =
+        null
+      if (providenciasRaw && providenciasRaw.length > 0) {
+        const abertas = providenciasRaw.filter((p: any) => !p.status?.finaliza)
+        abertas.sort((a: any, b: any) => {
+          const prazoA = a.prazo_conclusao || ''
+          const prazoB = b.prazo_conclusao || ''
+          if (prazoA && prazoB) {
+            if (prazoA !== prazoB) return prazoA.localeCompare(prazoB)
+            return (a.ordem ?? 0) - (b.ordem ?? 0)
+          }
+          if (prazoA && !prazoB) return -1
+          if (!prazoA && prazoB) return 1
           return (a.ordem ?? 0) - (b.ordem ?? 0)
-        }
-        if (prazoA && !prazoB) return -1
-        if (!prazoA && prazoB) return 1
-        return (a.ordem ?? 0) - (b.ordem ?? 0)
-      })
+        })
 
-      if (abertas.length > 0) {
-        proximaProvidenciaAberta = {
-          providencia: (abertas[0].providencia || '').trim(),
-          prazo_conclusao: abertas[0].prazo_conclusao,
+        if (abertas.length > 0) {
+          proximaProvidenciaAberta = {
+            providencia: (abertas[0].providencia || '').trim(),
+            prazo_conclusao: abertas[0].prazo_conclusao,
+          }
         }
+      }
+
+      subject = `Nova atribuição Ricci Task [Caso ${numeroCasoStr}]`
+      bodyLines.push(`Olá, ${execFirstName}.`)
+      bodyLines.push('')
+      bodyLines.push('Uma nova tarefa foi atribuída a você no Ricci Task.')
+      bodyLines.push('')
+      if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+      bodyLines.push(`Caso: ${numeroCasoStr}`)
+      if (tarefa.identificacao_caso?.trim())
+        bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+      if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+
+      if (proximaProvidenciaAberta && proximaProvidenciaAberta.providencia) {
+        bodyLines.push('')
+        bodyLines.push(`Providência: ${proximaProvidenciaAberta.providencia}`)
+        if (proximaProvidenciaAberta.prazo_conclusao) {
+          bodyLines.push(`Prazo: ${formatDateBR(proximaProvidenciaAberta.prazo_conclusao)}`)
+        }
+      }
+    } else if (dbTipoEvento === 'providencia_inclusao') {
+      subject = `Nova providência Ricci Task [Caso ${numeroCasoStr}]`
+      bodyLines.push(`Olá, ${execFirstName}.`)
+      bodyLines.push('')
+      bodyLines.push('Uma nova providência foi incluída no Ricci Task para o seu caso.')
+      bodyLines.push('')
+      if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+      bodyLines.push(`Caso: ${numeroCasoStr}`)
+      if (tarefa.identificacao_caso?.trim())
+        bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+      if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+      bodyLines.push('')
+      bodyLines.push(`Providência: ${(providenciaAlvo.providencia || '').trim()}`)
+      if (providenciaAlvo.prazo_conclusao) {
+        bodyLines.push(`Prazo: ${formatDateBR(providenciaAlvo.prazo_conclusao)}`)
+      }
+      if (providenciaAlvo.status?.nome) {
+        bodyLines.push(`Status da Providência: ${providenciaAlvo.status.nome}`)
+      }
+    } else {
+      // dbTipoEvento === 'providencia_atualizacao'
+      subject = `Providência atualizada Ricci Task [Caso ${numeroCasoStr}]`
+      bodyLines.push(`Olá, ${execFirstName}.`)
+      bodyLines.push('')
+      bodyLines.push('Uma providência foi atualizada no Ricci Task para o seu caso.')
+      bodyLines.push('')
+      if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+      bodyLines.push(`Caso: ${numeroCasoStr}`)
+      if (tarefa.identificacao_caso?.trim())
+        bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+      if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+      bodyLines.push('')
+      bodyLines.push(`Providência: ${(providenciaAlvo.providencia || '').trim()}`)
+      if (providenciaAlvo.prazo_conclusao) {
+        bodyLines.push(`Prazo: ${formatDateBR(providenciaAlvo.prazo_conclusao)}`)
+      }
+      if (providenciaAlvo.status?.nome) {
+        bodyLines.push(`Status da Providência: ${providenciaAlvo.status.nome}`)
       }
     }
 
-    // 6. Configuração SMTP existente
+    bodyLines.push('')
+    bodyLines.push('Acesse o Ricci Task para consultar o caso.')
+    bodyLines.push('https://riccitask.goskip.app/')
+
+    const emailText = bodyLines.join('\n')
+
+    // 8. Configuração SMTP existente
     const { data: setting, error: settingError } = await supabase
       .from('email_settings')
       .select('*')
@@ -300,48 +613,7 @@ Deno.serve(async (req: Request) => {
       throw new Error('A senha do e-mail não foi configurada.')
     }
 
-    // 7. Montar conteúdo do e-mail
-    // Nome do Executor (primeiro nome)
-    const execNomeFull = (executorUser?.nome || '').trim()
-    const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
-    const respNomeFull = (responsavelUser?.nome || '').trim()
-
-    const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
-    const subject = `Nova atribuição Ricci Task [Caso ${numeroCasoStr}]`
-
-    const bodyLines: string[] = [
-      `Olá, ${execFirstName}.`,
-      '',
-      'Uma nova tarefa foi atribuída a você no Ricci Task.',
-      '',
-    ]
-
-    if (nomeControle) {
-      bodyLines.push(`Controle: ${nomeControle}`)
-    }
-    bodyLines.push(`Caso: ${numeroCasoStr}`)
-    if (tarefa.identificacao_caso?.trim()) {
-      bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
-    }
-    if (respNomeFull) {
-      bodyLines.push(`Responsável: ${respNomeFull}`)
-    }
-
-    if (proximaProvidenciaAberta && proximaProvidenciaAberta.providencia) {
-      bodyLines.push('')
-      bodyLines.push(`Providência: ${proximaProvidenciaAberta.providencia}`)
-      if (proximaProvidenciaAberta.prazo_conclusao) {
-        bodyLines.push(`Prazo: ${formatDateBR(proximaProvidenciaAberta.prazo_conclusao)}`)
-      }
-    }
-
-    bodyLines.push('')
-    bodyLines.push('Acesse o Ricci Task para consultar o caso.')
-    bodyLines.push('https://riccitask.goskip.app/')
-
-    const emailText = bodyLines.join('\n')
-
-    // 8. Configurar transporte SMTP
+    // 9. Configurar transporte SMTP
     const transporterOptions: any = {
       host: setting.smtp_host,
       port: setting.smtp_port,
@@ -361,7 +633,6 @@ Deno.serve(async (req: Request) => {
 
     const transporter = nodemailer.createTransport(transporterOptions)
 
-    // Remetente padrão com identidade Ricci Task
     const senderName = 'Ricci Task'
     const mailOptions: {
       from: string
@@ -379,13 +650,25 @@ Deno.serve(async (req: Request) => {
       text: emailText,
     }
 
-    // 9. Envio e registro em email_send_logs
+    // 10. Envio e registro em email_send_logs e task_email_eventos
     try {
       await transporter.sendMail(mailOptions)
     } catch (sendError: any) {
       console.error('Erro no transporte SMTP:', sendError)
+
+      // Registrar erro em task_email_eventos
+      if (eventoId) {
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro: sendError.message || String(sendError),
+          })
+          .eq('id', eventoId)
+      }
+
       await supabase.from('email_send_logs').insert({
-        type: 'ricci_task_notification',
+        type: `ricci_task_${dbTipoEvento}`,
         to_email: toEmail,
         subject: mailOptions.subject,
         status: 'error',
@@ -407,14 +690,27 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // Sucesso no envio -> registrar em email_send_logs
+    // Sucesso no envio: atualizar task_email_eventos para 'success' com sent_at
+    const agoraIso = new Date().toISOString()
+    if (eventoId) {
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'success',
+          sent_at: agoraIso,
+          erro: null,
+        })
+        .eq('id', eventoId)
+    }
+
+    // Registrar em email_send_logs
     const { error: logError } = await supabase.from('email_send_logs').insert({
-      type: 'ricci_task_notification',
+      type: `ricci_task_${dbTipoEvento}`,
       to_email: toEmail,
       subject: mailOptions.subject,
       status: 'success',
       created_by: user.id,
-      created_at: new Date().toISOString(),
+      created_at: agoraIso,
     })
 
     if (logError) {
@@ -426,6 +722,8 @@ Deno.serve(async (req: Request) => {
         success: true,
         sent: true,
         message: 'Notificação enviada com sucesso.',
+        event_key: eventKey,
+        tipo_evento: dbTipoEvento,
         to: toEmail,
         cc: ccEmail,
       }),

@@ -131,11 +131,28 @@ export default function TarefasPage() {
     setUpdatingProvidenciaIds((prev) => ({ ...prev, [providenciaId]: true }))
     try {
       // 1. Salvar imediatamente o status da Providência e Data de Conclusão automática
-      await updateProvidenciaStatus(providenciaId, novoStatusId, dataConclusao)
+      const updatedProv = await updateProvidenciaStatus(providenciaId, novoStatusId, dataConclusao)
       toast({
         title: 'Status atualizado com sucesso',
         description: 'A providência foi atualizada e os dados recarregados.',
       })
+
+      // Disparar notificação de atualização caso a providência tenha alertas de e-mail e de atualização habilitados
+      if (
+        controleId &&
+        updatedProv &&
+        updatedProv.email_alertas &&
+        updatedProv.email_alerta_atualizacao
+      ) {
+        try {
+          await controleService.notifyProvidenciaAtualizacao(controleId, providenciaId)
+        } catch (mailErr) {
+          console.warn(
+            'Aviso seguro: falha ao notificar atualização de status da providência:',
+            mailErr,
+          )
+        }
+      }
 
       // Regra B: Executar fluxo sequencial SOMENTE quando o status selecionado tiver finaliza = true.
       // Status Suspenso pode registrar Data de Conclusão, mas NÃO inicia este fluxo enquanto finaliza = false.

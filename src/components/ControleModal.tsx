@@ -657,10 +657,36 @@ export function ControleModal({
 
     setSaving(true)
     try {
-      // 1. Salva o controle principal em task_tarefas
+      // 1. Mapa dos valores anteriores das providências existentes antes de salvar (para detecção de alteração real)
+      const prevProvidenciasMap = new Map<
+        string,
+        {
+          providencia: string
+          prazo_conclusao: string | null
+          tipo_prazo_id: string | null
+          status_id: string | null
+        }
+      >()
+      if (controleToEdit?.providencias) {
+        for (const p of controleToEdit.providencias) {
+          if (p.id) {
+            prevProvidenciasMap.set(p.id, {
+              providencia: (p.providencia || '').trim(),
+              prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null,
+              tipo_prazo_id: p.tipo_prazo_id || null,
+              status_id: p.status_id || null,
+            })
+          }
+        }
+      }
+
+      // 2. Salva o controle principal em task_tarefas
       const savedControle = await controleService.saveControle(payload, usuariosLista)
 
-      // 2. Salva as providências preservando rigorosamente a sequência (ordem) de cada uma
+      // 3. Salva as providências preservando rigorosamente a sequência (ordem) de cada uma e detecta eventos
+      const providenciasParaNotificarInclusao: string[] = []
+      const providenciasParaNotificarAtualizacao: string[] = []
+
       if (providencias.length > 0) {
         for (const p of providencias) {
           const st = statusProvLista.find((s) => s.id === p.status_id)
@@ -668,10 +694,26 @@ export function ControleModal({
           const exigeData = cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
           const dtConclusao = exigeData ? (p.data_conclusao ? p.data_conclusao.trim() : null) : null
 
-          await controleService.saveProvidencia({
+          const isNovaProvidencia = !p.id || !p.isPersisted
+          const pProvTrimmed = p.providencia.trim()
+          const pPrazoClean = p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null
+
+          let houveMudancaReal = false
+          if (!isNovaProvidencia && p.id) {
+            const prev = prevProvidenciasMap.get(p.id)
+            if (prev) {
+              const mudouDesc = prev.providencia !== pProvTrimmed
+              const mudouPrazo = prev.prazo_conclusao !== pPrazoClean
+              const mudouTipo = prev.tipo_prazo_id !== p.tipo_prazo_id
+              const mudouStatus = prev.status_id !== p.status_id
+              houveMudancaReal = mudouDesc || mudouPrazo || mudouTipo || mudouStatus
+            }
+          }
+
+          const savedProv = await controleService.saveProvidencia({
             id: p.id,
             tarefa_id: savedControle.id,
-            providencia: p.providencia.trim(),
+            providencia: pProvTrimmed,
             prazo_conclusao: p.prazo_conclusao,
             tipo_prazo_id: p.tipo_prazo_id,
             status_id: p.status_id,
@@ -682,15 +724,28 @@ export function ControleModal({
             email_alerta_atraso: p.email_alerta_atraso ?? false,
             email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
           })
+
+          // Avaliar se deve enfileirar alerta de e-mail para esta providência salva
+          if (isNovaProvidencia) {
+            if (savedProv.email_alertas && savedProv.email_alerta_inclusao) {
+              providenciasParaNotificarInclusao.push(savedProv.id)
+            }
+          } else {
+            if (savedProv.email_alertas && savedProv.email_alerta_atualizacao && houveMudancaReal) {
+              providenciasParaNotificarAtualizacao.push(savedProv.id)
+            }
+          }
         }
       }
 
-      // 3. Recarrega controle completo com relacionamentos hidratados
+      // 4. Recarrega controle completo com relacionamentos hidratados
       const fullyLoaded = await controleService.getControleById(savedControle.id, usuariosLista)
       onSaved(fullyLoaded || savedControle)
 
-      // 4. Disparo de notificação por e-mail DEPOIS que controle e todas as providências foram salvos com sucesso
+      // 5. Disparo de notificações por e-mail DEPOIS que controle e todas as providências foram salvos com sucesso
       let emailFalhou = false
+
+      // 5.1. Atribuição principal
       if (tipoNotificacao) {
         try {
           const notifResult = await controleService.notifyAssignment(
@@ -705,7 +760,7 @@ export function ControleModal({
             )
           } else if (notifResult.sent === false && notifResult.reason) {
             console.log(
-              'Notificação não enviada (motivo controlado):',
+              'Notificação de atribuição não enviada (motivo controlado):',
               notifResult.reason,
               notifResult.message,
             )
@@ -713,6 +768,43 @@ export function ControleModal({
         } catch (notifErr) {
           emailFalhou = true
           console.error('Falha segura ao disparar notificação de atribuição:', notifErr)
+        }
+      }
+
+      // 5.2. Alertas de Providência — Inclusão
+      for (const pId of providenciasParaNotificarInclusao) {
+        try {
+          const resInclusao = await controleService.notifyProvidenciaInclusao(savedControle.id, pId)
+          if (!resInclusao.success) {
+            emailFalhou = true
+            console.warn('Aviso: notificação de inclusão de providência falhou:', resInclusao.error)
+          }
+        } catch (errInclusao) {
+          emailFalhou = true
+          console.error('Falha segura ao disparar alerta de inclusão de providência:', errInclusao)
+        }
+      }
+
+      // 5.3. Alertas de Providência — Atualização
+      for (const pId of providenciasParaNotificarAtualizacao) {
+        try {
+          const resAtualizacao = await controleService.notifyProvidenciaAtualizacao(
+            savedControle.id,
+            pId,
+          )
+          if (!resAtualizacao.success) {
+            emailFalhou = true
+            console.warn(
+              'Aviso: notificação de atualização de providência falhou:',
+              resAtualizacao.error,
+            )
+          }
+        } catch (errAtualizacao) {
+          emailFalhou = true
+          console.error(
+            'Falha segura ao disparar alerta de atualização de providência:',
+            errAtualizacao,
+          )
         }
       }
 
