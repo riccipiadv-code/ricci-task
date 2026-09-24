@@ -1578,13 +1578,23 @@ export function ControleModal({
                                     <Checkbox
                                       id={`email-alertas-${item.tempId}`}
                                       checked={Boolean(item.email_alertas)}
-                                      onCheckedChange={(checked) =>
-                                        handleUpdateProvidencia(
-                                          item.tempId,
-                                          'email_alertas',
-                                          checked === true,
-                                        )
-                                      }
+                                      onCheckedChange={(checked) => {
+                                        const isTurningOn = checked === true
+                                        if (isTurningOn) {
+                                          handleBatchUpdateProvidencia(item.tempId, {
+                                            email_alertas: true,
+                                            email_alerta_inclusao: true,
+                                            email_alerta_atraso: true,
+                                            email_alerta_atualizacao: true,
+                                          })
+                                        } else {
+                                          handleUpdateProvidencia(
+                                            item.tempId,
+                                            'email_alertas',
+                                            false,
+                                          )
+                                        }
+                                      }}
                                     />
                                     <Label
                                       htmlFor={`email-alertas-${item.tempId}`}
