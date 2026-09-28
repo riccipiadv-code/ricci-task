@@ -186,31 +186,97 @@ export const controleService = {
   // Única fonte para Responsável e Executor nos controles e providências
   // --------------------------------------------------------------------------
   /**
-   * Retorna os usuários disponíveis para seleção em novos controles ou edição:
-   * Filtro: ativo = true exclusivamente para o formulário.
-   * Consulta exclusiva: task_usuarios.select('id, nome, email, ativo').
+   * Retorna os usuários disponíveis para seleção em NOVOS Responsáveis e Executores:
+   * Regra Central (Etapa 1):
+   * - task_usuarios.ativo = true
+   * - task_usuarios.core_usuario_id preenchido
+   * - usuário central ativo (core_usuarios.ativo = true)
+   * - vínculo ativo ao sistema 'RICCI_TASK' (core_usuario_sistemas.ativo = true)
+   * - sistema 'RICCI_TASK' ativo e perfil central ativo
+   * Mantém o formato TaskUsuarioAtivoRecord (id, nome, email, ativo) preservando task_usuarios.id.
    * Ordenado alfabeticamente por nome.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
-    const { data, error } = await supabase
+    // 1. Busca usuários de task_usuarios ativos e com core_usuario_id preenchido
+    const { data: taskUsers, error: taskError } = await supabase
       .from('task_usuarios')
-      .select('id, nome, email, ativo')
+      .select('id, nome, email, ativo, core_usuario_id')
       .eq('ativo', true)
-      .order('nome', { ascending: true })
+      .not('core_usuario_id', 'is', null)
 
-    if (error) {
-      console.error('Erro ao buscar task_usuarios ativos:', error)
+    if (taskError) {
+      console.error('Erro ao buscar task_usuarios ativos:', taskError)
       throw new Error(
         'Não foi possível carregar a lista de usuários disponíveis. Verifique sua conexão.',
       )
     }
 
-    const lista: TaskUsuarioAtivoRecord[] = (data || []).map((u) => ({
-      id: u.id,
-      nome: u.nome,
-      email: u.email,
-      ativo: u.ativo,
-    }))
+    if (!taskUsers || taskUsers.length === 0) {
+      return []
+    }
+
+    // Extrai core_usuario_ids distintos
+    const coreUserIds = Array.from(
+      new Set(taskUsers.map((u) => u.core_usuario_id).filter((id): id is string => Boolean(id))),
+    )
+
+    if (coreUserIds.length === 0) {
+      return []
+    }
+
+    // 2. Busca sistema RICCI_TASK
+    const { data: sistemaData, error: sistemaError } = await supabase
+      .from('core_sistemas')
+      .select('id, codigo, ativo')
+      .eq('codigo', 'RICCI_TASK')
+      .maybeSingle()
+
+    if (sistemaError) {
+      console.error('Erro ao consultar core_sistemas para RICCI_TASK:', sistemaError)
+      // Em caso de falha técnica temporária, fallback fail-open para os task_usuarios ativos
+      return (taskUsers || [])
+        .map((u) => ({ id: u.id, nome: u.nome, email: u.email, ativo: u.ativo }))
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+    }
+
+    if (!sistemaData || !sistemaData.ativo) {
+      return []
+    }
+
+    // 3. Valida quais core_usuarios possuem usuário central ativo e vínculo ativo com perfil ativo em RICCI_TASK
+    const { data: validLinks, error: linksError } = await supabase
+      .from('core_usuario_sistemas')
+      .select(`
+        usuario_id,
+        ativo,
+        core_usuarios!inner(id, ativo),
+        core_perfis!inner(id, ativo)
+      `)
+      .in('usuario_id', coreUserIds)
+      .eq('sistema_id', sistemaData.id)
+      .eq('ativo', true)
+      .eq('core_usuarios.ativo', true)
+      .eq('core_perfis.ativo', true)
+
+    if (linksError) {
+      console.error('Erro ao consultar vínculos de core_usuario_sistemas:', linksError)
+      // Fallback temporário em falha técnica
+      return (taskUsers || [])
+        .map((u) => ({ id: u.id, nome: u.nome, email: u.email, ativo: u.ativo }))
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+    }
+
+    const authorizedCoreIds = new Set((validLinks || []).map((l: any) => l.usuario_id))
+
+    // 4. Filtra exclusivamente os task_usuarios com core_usuario_id autorizado
+    const lista: TaskUsuarioAtivoRecord[] = taskUsers
+      .filter((u) => u.core_usuario_id && authorizedCoreIds.has(u.core_usuario_id))
+      .map((u) => ({
+        id: u.id,
+        nome: u.nome,
+        email: u.email,
+        ativo: u.ativo,
+      }))
 
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   },

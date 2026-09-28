@@ -112,7 +112,11 @@ Deno.serve(async (req: Request) => {
       const headerSecretTrimmed = cronSecretHeader.trim()
       const envSecretTrimmed = (TASK_OVERDUE_CRON_SECRET || '').trim()
 
-      if (!envSecretTrimmed || !headerSecretTrimmed || !timingSafeEqual(headerSecretTrimmed, envSecretTrimmed)) {
+      if (
+        !envSecretTrimmed ||
+        !headerSecretTrimmed ||
+        !timingSafeEqual(headerSecretTrimmed, envSecretTrimmed)
+      ) {
         console.warn('Acesso negado: segredo de cron TASK_OVERDUE_CRON_SECRET ausente ou inválido.')
         return new Response(
           JSON.stringify({
@@ -143,13 +147,10 @@ Deno.serve(async (req: Request) => {
 
       const token = authHeader.replace(/^Bearer\s+/i, '').trim()
       if (!token) {
-        return new Response(
-          JSON.stringify({ error: 'Token de autenticação Bearer vazio.' }),
-          {
-            status: 401,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
+        return new Response(JSON.stringify({ error: 'Token de autenticação Bearer vazio.' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
       }
 
       const {
@@ -196,10 +197,13 @@ Deno.serve(async (req: Request) => {
       }
 
       if (!isAdmin) {
-        console.warn(`Acesso proibido: usuário ${user.id} (${user.email}) não possui perfil administrativo para execução manual de atrasos.`)
+        console.warn(
+          `Acesso proibido: usuário ${user.id} (${user.email}) não possui perfil administrativo para execução manual de atrasos.`,
+        )
         return new Response(
           JSON.stringify({
-            error: 'Permissão negada. Apenas usuários administradores podem disparar manualmente a rotina de alertas de atraso.',
+            error:
+              'Permissão negada. Apenas usuários administradores podem disparar manualmente a rotina de alertas de atraso.',
           }),
           {
             status: 403,

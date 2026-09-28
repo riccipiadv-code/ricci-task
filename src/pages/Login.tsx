@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Check,
@@ -12,6 +12,8 @@ import {
   ShieldCheck,
   KeyRound,
   CheckCircle2,
+  ShieldAlert,
+  UserX,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 import { useTheme } from '@/hooks/useTheme'
@@ -41,6 +43,30 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  // Tratamento dos parâmetros de bloqueio central do Gestor de Acessos
+  const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search])
+  const reasonParam = queryParams.get('reason')
+
+  const accessReasonNotice = useMemo(() => {
+    if (reasonParam === 'no_access') {
+      return {
+        title: 'Acesso não autorizado',
+        description:
+          'Seu usuário não possui permissão ativa para o sistema Ricci Task no Gestor de Acessos Ricci. Solicite a liberação ao administrador da firma.',
+        type: 'warning' as const,
+      }
+    }
+    if (reasonParam === 'disabled') {
+      return {
+        title: 'Usuário ou acesso inativo',
+        description:
+          'Seu cadastro corporativo ou seu vínculo com o Ricci Task foi desativado. Entre em contato com a administração para regularização.',
+        type: 'destructive' as const,
+      }
+    }
+    return null
+  }, [reasonParam])
 
   // Modal de Recuperação de Senha
   const [resetModalOpen, setResetModalOpen] = useState(false)
@@ -178,6 +204,26 @@ export default function LoginPage() {
               Utilize o e-mail e a senha vinculados à sua conta da firma.
             </p>
           </div>
+
+          {accessReasonNotice && !errorMessage && (
+            <div
+              className={`mb-5 p-3.5 rounded-xl border text-xs flex items-start gap-2.5 animate-in fade-in ${
+                accessReasonNotice.type === 'destructive'
+                  ? 'bg-destructive/10 border-destructive/30 text-destructive'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+              }`}
+            >
+              {accessReasonNotice.type === 'destructive' ? (
+                <UserX className="w-4 h-4 shrink-0 mt-0.5 text-destructive" />
+              ) : (
+                <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              )}
+              <div className="leading-relaxed">
+                <p className="font-semibold">{accessReasonNotice.title}</p>
+                <p className="mt-0.5 opacity-90">{accessReasonNotice.description}</p>
+              </div>
+            </div>
+          )}
 
           {errorMessage && (
             <div className="mb-5 p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-start gap-2.5 animate-in fade-in">
