@@ -15,30 +15,51 @@ export function ProtectedLayout() {
   const isSigningOutRef = useRef(false)
   const [isSigningOut, setIsSigningOut] = useState(false)
 
-  // 4. Desconexão para accessStatus === 'disabled' executada em useEffect, com ref/flag para não repetir a chamada
+  // Reset da ref de signOut quando mudar de sessão ou de accessStatus (ex: novo login)
+  const sessionUserId = session?.user?.id ?? null
+  const lastDisabledUserIdRef = useRef<string | null>(null)
+
+  // 4. Desconexão para accessStatus === 'disabled' executada em useEffect, uma única vez por sessão bloqueada
   useEffect(() => {
-    if (accessStatus === 'disabled' && !isSigningOutRef.current) {
+    if (
+      accessStatus === 'disabled' &&
+      sessionUserId &&
+      (!isSigningOutRef.current || lastDisabledUserIdRef.current !== sessionUserId)
+    ) {
       isSigningOutRef.current = true
+      lastDisabledUserIdRef.current = sessionUserId
       setIsSigningOut(true)
-      signOut()
-        .catch((err) => {
-          console.error('[ProtectedLayout] Erro ao encerrar sessão do usuário desativado:', err)
-        })
-        .finally(() => {
+
+      const performSignOut = async () => {
+        try {
+          const res = await signOut()
+          if (res?.error) {
+            console.error(
+              '[ProtectedLayout] Erro retornado ao encerrar sessão de usuário desativado:',
+              res.error,
+            )
+          }
+        } catch (err) {
+          console.error('[ProtectedLayout] Exceção ao encerrar sessão de usuário desativado:', err)
+        } finally {
+          setIsSigningOut(false)
           navigate('/login?reason=disabled', { replace: true })
-        })
+        }
+      }
+
+      void performSignOut()
     }
-  }, [accessStatus, signOut, navigate])
+  }, [accessStatus, sessionUserId, signOut, navigate])
 
   // 1. Aguarda inicialização de autenticação e resolução da autorização central
-  // Mantém a SplashScreen enquanto estiver carregando ou desconectando o usuário desativado
+  // Enquanto estiver carregando ou desconectando o usuário desativado, exibe SplashScreen
   if (loading || (session && loadingAccess) || isSigningOut) {
     return <SplashScreen />
   }
 
-  // Se o accessStatus é disabled mas o effect ainda não completou a desconexão, mantém SplashScreen
+  // Se o accessStatus é disabled, mantém bloqueado mesmo se logout falhou
   if (accessStatus === 'disabled') {
-    return <SplashScreen />
+    return <Navigate to="/login?reason=disabled" replace />
   }
 
   // 2. Não autenticado -> redireciona para login simples
@@ -78,28 +99,22 @@ export function ProtectedLayout() {
 }
 
 /**
- * Rota pública de login: se já houver sessão ativa, redireciona direto para o Dashboard "/"
+ * Rota pública de login: se já houver sessão ativa e autorizada, redireciona para "/"
+ * Alinhada com ProtectedRoute: aguarda autenticação e resolução de acesso da sessão atual.
  */
 export function PublicRoute({ children }: { children: React.ReactNode }) {
   const { session, loading, loadingAccess, hasSystemAccess, accessStatus } = useAuth()
-  const location = useLocation()
-  const searchParams = new URLSearchParams(location.search)
-  const reason = searchParams.get('reason')
 
-  // Se o usuário foi redirecionado com uma razão específica de bloqueio, exibe a tela de login
-  // mesmo que a sessão do Supabase ainda esteja em transição de encerramento
-  if (reason === 'no_access' || reason === 'disabled') {
-    return <>{children}</>
-  }
-
+  // 1. Aguarda resolução de auth e autorização da sessão atual
   if (loading || (session && loadingAccess)) {
     return <SplashScreen />
   }
 
-  // Se tem sessão e tem acesso confirmado (ou erro técnico fail-open), redireciona para o sistema
+  // 2. Se tem sessão ativa e acesso autorizado (ou erro técnico fail-open), redireciona para o sistema
   if (session && (hasSystemAccess || accessStatus === 'error')) {
     return <Navigate to="/" replace />
   }
 
+  // 3. Se não tem sessão, ou sessão com no_access/disabled (que deve ver a tela de login), renderiza login
   return <>{children}</>
 }

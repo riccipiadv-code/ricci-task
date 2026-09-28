@@ -77,6 +77,14 @@ export default function LoginPage() {
   // Redireciona para onde o usuário tentou ir ou para o dashboard "/"
   const fromLocation = (location.state as { from?: { pathname?: string } })?.from?.pathname || '/'
 
+  const cleanDestination = useMemo(() => {
+    // Se fromLocation for /login (mesmo com query params antigos como ?reason=no_access), limpa para "/"
+    if (!fromLocation || fromLocation === '/login' || fromLocation.startsWith('/login?')) {
+      return '/'
+    }
+    return fromLocation
+  }, [fromLocation])
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setErrorMessage(null)
@@ -120,7 +128,8 @@ export default function LoginPage() {
         title: 'Bem-vindo ao Ricci Task!',
         description: 'Login realizado com sucesso.',
       })
-      navigate(fromLocation, { replace: true })
+      // Garante limpeza de qualquer parâmetro de bloqueio na URL
+      navigate(cleanDestination, { replace: true })
     } catch (err: unknown) {
       const errorText = err instanceof Error ? err.message : 'Erro inesperado de comunicação'
       setErrorMessage(`Não foi possível conectar ao servidor: ${errorText}`)

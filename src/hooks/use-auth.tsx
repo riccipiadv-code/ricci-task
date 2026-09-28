@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  ReactNode,
+  useCallback,
+  useRef,
+} from 'react'
 import { User, Session, AuthError } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase/client'
 import {
@@ -51,84 +59,165 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [coreUsuarioNome, setCoreUsuarioNome] = useState<string | null>(null)
   const [coreErrorMessage, setCoreErrorMessage] = useState<string | null>(null)
 
+  // Refs de controle para isolamento de requisições concorrentes e deduplicação
+  const currentUserIdRef = useRef<string | null>(null)
+  const activeRequestIdRef = useRef<number>(0)
+  const inFlightPromiseRef = useRef<Promise<CoreAccessResolution> | null>(null)
+  const accessStatusRef = useRef<AccessStatus | null>(null)
+
+  const setAccessStatusState = useCallback((status: AccessStatus | null) => {
+    accessStatusRef.current = status
+    setAccessStatus(status)
+  }, [])
+
   const clearAccessState = useCallback(() => {
     setLoadingAccess(false)
     setHasSystemAccess(false)
     setCorePerfil(null)
     setCorePerfilNome(null)
-    setAccessStatus(null)
+    setAccessStatusState(null)
     setCoreUserId(null)
     setCoreUsuarioNome(null)
     setCoreErrorMessage(null)
-  }, [])
+  }, [setAccessStatusState])
 
-  const fetchAccess = useCallback(async (authUserId: string): Promise<CoreAccessResolution> => {
-    setLoadingAccess(true)
-    try {
-      const resolution = await resolveUserCoreAccess(authUserId)
-      setHasSystemAccess(resolution.hasSystemAccess)
-      setAccessStatus(resolution.accessStatus)
-      setCorePerfil(resolution.perfil)
-      setCorePerfilNome(resolution.perfilNome ?? null)
-      setCoreUserId(resolution.coreUserId)
-      setCoreUsuarioNome(resolution.usuarioNome ?? null)
-      setCoreErrorMessage(resolution.errorMessage ?? null)
-      return resolution
-    } finally {
-      setLoadingAccess(false)
-    }
-  }, [])
+  /**
+   * Executa a resolução assíncrona de autorização central protegida por:
+   * - Identificador do usuário pretendido (`targetUserId`)
+   * - Número de requisição incremental (`requestId`)
+   * - Deduplicação de requisições em voo (inFlightPromiseRef)
+   */
+  const resolveAccessForUser = useCallback(
+    async (targetUserId: string, force = false): Promise<CoreAccessResolution | null> => {
+      // Se não for forçado e já houver consulta em andamento para este usuário, reutiliza a promessa
+      if (!force && inFlightPromiseRef.current && currentUserIdRef.current === targetUserId) {
+        return inFlightPromiseRef.current
+      }
+
+      const requestId = ++activeRequestIdRef.current
+
+      const resolutionPromise = (async () => {
+        try {
+          const resolution = await resolveUserCoreAccess(targetUserId)
+
+          // Só aplica se esta requisição ainda for a mais recente E o usuário ainda for o mesmo
+          if (
+            requestId === activeRequestIdRef.current &&
+            currentUserIdRef.current === targetUserId
+          ) {
+            setHasSystemAccess(resolution.hasSystemAccess)
+            setAccessStatusState(resolution.accessStatus)
+            setCorePerfil(resolution.perfil)
+            setCorePerfilNome(resolution.perfilNome ?? null)
+            setCoreUserId(resolution.coreUserId)
+            setCoreUsuarioNome(resolution.usuarioNome ?? null)
+            setCoreErrorMessage(resolution.errorMessage ?? null)
+            setLoadingAccess(false)
+          }
+
+          return resolution
+        } catch (err: any) {
+          if (
+            requestId === activeRequestIdRef.current &&
+            currentUserIdRef.current === targetUserId
+          ) {
+            console.error('[AuthProvider] Erro inesperado ao checar acesso central:', err)
+            setHasSystemAccess(false)
+            setAccessStatusState('error')
+            setCorePerfil(null)
+            setCorePerfilNome(null)
+            setCoreUserId(null)
+            setCoreUsuarioNome(null)
+            setCoreErrorMessage(err?.message || 'Falha na checagem de autorização central.')
+            setLoadingAccess(false)
+          }
+
+          const fallbackResolution: CoreAccessResolution = {
+            hasSystemAccess: false,
+            accessStatus: 'error',
+            perfil: null,
+            coreUserId: null,
+            errorMessage: err?.message || 'Falha na checagem de autorização central.',
+            isTechnicalError: true,
+          }
+          return fallbackResolution
+        } finally {
+          if (inFlightPromiseRef.current === resolutionPromise) {
+            inFlightPromiseRef.current = null
+          }
+        }
+      })()
+
+      inFlightPromiseRef.current = resolutionPromise
+      return resolutionPromise
+    },
+    [],
+  )
+
+  /**
+   * Ponto centralizado para aplicar uma nova sessão (ou nula) e disparar a autorização.
+   * Chamado de forma síncrona tanto por onAuthStateChange quanto pela resolução inicial de getSession().
+   */
+  const applySessionAndAuthorize = useCallback(
+    (newSession: Session | null, source: string) => {
+      const newUserId = newSession?.user?.id ?? null
+      const previousUserId = currentUserIdRef.current
+      const isUserSwitch = newUserId !== previousUserId
+
+      // Atualiza ref do usuário ativo imediatamente
+      currentUserIdRef.current = newUserId
+
+      // Atualiza estados síncronos de sessão
+      setSession(newSession)
+      setUser(newSession?.user ?? null)
+      setLoading(false)
+
+      if (!newUserId) {
+        // Sessão encerrada ou ausente: invalida qualquer consulta pendente
+        activeRequestIdRef.current++
+        inFlightPromiseRef.current = null
+        clearAccessState()
+        return
+      }
+
+      if (isUserSwitch) {
+        // Novo usuário ou primeira restauração de sessão:
+        // 1. Invalida imediatamente qualquer autorização anterior
+        // 2. Marca loadingAccess como true ANTES de liberar rotas
+        setLoadingAccess(true)
+        setHasSystemAccess(false)
+        setCorePerfil(null)
+        setCorePerfilNome(null)
+        setAccessStatusState(null)
+        setCoreUserId(null)
+        setCoreUsuarioNome(null)
+        setCoreErrorMessage(null)
+
+        // Dispara resolução central
+        void resolveAccessForUser(newUserId, false)
+      } else {
+        // Mesmo usuário (ex: TOKEN_REFRESHED, USER_UPDATED, getSession repetido).
+        // Se já houver consulta em andamento ou o acesso já foi resolvido, NÃO reativa loadingAccess
+        // sem consulta que o finalize, prevenindo SplashScreens infinitas e queries duplicadas.
+        if (accessStatusRef.current === null && !inFlightPromiseRef.current) {
+          setLoadingAccess(true)
+          void resolveAccessForUser(newUserId, false)
+        }
+      }
+    },
+    [clearAccessState, resolveAccessForUser, setAccessStatusState],
+  )
 
   const refreshAccess = useCallback(async () => {
-    if (!user?.id) {
+    const activeUserId = currentUserIdRef.current
+    if (!activeUserId) {
       clearAccessState()
       return null
     }
-    return fetchAccess(user.id)
-  }, [user?.id, clearAccessState, fetchAccess])
-
-  // Resolve autorização central sempre que o usuário autenticado mudar
-  useEffect(() => {
-    if (!user?.id) {
-      clearAccessState()
-      return
-    }
-
-    let isMounted = true
+    // Revalidação explícita permitida mesmo para o mesmo usuário
     setLoadingAccess(true)
-
-    resolveUserCoreAccess(user.id)
-      .then((resolution) => {
-        if (!isMounted) return
-        setHasSystemAccess(resolution.hasSystemAccess)
-        setAccessStatus(resolution.accessStatus)
-        setCorePerfil(resolution.perfil)
-        setCorePerfilNome(resolution.perfilNome ?? null)
-        setCoreUserId(resolution.coreUserId)
-        setCoreUsuarioNome(resolution.usuarioNome ?? null)
-        setCoreErrorMessage(resolution.errorMessage ?? null)
-      })
-      .catch((err) => {
-        if (!isMounted) return
-        console.error('[AuthProvider] Erro inesperado ao checar acesso central:', err)
-        setHasSystemAccess(false)
-        setAccessStatus('error')
-        setCorePerfil(null)
-        setCorePerfilNome(null)
-        setCoreUserId(null)
-        setCoreUsuarioNome(null)
-        setCoreErrorMessage(err?.message || 'Falha na checagem de autorização central.')
-      })
-      .finally(() => {
-        if (isMounted) {
-          setLoadingAccess(false)
-        }
-      })
-
-    return () => {
-      isMounted = false
-    }
-  }, [user?.id, clearAccessState])
+    return resolveAccessForUser(activeUserId, true)
+  }, [clearAccessState, resolveAccessForUser])
 
   useEffect(() => {
     // Escuta mudanças de auth em tempo real (login, logout, refresh de token)
@@ -136,46 +225,28 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       // PROIBIDO async/await aqui dentro — estritamente síncrono conforme instrução de integração
-      // 1. ANTES de definir a nova sessão/usuário, executar setLoadingAccess(Boolean(newSession?.user))
-      // e caso newSession seja nula, limpar o estado central imediatamente
-      if (newSession?.user) {
-        setLoadingAccess(true)
-      } else {
-        clearAccessState()
-      }
-      setSession(newSession)
-      setUser(newSession?.user ?? null)
-      setLoading(false)
+      applySessionAndAuthorize(newSession, 'onAuthStateChange')
     })
 
     // Checagem inicial da sessão atual
     supabase.auth
       .getSession()
       .then(({ data: { session: initialSession }, error }) => {
-        if (!error && initialSession?.user) {
-          // Se houver initialSession, setLoadingAccess(true) ANTES de setSession e setUser
-          setLoadingAccess(true)
-          setSession(initialSession)
-          setUser(initialSession.user)
+        if (!error && initialSession) {
+          applySessionAndAuthorize(initialSession, 'getSession')
         } else {
-          clearAccessState()
-          setSession(null)
-          setUser(null)
+          applySessionAndAuthorize(null, 'getSession-error')
         }
       })
-      .catch(() => {
-        clearAccessState()
-        setSession(null)
-        setUser(null)
-      })
-      .finally(() => {
-        setLoading(false)
+      .catch((err) => {
+        console.error('[AuthProvider] Erro ao obter sessão inicial:', err)
+        applySessionAndAuthorize(null, 'getSession-catch')
       })
 
     return () => {
       subscription.unsubscribe()
     }
-  }, [clearAccessState])
+  }, [applySessionAndAuthorize])
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
