@@ -1,18 +1,43 @@
-import { Navigate, Outlet, useLocation } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { SplashScreen } from './SplashScreen'
 import Layout from './Layout'
 
 /**
  * Protege rotas internas do sistema: se não houver usuário/sessão ativa, redireciona para /login.
- * Enquanto a autenticação estiver carregando a sessão inicial, exibe o SplashScreen.
+ * Enquanto a autenticação estiver carregando a sessão inicial ou a autorização central, exibe o SplashScreen.
  */
 export function ProtectedLayout() {
   const { session, loading, loadingAccess, hasSystemAccess, accessStatus, signOut } = useAuth()
   const location = useLocation()
+  const navigate = useNavigate()
+  const isSigningOutRef = useRef(false)
+  const [isSigningOut, setIsSigningOut] = useState(false)
+
+  // 4. Desconexão para accessStatus === 'disabled' executada em useEffect, com ref/flag para não repetir a chamada
+  useEffect(() => {
+    if (accessStatus === 'disabled' && !isSigningOutRef.current) {
+      isSigningOutRef.current = true
+      setIsSigningOut(true)
+      signOut()
+        .catch((err) => {
+          console.error('[ProtectedLayout] Erro ao encerrar sessão do usuário desativado:', err)
+        })
+        .finally(() => {
+          navigate('/login?reason=disabled', { replace: true })
+        })
+    }
+  }, [accessStatus, signOut, navigate])
 
   // 1. Aguarda inicialização de autenticação e resolução da autorização central
-  if (loading || (session && loadingAccess)) {
+  // Mantém a SplashScreen enquanto estiver carregando ou desconectando o usuário desativado
+  if (loading || (session && loadingAccess) || isSigningOut) {
+    return <SplashScreen />
+  }
+
+  // Se o accessStatus é disabled mas o effect ainda não completou a desconexão, mantém SplashScreen
+  if (accessStatus === 'disabled') {
     return <SplashScreen />
   }
 
@@ -21,14 +46,7 @@ export function ProtectedLayout() {
     return <Navigate to="/login" replace state={{ from: location }} />
   }
 
-  // 3. Usuário central inativo ou vínculo inativo -> encerra sessão e redireciona para /login?reason=disabled
-  if (accessStatus === 'disabled') {
-    // Desconecta o usuário centralmente inativado
-    signOut().catch((err) => console.error('[ProtectedLayout] Erro ao encerrar sessão:', err))
-    return <Navigate to="/login?reason=disabled" replace />
-  }
-
-  // 4. Usuário autenticado sem vínculo válido para RICCI_TASK -> bloquear e redirecionar para /login?reason=no_access
+  // 3. Usuário autenticado sem vínculo válido para RICCI_TASK -> bloquear e redirecionar para /login?reason=no_access
   if (accessStatus === 'no_access') {
     return <Navigate to="/login?reason=no_access" replace />
   }

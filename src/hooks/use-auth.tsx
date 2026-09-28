@@ -136,6 +136,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       // PROIBIDO async/await aqui dentro — estritamente síncrono conforme instrução de integração
+      // 1. ANTES de definir a nova sessão/usuário, executar setLoadingAccess(Boolean(newSession?.user))
+      // e caso newSession seja nula, limpar o estado central imediatamente
+      if (newSession?.user) {
+        setLoadingAccess(true)
+      } else {
+        clearAccessState()
+      }
       setSession(newSession)
       setUser(newSession?.user ?? null)
       setLoading(false)
@@ -145,15 +152,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     supabase.auth
       .getSession()
       .then(({ data: { session: initialSession }, error }) => {
-        if (!error && initialSession) {
+        if (!error && initialSession?.user) {
+          // Se houver initialSession, setLoadingAccess(true) ANTES de setSession e setUser
+          setLoadingAccess(true)
           setSession(initialSession)
-          setUser(initialSession.user ?? null)
+          setUser(initialSession.user)
         } else {
+          clearAccessState()
           setSession(null)
           setUser(null)
         }
       })
       .catch(() => {
+        clearAccessState()
         setSession(null)
         setUser(null)
       })
@@ -164,7 +175,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       subscription.unsubscribe()
     }
-  }, [])
+  }, [clearAccessState])
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
