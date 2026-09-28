@@ -1,4 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import { verifyConectaiAdmin } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -202,8 +204,6 @@ class ImapSocketClient {
   }
 }
 
-import { createClient } from 'jsr:@supabase/supabase-js@2'
-
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -242,20 +242,17 @@ Deno.serve(async (req: Request) => {
     })
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('perfil')
-    .eq('id', user.id)
-    .single()
-
-  if (profileError || profile?.perfil !== 'administrador') {
+  // Autorização central via core_* (Administrador ativo no Conectaí)
+  const authCheck = await verifyConectaiAdmin(supabase, user.id)
+  if (!authCheck.allowed) {
     return new Response(
       JSON.stringify({
         error:
+          authCheck.error ||
           'Permissão negada: apenas administradores podem testar conexão de e-mail de leitura.',
       }),
       {
-        status: 403,
+        status: authCheck.status || 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     )

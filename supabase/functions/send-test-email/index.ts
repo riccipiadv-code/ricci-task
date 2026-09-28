@@ -1,6 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
+import { verifyConectaiAdmin } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -33,7 +34,7 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
   try {
-    const token = authHeader.replace('Bearer ', '')
+    const token = authHeader.replace(/^Bearer\s+/i, '')
     const {
       data: { user },
       error: userError,
@@ -41,13 +42,13 @@ Deno.serve(async (req: Request) => {
 
     if (userError || !user) throw new Error('Não autorizado.')
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('perfil')
-      .eq('id', user.id)
-      .single()
-    if (profile?.perfil !== 'administrador') {
-      throw new Error('Permissão negada: apenas gestores podem testar o envio de e-mails.')
+    // Autorização central via core_* (Administrador ativo no Conectaí)
+    const authCheck = await verifyConectaiAdmin(supabase, user.id)
+    if (!authCheck.allowed) {
+      return new Response(JSON.stringify({ error: authCheck.error }), {
+        status: authCheck.status || 403,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
     }
 
     const { to_email } = await req.json()

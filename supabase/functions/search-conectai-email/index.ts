@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { verifyConectaiAdmin } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -220,7 +221,6 @@ class ImapSocketClient {
       const line = await this.readLine(remainingTime)
 
       if (line.startsWith('* SEARCH')) {
-        // e.g. "* SEARCH 12 34 56" or "* SEARCH"
         const numbersPart = line.substring('* SEARCH'.length).trim()
         if (numbersPart.length > 0) {
           const ids = numbersPart
@@ -304,7 +304,6 @@ class ImapSocketClient {
     const parsedDate = new Date(cleaned)
 
     if (isNaN(parsedDate.getTime())) {
-      // Manual parse for IMAP INTERNALDATE format like "26-Aug-2026 11:30:00 -0300"
       const imapRegex = /^(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{1,2}):(\d{2})/
       const m = cleaned.match(imapRegex)
       if (m) {
@@ -423,35 +422,29 @@ class ImapSocketClient {
         break
       }
 
-      // Untagged FETCH line, e.g.:
-      // * 1 FETCH (INTERNALDATE "26-Aug-2026 11:30:00 -0300" BODY[] {12345}
       const fetchStartMatch = line.match(/^\*\s+(\d+)\s+FETCH\s+\((.*)$/i)
       if (fetchStartMatch) {
         const msgSeq = parseInt(fetchStartMatch[1], 10)
         const fetchLineRest = fetchStartMatch[2]
 
-        // Extract INTERNALDATE if present
         let internalDate = ''
         const internalDateMatch = fetchLineRest.match(/INTERNALDATE\s+"([^"]+)"/i)
         if (internalDateMatch) {
           internalDate = internalDateMatch[1]
         }
 
-        // Check if there is a literal size indicator like {12345}
         let rawMessage = ''
         const literalMatch = fetchLineRest.match(/\{(\d+)\}\s*$/)
         if (literalMatch) {
           const byteCount = parseInt(literalMatch[1], 10)
           rawMessage = await this.readBytes(byteCount, remainingTime)
         } else {
-          // If body was returned in quotes (rare for entire BODY)
           const bodyMatch = fetchLineRest.match(/BODY(?:\[\])?\s+"([^"]*)"/i)
           if (bodyMatch) {
             rawMessage = bodyMatch[1]
           }
         }
 
-        // Extract headers from the beginning of the raw RFC 822 message (headers and body are separated by \r\n\r\n or \n\n)
         const headerEndIndex = rawMessage.search(/\r?\n\r?\n/)
         const headerText =
           headerEndIndex !== -1 ? rawMessage.substring(0, headerEndIndex) : rawMessage
@@ -470,7 +463,6 @@ class ImapSocketClient {
       }
     }
 
-    // Return in the order of messageIds
     const result: Array<{ date: string; from: string; to: string; subject: string; raw: string }> =
       []
     for (const id of messageIds) {
@@ -478,7 +470,6 @@ class ImapSocketClient {
       if (item) {
         result.push(item)
       } else {
-        // Fallback placeholder if not matched by seq number directly
         result.push({
           date: '',
           from: '',
@@ -492,16 +483,6 @@ class ImapSocketClient {
     return result
   }
 
-  /**
-   * Compatibility wrapper for fetchEmailHeaders
-   */
-  async fetchEmailHeaders(
-    messageIds: number[],
-    timeoutMs = 20000,
-  ): Promise<Array<{ date: string; from: string; to: string; subject: string; raw?: string }>> {
-    return await this.fetchEmailMessages(messageIds, timeoutMs)
-  }
-
   async close(): Promise<void> {
     try {
       if (this.writer) {
@@ -510,7 +491,7 @@ class ImapSocketClient {
         await this.writer.write(this.encoder.encode(`${tag} LOGOUT\r\n`))
       }
     } catch {
-      // Best effort logout, ignore error
+      // Best effort logout
     }
 
     try {
@@ -580,19 +561,17 @@ Deno.serve(async (req: Request) => {
     })
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('perfil')
-    .eq('id', user.id)
-    .single()
-
-  if (profileError || profile?.perfil !== 'administrador') {
+  // Autorização central via core_* (Administrador ativo no Conectaí)
+  const authCheck = await verifyConectaiAdmin(supabase, user.id)
+  if (!authCheck.allowed) {
     return new Response(
       JSON.stringify({
-        error: 'Permissão negada: apenas administradores podem buscar e-mails de leitura.',
+        error:
+          authCheck.error ||
+          'Permissão negada: apenas administradores podem buscar e-mails de leitura.',
       }),
       {
-        status: 403,
+        status: authCheck.status || 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     )
@@ -842,7 +821,7 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // 5. Fetch email messages (headers + raw RFC 822) if searchCount > 0
+    // 5. Fetch email messages if searchCount > 0
     let emails: Array<{ date: string; from: string; to: string; subject: string; raw: string }> = []
     if (searchCount > 0 && matchingIds.length > 0) {
       try {
@@ -855,7 +834,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 6. Close connection (best-effort LOGOUT inside close)
+    // 6. Close connection
     await client.close()
 
     return new Response(

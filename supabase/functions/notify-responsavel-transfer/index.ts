@@ -1,6 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
+import { resolveGestorFromCore } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -33,7 +34,7 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
   try {
-    const token = authHeader.replace('Bearer ', '')
+    const token = authHeader.replace(/^Bearer\s+/i, '')
     const {
       data: { user },
       error: userError,
@@ -50,11 +51,15 @@ Deno.serve(async (req: Request) => {
       responsavel_id,
       previous_stage,
       new_stage,
+      // Contrato Central (Etapa de migração para responsavel_core_usuario_id)
+      previous_responsavel_core_usuario_id,
+      new_responsavel_core_usuario_id,
+      responsavel_core_usuario_id,
     } = body
 
     const isReabertura = type === 'reabertura'
 
-    let targetResponsavelId: string | null = null
+    let targetCoreUsuarioId: string | null = null
 
     if (isReabertura) {
       // Regra de reabertura:
@@ -82,23 +87,30 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      targetResponsavelId = responsavel_id ? String(responsavel_id) : null
+      targetCoreUsuarioId = responsavel_core_usuario_id ? String(responsavel_core_usuario_id) : null
 
-      // Se responsavel_id não foi passado no body, buscar do contato no banco
-      if (!targetResponsavelId && contato_id) {
+      // Se responsavel_core_usuario_id não foi passado no body, buscar do contato no banco
+      if (!targetCoreUsuarioId && contato_id) {
         const { data: cData } = await supabase
           .from('manychat_contatos')
-          .select('responsavel_id')
+          .select('responsavel_core_usuario_id')
           .eq('id', contato_id)
           .maybeSingle()
-        if (cData?.responsavel_id) {
-          targetResponsavelId = String(cData.responsavel_id)
+        if (cData?.responsavel_core_usuario_id) {
+          targetCoreUsuarioId = String(cData.responsavel_core_usuario_id)
         }
       }
 
-      if (!targetResponsavelId) {
+      // Fallback de compatibilidade se enviado responsavel_id antigo (sem quebrar clientes que ainda não atualizaram)
+      if (!targetCoreUsuarioId && responsavel_id) {
+        // Tentar resolver core_usuarios via core_usuarios.id ou profiles
+        targetCoreUsuarioId = String(responsavel_id)
+      }
+
+      if (!targetCoreUsuarioId) {
         console.error('Reabertura Conectaí: Atendimento sem responsável atribuído.', {
           contato_id,
+          responsavel_core_usuario_id,
           responsavel_id,
         })
         return new Response(
@@ -111,7 +123,8 @@ Deno.serve(async (req: Request) => {
       }
     } else {
       // 1. Validar se novo responsável foi informado (Nova atribuição)
-      if (!new_responsavel_id) {
+      const newCentralId = new_responsavel_core_usuario_id || new_responsavel_id
+      if (!newCentralId) {
         return new Response(JSON.stringify({ triggered: false, reason: 'no_new_responsavel' }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -119,8 +132,9 @@ Deno.serve(async (req: Request) => {
       }
 
       // 2. Validar se houve mudança de responsável (anterior diferente do novo)
-      const prevIdNorm = previous_responsavel_id ? String(previous_responsavel_id) : null
-      const newIdNorm = String(new_responsavel_id)
+      const prevCentralId = previous_responsavel_core_usuario_id || previous_responsavel_id
+      const prevIdNorm = prevCentralId ? String(prevCentralId) : null
+      const newIdNorm = String(newCentralId)
       if (prevIdNorm === newIdNorm) {
         return new Response(
           JSON.stringify({ triggered: false, reason: 'responsavel_not_changed' }),
@@ -131,23 +145,57 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      targetResponsavelId = newIdNorm
+      targetCoreUsuarioId = newIdNorm
     }
 
-    // 3. Buscar o responsável em legaldesk_usuarios
-    const { data: responsavel, error: respError } = await supabase
-      .from('legaldesk_usuarios')
-      .select('id, nome, email')
-      .eq('id', targetResponsavelId)
+    // 3. Buscar o responsável diretamente em core_usuarios (nome + email)
+    // NÃO usar profiles.legaldesk_usuario_id para resolver responsável ou gestor.
+    let { data: responsavel, error: respError } = await supabase
+      .from('core_usuarios')
+      .select('id, nome, email, ativo')
+      .eq('id', targetCoreUsuarioId)
       .maybeSingle()
 
     if (respError) throw respError
 
+    // Se não encontrou em core_usuarios pelo id direto (caso raro de envio com id de legaldesk_usuarios),
+    // fazer fallback de compatibilidade buscando legaldesk_usuarios
+    if (!responsavel) {
+      const { data: legacyResp } = await supabase
+        .from('legaldesk_usuarios')
+        .select('id, nome, email')
+        .eq('id', targetCoreUsuarioId)
+        .maybeSingle()
+
+      if (legacyResp) {
+        // Tentar encontrar o usuário corporativo correspondente por e-mail em core_usuarios
+        if (legacyResp.email) {
+          const { data: coreByEmail } = await supabase
+            .from('core_usuarios')
+            .select('id, nome, email, ativo')
+            .ilike('email', legacyResp.email.trim())
+            .maybeSingle()
+          if (coreByEmail) {
+            responsavel = coreByEmail
+            targetCoreUsuarioId = coreByEmail.id
+          }
+        }
+        if (!responsavel) {
+          responsavel = {
+            id: legacyResp.id,
+            nome: legacyResp.nome,
+            email: legacyResp.email,
+            ativo: true,
+          }
+        }
+      }
+    }
+
     // 4. Se não encontrar responsável ou email for nulo/vazio
     const destEmail = responsavel?.email?.trim()
     if (!responsavel || !destEmail) {
-      console.error('Responsável não encontrado ou sem e-mail cadastrado:', {
-        targetResponsavelId,
+      console.error('Responsável não encontrado ou sem e-mail cadastrado em core_usuarios:', {
+        targetCoreUsuarioId,
         responsavel,
         isReabertura,
       })
@@ -169,36 +217,9 @@ Deno.serve(async (req: Request) => {
     if (contatoError) throw contatoError
     if (!contato) throw new Error('Contato não encontrado.')
 
-    // 5.1. Buscar gestor vinculado ao responsável (profiles.legaldesk_usuario_id -> profiles.gestor_id)
-    let gestorEmail: string | null = null
-    try {
-      const { data: respProfile, error: profileError } = await supabase
-        .from('profiles')
-        .select('gestor_id')
-        .eq('legaldesk_usuario_id', targetResponsavelId)
-        .maybeSingle()
-
-      if (profileError) {
-        console.warn('Erro ao consultar profile do responsável para obter gestor:', profileError)
-      } else if (respProfile?.gestor_id) {
-        const { data: gestorProfile, error: gestorError } = await supabase
-          .from('profiles')
-          .select('email, name, perfil')
-          .eq('id', respProfile.gestor_id)
-          .maybeSingle()
-
-        if (gestorError) {
-          console.warn('Erro ao consultar profile do gestor:', gestorError)
-        } else if (gestorProfile?.email) {
-          const candidateEmail = gestorProfile.email.trim()
-          if (candidateEmail && candidateEmail.toLowerCase() !== destEmail.toLowerCase()) {
-            gestorEmail = candidateEmail
-          }
-        }
-      }
-    } catch (gestorLookupError) {
-      console.warn('Falha segura na busca de gestor:', gestorLookupError)
-    }
+    // 5.1. Buscar gestor vinculado diretamente pelo core_* (core_usuarios.gestor_id)
+    // NÃO utilizar profiles.legaldesk_usuario_id nem profiles.gestor_id.
+    const { gestorEmail } = await resolveGestorFromCore(supabase, targetCoreUsuarioId, destEmail)
 
     // 6. Buscar configuração ativa do E-mail Geral
     const { data: setting, error: settingError } = await supabase
@@ -227,7 +248,6 @@ Deno.serve(async (req: Request) => {
     }
 
     // 7. Montar o e-mail
-    // Extrair o primeiro nome: split por espaço, pegar o primeiro token
     const fullName = (responsavel.nome || '').trim()
     const firstName = fullName ? fullName.split(/\s+/)[0] : 'Responsável'
 

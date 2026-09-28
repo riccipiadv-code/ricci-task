@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import { verifyConectaiAdmin } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -41,19 +42,19 @@ Deno.serve(async (req: Request) => {
     } = await supabase.auth.getUser(token)
 
     if (userError || !user) {
-      throw new Error('Não autorizado.')
+      return new Response(JSON.stringify({ error: 'Não autorizado.' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('perfil')
-      .eq('id', user.id)
-      .single()
-
-    if (profileError || profile?.perfil !== 'administrador') {
-      throw new Error(
-        'Permissão negada: apenas administradores podem alterar configurações de e-mail de leitura.',
-      )
+    // Autorização central via core_* (Administrador ativo no Conectaí)
+    const authCheck = await verifyConectaiAdmin(supabase, user.id)
+    if (!authCheck.allowed) {
+      return new Response(JSON.stringify({ error: authCheck.error }), {
+        status: authCheck.status || 403,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
     }
 
     const body = await req.json().catch(() => ({}))
