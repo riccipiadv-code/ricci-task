@@ -644,6 +644,88 @@ export interface CheckTransitionNotificationParams {
   }
 }
 
+export interface CheckProvidenciaEventAccessParams {
+  tarefaId: string
+  providenciaId: string
+  tipoEvento: 'providencia_inclusao' | 'providencia_atualizacao'
+  versaoUpdatedAt?: string | null
+}
+
+/**
+ * Validação segura de eventos de providências (Ponto 5):
+ * Permite que alertas de providências incluídas ou atualizadas naquela transação sejam enviados
+ * mesmo quando o autor perdeu acesso ao caso, comprovados por registro na tabela do servidor
+ * `task_transacao_providencias_eventos` limitados ao autor, caso, providência, tipo e versão.
+ */
+export async function checkProvidenciaEventAccess(
+  supabase: SupabaseClient,
+  callerCoreId: string,
+  params: CheckProvidenciaEventAccessParams,
+): Promise<{ allowed: boolean; status: 'ok' | 'denied' | 'technical_failure'; error?: string }> {
+  if (!callerCoreId || !params.tarefaId || !params.providenciaId) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error: 'Identificadores incompletos para validação de evento de providência.',
+    }
+  }
+
+  try {
+    const { data: events, error } = await supabase
+      .from('task_transacao_providencias_eventos')
+      .select('id, tarefa_id, providencia_id, autor_core_id, tipo_evento, versao_updated_at')
+      .eq('tarefa_id', params.tarefaId)
+      .eq('providencia_id', params.providenciaId)
+      .eq('autor_core_id', callerCoreId)
+      .eq('tipo_evento', params.tipoEvento)
+      .order('created_at', { ascending: false })
+      .limit(5)
+
+    if (error) {
+      console.error('[core-auth] Falha técnica ao verificar evento de providência:', error)
+      return {
+        allowed: false,
+        status: 'technical_failure',
+        error: 'Falha técnica ao verificar autorização de evento de providência no banco de dados.',
+      }
+    }
+
+    if (!events || events.length === 0) {
+      return {
+        allowed: false,
+        status: 'denied',
+        error: 'Nenhum evento registrado pelo servidor para este autor nesta providência.',
+      }
+    }
+
+    // Se houver versaoUpdatedAt na providência, confere correspondência
+    if (params.versaoUpdatedAt) {
+      const targetStamp = new Date(params.versaoUpdatedAt).getTime()
+      const matchingEvent = events.find((ev: any) => {
+        if (!ev.versao_updated_at) return true
+        const evStamp = new Date(ev.versao_updated_at).getTime()
+        return Math.abs(evStamp - targetStamp) < 5000 // tolerância de 5 segundos
+      })
+      if (!matchingEvent) {
+        return {
+          allowed: false,
+          status: 'denied',
+          error: 'A versão da providência não corresponde ao evento gravado pelo servidor.',
+        }
+      }
+    }
+
+    return { allowed: true, status: 'ok' }
+  } catch (err: any) {
+    console.error('[core-auth] Exceção técnica ao verificar evento de providência:', err)
+    return {
+      allowed: false,
+      status: 'technical_failure',
+      error: 'Exceção técnica ao verificar evento de providência.',
+    }
+  }
+}
+
 export type TransitionAccessStatus = 'ok' | 'denied' | 'technical_failure'
 
 /**

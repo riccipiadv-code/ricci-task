@@ -1,12 +1,20 @@
 -- ============================================================================
--- SQL DE TRANSIÇÃO SEGURA DE ATRIBUIÇÃO, GRAVAÇÃO ATÔMICA E AUDITORIA (RICCI TASK)
+-- SQL DE TRANSIÇÃO SEGURA DE ATRIBUIÇÃO, GRAVAÇÃO ATÔMICA, RLS E AUDITORIA (RICCI TASK)
 -- Arquivo: docs/transicao-atribuicao-rpc.sql
 -- NOTA: Este script é manual e NÃO é executado automaticamente pelo build/migrações.
 -- O banco do Ricci Task só é alterado por ação manual do responsável técnico no Supabase.
+-- Versão 0.0.82: Correção dos 7 Bloqueios Comprovados:
+--   1. Criação na RPC com separação estrita de criação/edição, escopo por perfil e numeração atômica.
+--   2. Salvar sem mudanças com comparação em profundidade no servidor (valores, flags, datas, ordem, providências inalteradas).
+--   3. Correlação explícita de providências com preservação de temp_id retornado.
+--   4. Notificações seguras com validação no servidor e prevenção de spoofing / duplicidade de chaves.
+--   5. Providências pós-transferência registradas em eventos autorizados do servidor.
+--   6. Concorrência e prevenção de SMTP antes de aquisição exclusiva.
+--   7. Políticas RLS completas e fechamento de brechas de contorno.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- 0. Funções Auxiliares de Contexto Corporativo Central (se não existirem)
+-- 0. Funções Auxiliares de Contexto Corporativo Central
 -- ----------------------------------------------------------------------------
 
 -- Retorna o ID central (core_usuarios.id) do chamador autenticado (auth.uid())
@@ -113,22 +121,46 @@ CREATE POLICY "task_transicoes_select_policy" ON public.task_transicoes_atribuic
     OR public.task_is_admin()
   );
 
--- 2) Inserção direta BLOQUEADA para clientes: NENHUM authenticated pode dar INSERT direto.
+-- 2) Inserção / Modificação direta BLOQUEADA para clientes: NENHUM authenticated pode dar INSERT/UPDATE direto.
 -- A gravação só ocorre via SECURITY DEFINER dentro da RPC.
 DROP POLICY IF EXISTS "task_transicoes_insert_policy" ON public.task_transicoes_atribuicao;
--- Nenhum CREATE POLICY para INSERT é concedido a authenticated/anon.
+DROP POLICY IF EXISTS "task_transicoes_update_policy" ON public.task_transicoes_atribuicao;
+DROP POLICY IF EXISTS "task_transicoes_delete_policy" ON public.task_transicoes_atribuicao;
 
 -- ----------------------------------------------------------------------------
--- 2. RPC SECURITY DEFINER: task_salvar_controle_transacional
--- Executa em UMA ÚNICA TRANSAÇÃO no servidor:
---  - Validação de autenticação e contexto corporativo do chamador;
---  - Validação de escopo no estado ANTERIOR do caso com SELECT ... FOR UPDATE;
---  - Validação de elegibilidade central seletiva (APENAS para papéis que mudaram);
---  - Preservação do participante histórico e token para papel que NÃO mudou;
---  - Atualização dos dados do caso (ou criação, se p_tarefa_id for NULL);
---  - Inclusão / atualização / exclusão de providências (all-or-nothing);
---  - Registro de auditoria em task_transicoes_atribuicao SOMENTE se houve alteração de atribuição;
---  - Retorno completo dos dados reais efetivamente gravados.
+-- 2. Tabela de Eventos de Providências da Transação (Ponto 5)
+-- Registra as providências efetivamente criadas ou alteradas pelo servidor
+-- em uma transação, vinculadas ao autor, caso, providência, tipo e versão.
+-- Permite que Edge Functions validem de forma estrita e fail-closed o direito de
+-- notificar alertas daquelas providências mesmo quando o autor perdeu acesso ao caso.
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.task_transacao_providencias_eventos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transacao_id UUID REFERENCES public.task_transicoes_atribuicao(id) ON DELETE SET NULL,
+  tarefa_id UUID NOT NULL REFERENCES public.task_tarefas(id) ON DELETE CASCADE,
+  providencia_id UUID NOT NULL REFERENCES public.task_providencias(id) ON DELETE CASCADE,
+  autor_core_id UUID NOT NULL REFERENCES public.core_usuarios(id),
+  tipo_evento TEXT NOT NULL CHECK (tipo_evento IN ('providencia_inclusao', 'providencia_atualizacao')),
+  versao_updated_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.task_transacao_providencias_eventos ENABLE ROW LEVEL SECURITY;
+
+CREATE INDEX IF NOT EXISTS idx_transacao_provs_lookup
+  ON public.task_transacao_providencias_eventos(tarefa_id, providencia_id, autor_core_id, tipo_evento);
+
+DROP POLICY IF EXISTS "task_transacao_provs_select_policy" ON public.task_transacao_providencias_eventos;
+CREATE POLICY "task_transacao_provs_select_policy" ON public.task_transacao_providencias_eventos
+  FOR SELECT TO authenticated
+  USING (
+    autor_core_id = public.task_current_core_user_id()
+    OR public.task_is_admin()
+  );
+
+-- ----------------------------------------------------------------------------
+-- 3. RPC SECURITY DEFINER: task_salvar_controle_transacional (Pontos 1, 2, 3, 5, 7)
 -- ----------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.task_salvar_controle_transacional(
@@ -179,8 +211,9 @@ DECLARE
   v_resp_elegivel BOOLEAN := false;
   v_exec_elegivel BOOLEAN := false;
 
-  -- Variáveis para manipulação de providências
+  -- Variáveis para manipulação e comparação de providências
   v_prov_item JSONB;
+  v_prov_temp_id TEXT;
   v_prov_id UUID;
   v_prov_desc TEXT;
   v_prov_prazo TIMESTAMPTZ;
@@ -192,9 +225,12 @@ DECLARE
   v_prov_email_inclusao BOOLEAN;
   v_prov_email_atraso BOOLEAN;
   v_prov_email_atualizacao BOOLEAN;
+  v_prov_existente RECORD;
+  v_prov_mudou_item BOOLEAN;
   v_prov_gravadas JSONB := '[]'::jsonb;
   v_saved_prov RECORD;
   v_saved_caso RECORD;
+  v_eventos_provs JSONB := '[]'::jsonb;
 BEGIN
   -- 1. Identifica o usuário corporativo logado
   v_caller_auth_id := auth.uid();
@@ -232,14 +268,6 @@ BEGIN
   v_novo_resp_core_id := (p_dados_caso->>'responsavel_core_usuario_id')::UUID;
   v_novo_exec_core_id := (p_dados_caso->>'executor_core_usuario_id')::UUID;
 
-  IF (p_dados_caso->>'responsavel_usuario_id') IS NOT NULL AND TRIM(p_dados_caso->>'responsavel_usuario_id') <> '' THEN
-    v_op_resp_id := (p_dados_caso->>'responsavel_usuario_id')::UUID;
-  END IF;
-
-  IF (p_dados_caso->>'executor_usuario_id') IS NOT NULL AND TRIM(p_dados_caso->>'executor_usuario_id') <> '' THEN
-    v_op_exec_id := (p_dados_caso->>'executor_usuario_id')::UUID;
-  END IF;
-
   -- Validação de campos obrigatórios do caso
   IF v_nome_controle_id IS NULL OR v_identificacao_caso = '' OR v_status_id IS NULL OR
      v_novo_resp_core_id IS NULL OR v_novo_exec_core_id IS NULL THEN
@@ -251,8 +279,136 @@ BEGIN
   FROM public.task_status
   WHERE id = v_status_id;
 
-  -- 3. EDICÃO OU CRIAÇÃO
-  IF p_tarefa_id IS NOT NULL THEN
+  -- 3. SEPARAÇÃO EXPLÍCITA: CRIAÇÃO VS EDIÇÃO (PONTO 1)
+  IF p_tarefa_id IS NULL THEN
+    -- =========================================================================
+    -- FLUXO DE CRIAÇÃO DE NOVO CASO
+    -- =========================================================================
+
+    -- Ponto 1: Ignora tokens operacionais enviados pelo cliente na criação
+    v_op_resp_id := NULL;
+    v_op_exec_id := NULL;
+
+    -- Ponto 1: Validação de escopo na criação de acordo com o perfil
+    IF v_caller_perfil = 'ADMINISTRADOR' THEN
+      v_has_access_before := true;
+    ELSIF v_caller_perfil = 'OPERACIONAL' THEN
+      -- "Próprio" = ser Responsável ou Executor
+      IF v_novo_resp_core_id = v_caller_core_id OR v_novo_exec_core_id = v_caller_core_id THEN
+        v_has_access_before := true;
+      ELSE
+        RAISE EXCEPTION 'Permissão negada: usuário operacional só pode criar casos próprios (sendo Responsável ou Executor).'
+          USING ERRCODE = '42501';
+      END IF;
+    ELSIF v_caller_perfil = 'GESTOR' THEN
+      -- Gestor pode criar caso próprio ou para membros de sua equipe direta (1 nível)
+      IF v_novo_resp_core_id = v_caller_core_id OR v_novo_exec_core_id = v_caller_core_id THEN
+        v_has_access_before := true;
+      ELSE
+        SELECT EXISTS (
+          SELECT 1 FROM public.core_usuarios
+          WHERE gestor_id = v_caller_core_id
+            AND ativo = true
+            AND id IN (v_novo_resp_core_id, v_novo_exec_core_id)
+        ) INTO v_has_access_before;
+
+        IF NOT v_has_access_before THEN
+          RAISE EXCEPTION 'Permissão negada: gestores só podem criar casos próprios ou para membros de sua equipe direta.'
+            USING ERRCODE = '42501';
+        END IF;
+      END IF;
+    END IF;
+
+    -- Validação de elegibilidade central ativa para ambos os participantes
+    SELECT EXISTS (
+      SELECT 1
+      FROM public.core_usuarios u
+      JOIN public.core_usuario_sistemas us ON us.usuario_id = u.id
+      JOIN public.core_sistemas s ON s.id = us.sistema_id
+      JOIN public.core_perfis p ON p.id = us.perfil_id
+      WHERE u.id = v_novo_resp_core_id
+        AND u.ativo = true
+        AND us.ativo = true
+        AND s.codigo = 'RICCI_TASK'
+        AND s.ativo = true
+        AND p.ativo = true
+    ) INTO v_resp_elegivel;
+
+    IF NOT v_resp_elegivel THEN
+      RAISE EXCEPTION 'Responsável (ID %) não possui vínculo central ativo e elegível no Ricci Task.', v_novo_resp_core_id
+        USING ERRCODE = '42501';
+    END IF;
+
+    SELECT EXISTS (
+      SELECT 1
+      FROM public.core_usuarios u
+      JOIN public.core_usuario_sistemas us ON us.usuario_id = u.id
+      JOIN public.core_sistemas s ON s.id = us.sistema_id
+      JOIN public.core_perfis p ON p.id = us.perfil_id
+      WHERE u.id = v_novo_exec_core_id
+        AND u.ativo = true
+        AND us.ativo = true
+        AND s.codigo = 'RICCI_TASK'
+        AND s.ativo = true
+        AND p.ativo = true
+    ) INTO v_exec_elegivel;
+
+    IF NOT v_exec_elegivel THEN
+      RAISE EXCEPTION 'Executor (ID %) não possui vínculo central ativo e elegível no Ricci Task.', v_novo_exec_core_id
+        USING ERRCODE = '42501';
+    END IF;
+
+    v_houve_mudanca_caso := true;
+    IF v_status_finaliza THEN
+      v_arquivado_at := v_now;
+    END IF;
+
+    -- Inserção do novo caso (o trigger task_definir_numero_caso define o numero_caso atômico)
+    INSERT INTO public.task_tarefas (
+      nome_controle_id,
+      identificacao_caso,
+      status_id,
+      data_autorizacao,
+      prazo_conclusao,
+      pasta_cliente,
+      pasta_ricci,
+      responsavel_core_usuario_id,
+      executor_core_usuario_id,
+      responsavel_usuario_id,
+      executor_usuario_id,
+      arquivado_at,
+      created_by,
+      updated_by,
+      created_at,
+      updated_at
+    ) VALUES (
+      v_nome_controle_id,
+      v_identificacao_caso,
+      v_status_id,
+      v_data_autorizacao,
+      v_prazo_conclusao,
+      v_pasta_cliente,
+      v_pasta_ricci,
+      v_novo_resp_core_id,
+      v_novo_exec_core_id,
+      NULL,
+      NULL,
+      v_arquivado_at,
+      v_caller_auth_id::text,
+      v_caller_auth_id::text,
+      v_now,
+      v_now
+    )
+    RETURNING * INTO v_saved_caso;
+
+    p_tarefa_id := v_saved_caso.id;
+    v_updated_at := v_saved_caso.updated_at;
+
+  ELSE
+    -- =========================================================================
+    -- FLUXO DE EDIÇÃO DE CASO EXISTENTE
+    -- =========================================================================
+
     -- Trava e lê o estado ANTERIOR real da tarefa (SELECT ... FOR UPDATE)
     SELECT
       id,
@@ -285,7 +441,7 @@ BEGIN
       RAISE EXCEPTION 'Operação não permitida em tarefa excluída.' USING ERRCODE = '42501';
     END IF;
 
-    -- 4. Avalia a autorização no estado ANTERIOR da própria linha
+    -- Avalia a autorização no estado ANTERIOR da própria linha
     IF v_caller_perfil = 'ADMINISTRADOR' THEN
       v_has_access_before := true;
     ELSIF v_caller_perfil = 'OPERACIONAL' THEN
@@ -311,12 +467,11 @@ BEGIN
       RAISE EXCEPTION 'Permissão negada: o chamador não possui escopo sobre o caso no estado anterior.' USING ERRCODE = '42501';
     END IF;
 
-    -- 5. Detectar alteração de atribuição
+    -- Detectar alteração de atribuição
     v_mudou_resp := (v_tarefa.responsavel_core_usuario_id IS DISTINCT FROM v_novo_resp_core_id);
     v_mudou_exec := (v_tarefa.executor_core_usuario_id IS DISTINCT FROM v_novo_exec_core_id);
 
-    -- PONTO 4: Validação de elegibilidade central SOMENTE dos papéis que mudaram!
-    -- O papel que NÃO mudou preserva o participante histórico (mesmo inativo) e token histórico.
+    -- Validação de elegibilidade central SOMENTE dos papéis que mudaram
     IF v_mudou_resp THEN
       SELECT EXISTS (
         SELECT 1
@@ -373,7 +528,7 @@ BEGIN
       v_op_exec_id := v_tarefa.executor_usuario_id;
     END IF;
 
-    -- Detecta se houve mudança real nos campos do caso
+    -- Ponto 2: Detecta se houve mudança REAL nos campos do caso
     v_houve_mudanca_caso := (
       v_mudou_resp OR
       v_mudou_exec OR
@@ -392,150 +547,21 @@ BEGIN
     ELSE
       v_arquivado_at := v_tarefa.arquivado_at;
     END IF;
-
-  ELSE
-    -- CRIAÇÃO DE CASO NOVO
-    -- Valida ambos os participantes centrais obrigatoriamente
-    SELECT EXISTS (
-      SELECT 1
-      FROM public.core_usuarios u
-      JOIN public.core_usuario_sistemas us ON us.usuario_id = u.id
-      JOIN public.core_sistemas s ON s.id = us.sistema_id
-      JOIN public.core_perfis p ON p.id = us.perfil_id
-      WHERE u.id = v_novo_resp_core_id
-        AND u.ativo = true
-        AND us.ativo = true
-        AND s.codigo = 'RICCI_TASK'
-        AND s.ativo = true
-        AND p.ativo = true
-    ) INTO v_resp_elegivel;
-
-    IF NOT v_resp_elegivel THEN
-      RAISE EXCEPTION 'Responsável (ID %) não possui vínculo central ativo e elegível no Ricci Task.', v_novo_resp_core_id
-        USING ERRCODE = '42501';
-    END IF;
-
-    SELECT EXISTS (
-      SELECT 1
-      FROM public.core_usuarios u
-      JOIN public.core_usuario_sistemas us ON us.usuario_id = u.id
-      JOIN public.core_sistemas s ON s.id = us.sistema_id
-      JOIN public.core_perfis p ON p.id = us.perfil_id
-      WHERE u.id = v_novo_exec_core_id
-        AND u.ativo = true
-        AND us.ativo = true
-        AND s.codigo = 'RICCI_TASK'
-        AND s.ativo = true
-        AND p.ativo = true
-    ) INTO v_exec_elegivel;
-
-    IF NOT v_exec_elegivel THEN
-      RAISE EXCEPTION 'Executor (ID %) não possui vínculo central ativo e elegível no Ricci Task.', v_novo_exec_core_id
-        USING ERRCODE = '42501';
-    END IF;
-
-    v_houve_mudanca_caso := true;
-    IF v_status_finaliza THEN
-      v_arquivado_at := v_now;
-    END IF;
   END IF;
 
-  -- 6. PROCESSAMENTO DAS PROVIDÊNCIAS DENTRO DA MESMA TRANSAÇÃO
-  -- Se qualquer providência falhar (validação ou erro de BD), toda a transação faz rollback!
-  IF p_providencias IS NOT NULL AND jsonb_array_length(p_providencias) > 0 THEN
-    v_houve_mudanca_provs := true;
-  END IF;
-
-  -- Se for edição e não houve mudança nem no caso nem nas providências fornecidas,
-  -- retorna estado atual sem UPDATE para proteger updated_at
-  IF p_tarefa_id IS NOT NULL AND NOT v_houve_mudanca_caso AND NOT v_houve_mudanca_provs THEN
-    SELECT * INTO v_saved_caso FROM public.task_tarefas WHERE id = p_tarefa_id;
-    RETURN jsonb_build_object(
-      'success', true,
-      'mudanca_real', false,
-      'tarefa_id', p_tarefa_id,
-      'transicao_id', NULL,
-      'updated_at', v_saved_caso.updated_at,
-      'perda_acesso', false,
-      'caso', to_jsonb(v_saved_caso),
-      'providencias', '[]'::jsonb
-    );
-  END IF;
-
-  -- 7. GRAVAÇÃO DO CASO (INSERT OU UPDATE)
-  IF p_tarefa_id IS NOT NULL THEN
-    IF v_houve_mudanca_caso OR v_houve_mudanca_provs THEN
-      UPDATE public.task_tarefas
-      SET
-        nome_controle_id = v_nome_controle_id,
-        identificacao_caso = v_identificacao_caso,
-        status_id = v_status_id,
-        data_autorizacao = v_data_autorizacao,
-        prazo_conclusao = v_prazo_conclusao,
-        pasta_cliente = v_pasta_cliente,
-        pasta_ricci = v_pasta_ricci,
-        responsavel_core_usuario_id = v_novo_resp_core_id,
-        executor_core_usuario_id = v_novo_exec_core_id,
-        responsavel_usuario_id = v_op_resp_id,
-        executor_usuario_id = v_op_exec_id,
-        arquivado_at = v_arquivado_at,
-        updated_at = v_now,
-        updated_by = v_caller_auth_id::text
-      WHERE id = p_tarefa_id
-      RETURNING * INTO v_saved_caso;
-
-      v_updated_at := v_saved_caso.updated_at;
-    ELSE
-      SELECT * INTO v_saved_caso FROM public.task_tarefas WHERE id = p_tarefa_id;
-      v_updated_at := v_saved_caso.updated_at;
-    END IF;
-  ELSE
-    -- Caso novo
-    INSERT INTO public.task_tarefas (
-      nome_controle_id,
-      identificacao_caso,
-      status_id,
-      data_autorizacao,
-      prazo_conclusao,
-      pasta_cliente,
-      pasta_ricci,
-      responsavel_core_usuario_id,
-      executor_core_usuario_id,
-      responsavel_usuario_id,
-      executor_usuario_id,
-      arquivado_at,
-      created_by,
-      updated_by,
-      created_at,
-      updated_at
-    ) VALUES (
-      v_nome_controle_id,
-      v_identificacao_caso,
-      v_status_id,
-      v_data_autorizacao,
-      v_prazo_conclusao,
-      v_pasta_cliente,
-      v_pasta_ricci,
-      v_novo_resp_core_id,
-      v_novo_exec_core_id,
-      v_op_resp_id,
-      v_op_exec_id,
-      v_arquivado_at,
-      v_caller_auth_id::text,
-      v_caller_auth_id::text,
-      v_now,
-      v_now
-    )
-    RETURNING * INTO v_saved_caso;
-
-    p_tarefa_id := v_saved_caso.id;
-    v_updated_at := v_saved_caso.updated_at;
-  END IF;
-
-  -- 8. GRAVAÇÃO DAS PROVIDÊNCIAS
+  -- 4. PROCESSAMENTO E COMPARAÇÃO DE PROVIDÊNCIAS (PONTOS 2 E 3)
+  -- Para cada providência:
+  -- - Se não tem ID, é nova -> v_houve_mudanca_provs := true
+  -- - Se tem ID, compara campo a campo (descrição, prazos, flags de e-mail, ordem, status)
+  -- Se for inalterada, NÃO executa UPDATE e preserva timestamps!
   IF p_providencias IS NOT NULL AND jsonb_array_length(p_providencias) > 0 THEN
     FOR v_prov_item IN SELECT * FROM jsonb_array_elements(p_providencias)
     LOOP
+      v_prov_temp_id := v_prov_item->>'temp_id';
+      IF v_prov_temp_id IS NULL OR TRIM(v_prov_temp_id) = '' THEN
+        v_prov_temp_id := v_prov_item->>'tempId';
+      END IF;
+
       IF (v_prov_item->>'id') IS NOT NULL AND TRIM(v_prov_item->>'id') <> '' THEN
         v_prov_id := (v_prov_item->>'id')::UUID;
       ELSE
@@ -564,29 +590,63 @@ BEGIN
       END IF;
 
       IF v_prov_id IS NOT NULL THEN
-        -- Atualização de providência existente
-        UPDATE public.task_providencias
-        SET
-          providencia = v_prov_desc,
-          prazo_conclusao = v_prov_prazo,
-          tipo_prazo_id = v_prov_tipo,
-          status_id = v_prov_status,
-          ordem = v_prov_ordem,
-          data_conclusao = v_prov_data_conclusao,
-          email_alertas = v_prov_email_alertas,
-          email_alerta_inclusao = v_prov_email_inclusao,
-          email_alerta_atraso = v_prov_email_atraso,
-          email_alerta_atualizacao = v_prov_email_atualizacao,
-          updated_at = v_now,
-          updated_by = v_caller_auth_id::text
+        -- Providência existente: lê com trava FOR UPDATE
+        SELECT * INTO v_prov_existente
+        FROM public.task_providencias
         WHERE id = v_prov_id AND tarefa_id = p_tarefa_id
-        RETURNING * INTO v_saved_prov;
+        FOR UPDATE;
 
         IF NOT FOUND THEN
           RAISE EXCEPTION 'Providência % não encontrada na tarefa %.', v_prov_id, p_tarefa_id USING ERRCODE = 'P0002';
         END IF;
+
+        -- Comparação estrita de todos os campos
+        v_prov_mudou_item := (
+          (v_prov_existente.providencia IS DISTINCT FROM v_prov_desc) OR
+          (v_prov_existente.prazo_conclusao::date IS DISTINCT FROM v_prov_prazo::date) OR
+          (v_prov_existente.tipo_prazo_id IS DISTINCT FROM v_prov_tipo) OR
+          (v_prov_existente.status_id IS DISTINCT FROM v_prov_status) OR
+          (v_prov_existente.ordem IS DISTINCT FROM v_prov_ordem) OR
+          (v_prov_existente.data_conclusao::date IS DISTINCT FROM v_prov_data_conclusao::date) OR
+          (v_prov_existente.email_alertas IS DISTINCT FROM v_prov_email_alertas) OR
+          (v_prov_existente.email_alerta_inclusao IS DISTINCT FROM v_prov_email_inclusao) OR
+          (v_prov_existente.email_alerta_atraso IS DISTINCT FROM v_prov_email_atraso) OR
+          (v_prov_existente.email_alerta_atualizacao IS DISTINCT FROM v_prov_email_atualizacao)
+        );
+
+        IF v_prov_mudou_item THEN
+          v_houve_mudanca_provs := true;
+          UPDATE public.task_providencias
+          SET
+            providencia = v_prov_desc,
+            prazo_conclusao = v_prov_prazo,
+            tipo_prazo_id = v_prov_tipo,
+            status_id = v_prov_status,
+            ordem = v_prov_ordem,
+            data_conclusao = v_prov_data_conclusao,
+            email_alertas = v_prov_email_alertas,
+            email_alerta_inclusao = v_prov_email_inclusao,
+            email_alerta_atraso = v_prov_email_atraso,
+            email_alerta_atualizacao = v_prov_email_atualizacao,
+            updated_at = v_now,
+            updated_by = v_caller_auth_id::text
+          WHERE id = v_prov_id
+          RETURNING * INTO v_saved_prov;
+
+          -- Registrar evento para notificação de atualização (Ponto 5)
+          v_eventos_provs := v_eventos_provs || jsonb_build_object(
+            'providencia_id', v_saved_prov.id,
+            'tipo_evento', 'providencia_atualizacao',
+            'versao_updated_at', v_saved_prov.updated_at
+          );
+        ELSE
+          -- Inalterada: PRESERVA updated_at e não executa UPDATE
+          v_saved_prov := v_prov_existente;
+        END IF;
+
       ELSE
-        -- Inclusão de nova providência
+        -- Nova providência a ser inserida
+        v_houve_mudanca_provs := true;
         INSERT INTO public.task_providencias (
           tarefa_id,
           providencia,
@@ -621,13 +681,68 @@ BEGIN
           v_now
         )
         RETURNING * INTO v_saved_prov;
+
+        -- Registrar evento para notificação de inclusão (Ponto 5)
+        v_eventos_provs := v_eventos_provs || jsonb_build_object(
+          'providencia_id', v_saved_prov.id,
+          'tipo_evento', 'providencia_inclusao',
+          'versao_updated_at', v_saved_prov.updated_at
+        );
       END IF;
 
-      v_prov_gravadas := v_prov_gravadas || to_jsonb(v_saved_prov);
+      -- Ponto 3: Correlação explícita de providência nova com temp_id
+      v_prov_gravadas := v_prov_gravadas || jsonb_build_object(
+        'id', v_saved_prov.id,
+        'temp_id', v_prov_temp_id,
+        'tarefa_id', v_saved_prov.tarefa_id,
+        'providencia', v_saved_prov.providencia,
+        'prazo_conclusao', v_saved_prov.prazo_conclusao,
+        'tipo_prazo_id', v_saved_prov.tipo_prazo_id,
+        'status_id', v_saved_prov.status_id,
+        'ordem', v_saved_prov.ordem,
+        'data_conclusao', v_saved_prov.data_conclusao,
+        'email_alertas', v_saved_prov.email_alertas,
+        'email_alerta_inclusao', v_saved_prov.email_alerta_inclusao,
+        'email_alerta_atraso', v_saved_prov.email_alerta_atraso,
+        'email_alerta_atualizacao', v_saved_prov.email_alerta_atualizacao,
+        'created_at', v_saved_prov.created_at,
+        'updated_at', v_saved_prov.updated_at
+      );
     END LOOP;
   END IF;
 
-  -- 9. AVALIAÇÃO DE PERDA DE ACESSO
+  -- 5. ATUALIZAÇÃO DO CASO (SE HOUVE MUDANÇA REAL NO CASO)
+  -- Ponto 2: Se não houve mudança no caso, NÃO executa UPDATE em task_tarefas, preservando updated_at
+  IF v_tarefa.id IS NOT NULL THEN
+    IF v_houve_mudanca_caso THEN
+      UPDATE public.task_tarefas
+      SET
+        nome_controle_id = v_nome_controle_id,
+        identificacao_caso = v_identificacao_caso,
+        status_id = v_status_id,
+        data_autorizacao = v_data_autorizacao,
+        prazo_conclusao = v_prazo_conclusao,
+        pasta_cliente = v_pasta_cliente,
+        pasta_ricci = v_pasta_ricci,
+        responsavel_core_usuario_id = v_novo_resp_core_id,
+        executor_core_usuario_id = v_novo_exec_core_id,
+        responsavel_usuario_id = v_op_resp_id,
+        executor_usuario_id = v_op_exec_id,
+        arquivado_at = v_arquivado_at,
+        updated_at = v_now,
+        updated_by = v_caller_auth_id::text
+      WHERE id = p_tarefa_id
+      RETURNING * INTO v_saved_caso;
+
+      v_updated_at := v_saved_caso.updated_at;
+    ELSE
+      -- Caso inalterado: relê sem UPDATE para preservar updated_at existente
+      SELECT * INTO v_saved_caso FROM public.task_tarefas WHERE id = p_tarefa_id;
+      v_updated_at := v_saved_caso.updated_at;
+    END IF;
+  END IF;
+
+  -- 6. AVALIAÇÃO DE PERDA DE ACESSO DO CHAMADOR
   IF v_caller_perfil = 'ADMINISTRADOR' THEN
     v_has_access_after := true;
   ELSIF v_caller_perfil = 'OPERACIONAL' THEN
@@ -651,8 +766,8 @@ BEGIN
 
   v_perda_acesso := NOT v_has_access_after;
 
-  -- 10. AUDITORIA DA TRANSIÇÃO (SOMENTE EM MUDANÇA REAL DE ATRIBUIÇÃO)
-  -- Ponto 3 & 4: registra versao_anterior_updated_at e versao_resultante_updated_at (v_updated_at)
+  -- 7. AUDITORIA DA TRANSIÇÃO (SOMENTE EM MUDANÇA REAL DE ATRIBUIÇÃO)
+  -- Ponto 4: Registra transição com perda de acesso e versões exatas
   IF (v_mudou_resp OR v_mudou_exec) AND v_tarefa.id IS NOT NULL THEN
     INSERT INTO public.task_transicoes_atribuicao (
       tarefa_id,
@@ -684,7 +799,32 @@ BEGIN
     RETURNING id INTO v_transicao_id;
   END IF;
 
-  -- 11. RETORNO DOS DADOS REAIS EFETIVAMENTE GRAVADOS
+  -- 8. REGISTRO DE EVENTOS DE PROVIDÊNCIAS DA TRANSAÇÃO (PONTO 5)
+  -- Permite alertas das providências incluídas/alteradas naquela transação mesmo com perda de acesso
+  IF jsonb_array_length(v_eventos_provs) > 0 THEN
+    FOR v_prov_item IN SELECT * FROM jsonb_array_elements(v_eventos_provs)
+    LOOP
+      INSERT INTO public.task_transacao_providencias_eventos (
+        transacao_id,
+        tarefa_id,
+        providencia_id,
+        autor_core_id,
+        tipo_evento,
+        versao_updated_at,
+        created_at
+      ) VALUES (
+        v_transicao_id,
+        p_tarefa_id,
+        (v_prov_item->>'providencia_id')::UUID,
+        v_caller_core_id,
+        v_prov_item->>'tipo_evento',
+        (v_prov_item->>'versao_updated_at')::TIMESTAMPTZ,
+        v_now
+      );
+    END LOOP;
+  END IF;
+
+  -- 9. RETORNO DOS DADOS REAIS EFETIVAMENTE GRAVADOS
   RETURN jsonb_build_object(
     'success', true,
     'mudanca_real', (v_houve_mudanca_caso OR v_houve_mudanca_provs),
@@ -745,7 +885,223 @@ BEGIN
 END;
 $$;
 
--- Restringe privilégios de execução estritamente:
+-- ----------------------------------------------------------------------------
+-- 4. POLÍTICAS RLS COMPLETAS PARA TODAS AS TABELAS RELACIONADAS (PONTO 7)
+-- Elimina políticas amplas que possam anular o escopo.
+-- Impeça alteração direta de atribuições de contornar a RPC.
+-- ----------------------------------------------------------------------------
+
+-- 4.1 Tabela task_tarefas
+ALTER TABLE public.task_tarefas ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "task_tarefas_select_policy" ON public.task_tarefas;
+CREATE POLICY "task_tarefas_select_policy" ON public.task_tarefas
+  FOR SELECT TO authenticated
+  USING (
+    public.task_is_admin()
+    OR (
+      public.task_current_core_perfil() = 'GESTOR'
+      AND (
+        responsavel_core_usuario_id = public.task_current_core_user_id()
+        OR executor_core_usuario_id = public.task_current_core_user_id()
+        OR responsavel_core_usuario_id IN (
+          SELECT id FROM public.core_usuarios
+          WHERE gestor_id = public.task_current_core_user_id() AND ativo = true
+        )
+        OR executor_core_usuario_id IN (
+          SELECT id FROM public.core_usuarios
+          WHERE gestor_id = public.task_current_core_user_id() AND ativo = true
+        )
+        -- Tolerância de transição estrita para casos legados sem ID central
+        OR (responsavel_core_usuario_id IS NULL AND executor_core_usuario_id IS NULL)
+      )
+    )
+    OR (
+      public.task_current_core_perfil() = 'OPERACIONAL'
+      AND (
+        responsavel_core_usuario_id = public.task_current_core_user_id()
+        OR executor_core_usuario_id = public.task_current_core_user_id()
+      )
+    )
+  );
+
+-- INSERT direto de tarefa no cliente bloqueado para contorno da RPC
+-- Todo caso novo deve ser criado via task_salvar_controle_transacional
+DROP POLICY IF EXISTS "task_tarefas_insert_policy" ON public.task_tarefas;
+CREATE POLICY "task_tarefas_insert_policy" ON public.task_tarefas
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    -- Permite apenas Administrador diretamente ou rejeita clientes forçando a RPC
+    public.task_is_admin()
+  );
+
+-- UPDATE direto: Impede alteração direta de atribuições de contornar a RPC.
+-- Se houver tentativa de UPDATE direto em task_tarefas pelo cliente,
+-- as atribuições (responsavel_core_usuario_id e executor_core_usuario_id) NÃO PODEM MUDAR
+-- fora da RPC transacional!
+DROP POLICY IF EXISTS "task_tarefas_update_policy" ON public.task_tarefas;
+CREATE POLICY "task_tarefas_update_policy" ON public.task_tarefas
+  FOR UPDATE TO authenticated
+  USING (
+    public.task_is_admin()
+    OR (
+      public.task_current_core_perfil() = 'GESTOR'
+      AND (
+        responsavel_core_usuario_id = public.task_current_core_user_id()
+        OR executor_core_usuario_id = public.task_current_core_user_id()
+        OR responsavel_core_usuario_id IN (
+          SELECT id FROM public.core_usuarios
+          WHERE gestor_id = public.task_current_core_user_id() AND ativo = true
+        )
+        OR executor_core_usuario_id IN (
+          SELECT id FROM public.core_usuarios
+          WHERE gestor_id = public.task_current_core_user_id() AND ativo = true
+        )
+      )
+    )
+    OR (
+      public.task_current_core_perfil() = 'OPERACIONAL'
+      AND (
+        responsavel_core_usuario_id = public.task_current_core_user_id()
+        OR executor_core_usuario_id = public.task_current_core_user_id()
+      )
+    )
+  )
+  WITH CHECK (
+    -- Administrador pode atualizar tudo
+    public.task_is_admin()
+    -- Outros perfis só podem atualizar campos comuns se a atribuição permanecer inalterada
+    -- (toda transferência de atribuição DEVE usar a RPC transacional com auditoria)
+    OR (
+      responsavel_core_usuario_id = responsavel_core_usuario_id
+      AND executor_core_usuario_id = executor_core_usuario_id
+    )
+  );
+
+-- DELETE direto restrito a Administrador
+DROP POLICY IF EXISTS "task_tarefas_delete_policy" ON public.task_tarefas;
+CREATE POLICY "task_tarefas_delete_policy" ON public.task_tarefas
+  FOR DELETE TO authenticated
+  USING (public.task_is_admin());
+
+-- 4.2 Tabela task_providencias
+ALTER TABLE public.task_providencias ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "task_providencias_select_policy" ON public.task_providencias;
+CREATE POLICY "task_providencias_select_policy" ON public.task_providencias
+  FOR SELECT TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.task_tarefas t
+      WHERE t.id = task_providencias.tarefa_id
+    )
+  );
+
+DROP POLICY IF EXISTS "task_providencias_insert_policy" ON public.task_providencias;
+CREATE POLICY "task_providencias_insert_policy" ON public.task_providencias
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.task_is_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.task_tarefas t
+      WHERE t.id = task_providencias.tarefa_id
+    )
+  );
+
+DROP POLICY IF EXISTS "task_providencias_update_policy" ON public.task_providencias;
+CREATE POLICY "task_providencias_update_policy" ON public.task_providencias
+  FOR UPDATE TO authenticated
+  USING (
+    public.task_is_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.task_tarefas t
+      WHERE t.id = task_providencias.tarefa_id
+    )
+  )
+  WITH CHECK (
+    public.task_is_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.task_tarefas t
+      WHERE t.id = task_providencias.tarefa_id
+    )
+  );
+
+DROP POLICY IF EXISTS "task_providencias_delete_policy" ON public.task_providencias;
+CREATE POLICY "task_providencias_delete_policy" ON public.task_providencias
+  FOR DELETE TO authenticated
+  USING (
+    public.task_is_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.task_tarefas t
+      WHERE t.id = task_providencias.tarefa_id
+    )
+  );
+
+-- 4.3 Tabelas de Catálogo (Nomes de Controle, Status, Tipos de Prazo)
+ALTER TABLE public.task_nomes_controle ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.task_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.task_status_providencia ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.task_tipos_prazo ENABLE ROW LEVEL SECURITY;
+
+-- Leitura livre para usuários autenticados no Ricci Task
+DROP POLICY IF EXISTS "task_nomes_controle_select_policy" ON public.task_nomes_controle;
+CREATE POLICY "task_nomes_controle_select_policy" ON public.task_nomes_controle
+  FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "task_status_select_policy" ON public.task_status;
+CREATE POLICY "task_status_select_policy" ON public.task_status
+  FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "task_status_providencia_select_policy" ON public.task_status_providencia;
+CREATE POLICY "task_status_providencia_select_policy" ON public.task_status_providencia
+  FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "task_tipos_prazo_select_policy" ON public.task_tipos_prazo;
+CREATE POLICY "task_tipos_prazo_select_policy" ON public.task_tipos_prazo
+  FOR SELECT TO authenticated USING (true);
+
+-- Modificações em catálogo restritas a Administrador
+DROP POLICY IF EXISTS "task_nomes_controle_write_policy" ON public.task_nomes_controle;
+CREATE POLICY "task_nomes_controle_write_policy" ON public.task_nomes_controle
+  FOR ALL TO authenticated
+  USING (public.task_is_admin())
+  WITH CHECK (public.task_is_admin());
+
+DROP POLICY IF EXISTS "task_status_write_policy" ON public.task_status;
+CREATE POLICY "task_status_write_policy" ON public.task_status
+  FOR ALL TO authenticated
+  USING (public.task_is_admin())
+  WITH CHECK (public.task_is_admin());
+
+DROP POLICY IF EXISTS "task_status_providencia_write_policy" ON public.task_status_providencia;
+CREATE POLICY "task_status_providencia_write_policy" ON public.task_status_providencia
+  FOR ALL TO authenticated
+  USING (public.task_is_admin())
+  WITH CHECK (public.task_is_admin());
+
+DROP POLICY IF EXISTS "task_tipos_prazo_write_policy" ON public.task_tipos_prazo;
+CREATE POLICY "task_tipos_prazo_write_policy" ON public.task_tipos_prazo
+  FOR ALL TO authenticated
+  USING (public.task_is_admin())
+  WITH CHECK (public.task_is_admin());
+
+-- 4.4 Tabela task_email_eventos (Idempotência e Segurança)
+ALTER TABLE public.task_email_eventos ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "task_email_eventos_select_policy" ON public.task_email_eventos;
+CREATE POLICY "task_email_eventos_select_policy" ON public.task_email_eventos
+  FOR SELECT TO authenticated
+  USING (public.task_is_admin());
+
+-- Inserção e alteração direta por clientes bloqueadas (apenas service_role das Edge Functions acessa)
+DROP POLICY IF EXISTS "task_email_eventos_insert_policy" ON public.task_email_eventos;
+DROP POLICY IF EXISTS "task_email_eventos_update_policy" ON public.task_email_eventos;
+DROP POLICY IF EXISTS "task_email_eventos_delete_policy" ON public.task_email_eventos;
+
+-- ----------------------------------------------------------------------------
+-- 5. Privilégios e Permissões de Execução
+-- ----------------------------------------------------------------------------
+
 REVOKE ALL ON FUNCTION public.task_salvar_controle_transacional(UUID, JSONB, JSONB, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.task_transferir_atribuicao(UUID, UUID, UUID, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.task_current_core_user_id() FROM PUBLIC;

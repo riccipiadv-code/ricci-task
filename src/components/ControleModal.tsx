@@ -878,6 +878,12 @@ export function ControleModal({
         prazo_conclusao: string | null
         tipo_prazo_id: string | null
         status_id: string | null
+        ordem: number
+        data_conclusao: string | null
+        email_alertas: boolean
+        email_alerta_inclusao: boolean
+        email_alerta_atraso: boolean
+        email_alerta_atualizacao: boolean
       }
     >()
     if (controleToEdit?.providencias) {
@@ -888,12 +894,18 @@ export function ControleModal({
             prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null,
             tipo_prazo_id: p.tipo_prazo_id || null,
             status_id: p.status_id || null,
+            ordem: p.ordem ?? 0,
+            data_conclusao: p.data_conclusao ? p.data_conclusao.split('T')[0] : null,
+            email_alertas: p.email_alertas ?? false,
+            email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+            email_alerta_atraso: p.email_alerta_atraso ?? false,
+            email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
           })
         }
       }
     }
 
-    const providenciasParaNotificarInclusao: string[] = []
+    const providenciasNovasParaNotificar: string[] = [] // lista de tempIds das novas providências a notificar
     const providenciasParaNotificarAtualizacao: string[] = []
 
     for (const p of providencias) {
@@ -905,9 +917,13 @@ export function ControleModal({
       const isNovaProvidencia = !p.id || !p.isPersisted
       const pProvTrimmed = p.providencia.trim()
       const pPrazoClean = p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null
+      const dtConclusaoClean = dtConclusao ? dtConclusao.split('T')[0] : null
+      const effectiveTempId = p.tempId || `temp_${Math.random().toString(36).substring(2, 9)}`
 
       provsToSave.push({
         id: p.id || undefined,
+        temp_id: isNovaProvidencia ? effectiveTempId : undefined,
+        tempId: isNovaProvidencia ? effectiveTempId : undefined,
         providencia: pProvTrimmed,
         prazo_conclusao: p.prazo_conclusao,
         tipo_prazo_id: p.tipo_prazo_id,
@@ -928,14 +944,30 @@ export function ControleModal({
           const mudouPrazo = prev.prazo_conclusao !== pPrazoClean
           const mudouTipo = prev.tipo_prazo_id !== p.tipo_prazo_id
           const mudouStatus = prev.status_id !== p.status_id
-          houveMudancaReal = mudouDesc || mudouPrazo || mudouTipo || mudouStatus
+          const mudouOrdem = prev.ordem !== (p.ordem ?? 0)
+          const mudouDataConc = prev.data_conclusao !== dtConclusaoClean
+          const mudouAlertas = prev.email_alertas !== (p.email_alertas ?? false)
+          const mudouInc = prev.email_alerta_inclusao !== (p.email_alerta_inclusao ?? false)
+          const mudouAtr = prev.email_alerta_atraso !== (p.email_alerta_atraso ?? false)
+          const mudouAtu = prev.email_alerta_atualizacao !== (p.email_alerta_atualizacao ?? false)
+          houveMudancaReal =
+            mudouDesc ||
+            mudouPrazo ||
+            mudouTipo ||
+            mudouStatus ||
+            mudouOrdem ||
+            mudouDataConc ||
+            mudouAlertas ||
+            mudouInc ||
+            mudouAtr ||
+            mudouAtu
         }
       }
 
       if (isNovaProvidencia) {
         if (p.email_alertas && p.email_alerta_inclusao) {
-          // Salva tempId ou desc para mapear pós gravação
-          providenciasParaNotificarInclusao.push(p.tempId || pProvTrimmed)
+          // Registra o tempId específico para mapear no retorno da RPC
+          providenciasNovasParaNotificar.push(effectiveTempId)
         }
       } else if (p.id) {
         if (p.email_alertas && p.email_alerta_atualizacao && houveMudancaReal) {
@@ -1013,10 +1045,25 @@ export function ControleModal({
         }
       }
 
-      // 5.2. Alertas de Providência — Inclusão
-      for (const pId of providenciasParaNotificarInclusao) {
+      // 5.2. Alertas de Providência — Inclusão (Ponto 3: Notifica usando exclusivamente o UUID gravado)
+      // Resolve o UUID gravado a partir do temp_id retornado pela RPC
+      const provsGravadas = saveResult.providencias || []
+      const uuidToNotifyInclusao: string[] = []
+
+      for (const tId of providenciasNovasParaNotificar) {
+        // Encontra a providência pelo temp_id retornado pela RPC
+        const match = provsGravadas.find((pg: any) => pg.temp_id === tId || pg.tempId === tId)
+        if (match?.id) {
+          uuidToNotifyInclusao.push(match.id)
+        }
+      }
+
+      for (const realProvUuid of uuidToNotifyInclusao) {
         try {
-          const resInclusao = await controleService.notifyProvidenciaInclusao(savedControle.id, pId)
+          const resInclusao = await controleService.notifyProvidenciaInclusao(
+            savedControle.id,
+            realProvUuid,
+          )
           if (!resInclusao.success) {
             emailFalhou = true
             console.warn('Aviso: notificação de inclusão de providência falhou:', resInclusao.error)

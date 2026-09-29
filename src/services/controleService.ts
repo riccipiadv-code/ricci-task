@@ -878,9 +878,10 @@ export const controleService = {
       pasta_ricci: input.pasta_ricci?.trim() || null,
     }
 
-    // Lista de providências para envio à transação
+    // Lista de providências para envio à transação (preservando temp_id para correlação explícita)
     const providenciasPayload = (input.providencias || []).map((p) => ({
       id: p.id || null,
+      temp_id: (p as any).temp_id || (p as any).tempId || null,
       providencia: p.providencia.trim(),
       prazo_conclusao: p.prazo_conclusao,
       tipo_prazo_id: p.tipo_prazo_id,

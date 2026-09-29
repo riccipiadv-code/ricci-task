@@ -6,6 +6,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
 import {
+  checkProvidenciaEventAccess,
   checkTaskAccessScope,
   checkTransitionNotificationAccess,
   escapeHtml,
@@ -261,6 +262,61 @@ Deno.serve(async (req: Request) => {
     )
 
     let authorizedByTransition = false
+    let transitionObject: any = null
+
+    // Ponto 4: Se o chamador forneceu transicao_id, SEMPRE valida a transição antes de utilizá-la
+    // inclusive quando o chamador ainda tem acesso ao caso. Não aceita IDs arbitrários ou transição incompatível.
+    if (
+      transicao_id &&
+      (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao')
+    ) {
+      const transValidation = await checkTransitionNotificationAccess(
+        supabase,
+        callerCheck.coreUser.id,
+        {
+          transicaoId: transicao_id,
+          tipoEvento: dbTipoEvento,
+          tarefa: {
+            id: tarefa.id,
+            responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
+            executor_core_usuario_id: tarefa.executor_core_usuario_id,
+            updated_at: tarefa.updated_at,
+            created_at: tarefa.created_at,
+          },
+        },
+      )
+
+      if (transValidation.status === 'technical_failure') {
+        return new Response(
+          JSON.stringify({
+            error:
+              transValidation.error ||
+              'Falha técnica de comunicação ao validar registro de transição.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      if (!transValidation.allowed) {
+        return new Response(
+          JSON.stringify({
+            error:
+              transValidation.error ||
+              'Transição inválida ou incompatível com o estado atual da tarefa.',
+          }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      transitionObject = transValidation.transition
+      authorizedByTransition = true
+    }
 
     if (!scopeCheck.allowed) {
       if (scopeCheck.status === 'technical_failure') {
@@ -277,11 +333,12 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      // Se o chamador NÃO possui mais acesso ao escopo ATUAL da tarefa (ex.: transferiu o caso e perdeu acesso),
-      // e o evento for de atribuição, verifica se existe um registro de transição correspondente
-      // (autor_core_id = chamador, tarefa_id = caso, validado no servidor pela RPC).
-      let transitionObject: any = null
-      if (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') {
+      // Se o chamador NÃO possui mais acesso ao escopo ATUAL da tarefa (ex.: transferiu o caso e perdeu acesso):
+      // Caso 1: Evento de atribuição -> valida registro de transição correspondente
+      if (
+        (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') &&
+        !authorizedByTransition
+      ) {
         const transCheck = await checkTransitionNotificationAccess(
           supabase,
           callerCheck.coreUser.id,
@@ -315,6 +372,38 @@ Deno.serve(async (req: Request) => {
         if (transCheck.allowed) {
           authorizedByTransition = true
           transitionObject = transCheck.transition
+        }
+      }
+
+      // Caso 2 (Ponto 5): Eventos de providência após transferência (perda de acesso)
+      // Permite os alertas das providências efetivamente incluídas/alteradas naquela transação
+      // comprovadas por registros de task_transacao_providencias_eventos no servidor
+      if (
+        (dbTipoEvento === 'providencia_inclusao' || dbTipoEvento === 'providencia_atualizacao') &&
+        providencia_id
+      ) {
+        const provCheck = await checkProvidenciaEventAccess(supabase, callerCheck.coreUser.id, {
+          tarefaId: tarefa.id,
+          providenciaId: providencia_id,
+          tipoEvento: dbTipoEvento,
+        })
+
+        if (provCheck.status === 'technical_failure') {
+          return new Response(
+            JSON.stringify({
+              error:
+                provCheck.error ||
+                'Falha técnica ao verificar autorização de evento da providência.',
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
+
+        if (provCheck.allowed) {
+          authorizedByTransition = true
         }
       }
 
@@ -611,13 +700,11 @@ Deno.serve(async (req: Request) => {
         tarefa.responsavel_usuario_id,
         tarefa.responsavel_core_usuario_id,
       )
-      if (transicao_id || transitionObject?.id) {
-        const tid = transicao_id || transitionObject.id
-        eventKey = `atribuicao:${tarefa.id}:transicao:${tid}`
-      } else {
-        const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
-        eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${execToken}:${respToken}`
-      }
+      // Chave canônica unificada de atribuição (Ponto 4):
+      // Garante que mesmo com transicaoId ou sem transicaoId, a ocorrência seja identificada pelo estado
+      // estável da tarefa (updated_at/created_at + destinatários), impedindo envio duplicado por duas chaves.
+      const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
+      eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${execToken}:${respToken}`
     } else if (dbTipoEvento === 'providencia_inclusao') {
       eventKey = `providencia_inclusao:${providenciaAlvo.id}`
     } else {
@@ -627,18 +714,32 @@ Deno.serve(async (req: Request) => {
       eventKey = `providencia_atualizacao:${providenciaAlvo.id}:${provUpdatedAt}`
     }
 
-    // 6. Verificar/Registrar chave de idempotência na tabela task_email_eventos
+    // 6. PONTO 6: Aquisição exclusiva do evento ANTES do envio SMTP
+    // Garante que erro ao consultar/registrar o evento impeça o SMTP (fail-closed obrigatório).
+    // Inserção com status = 'pending' ou lock seguro.
     const { data: existingEvent, error: checkEventError } = await supabase
       .from('task_email_eventos')
-      .select('id, event_key, status, sent_at')
+      .select('id, event_key, status, sent_at, updated_at')
       .eq('event_key', eventKey)
       .maybeSingle()
 
     if (checkEventError) {
-      console.warn('Aviso ao consultar task_email_eventos:', checkEventError)
+      console.error('Falha de banco ao consultar task_email_eventos:', checkEventError)
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: false,
+          error:
+            'Falha técnica ao verificar registro de idempotência do evento. Envio SMTP impedido.',
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
-    // Se já foi enviado com sucesso, abortar envio imediatamente
+    // Se já foi enviado com sucesso, abortar imediatamente
     if (existingEvent && existingEvent.status === 'success') {
       return new Response(
         JSON.stringify({
@@ -655,9 +756,33 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // Se não existir, inserir como pending para travar concorrência
-    let eventoId = existingEvent?.id
+    // Se já está 'pending' há menos de 5 minutos, outra execução está processando concorrentemente
+    if (existingEvent && existingEvent.status === 'pending') {
+      const pendingAgeMs =
+        Date.now() -
+        new Date(existingEvent.updated_at || existingEvent.sent_at || Date.now()).getTime()
+      if (pendingAgeMs < 5 * 60 * 1000) {
+        return new Response(
+          JSON.stringify({
+            triggered: true,
+            sent: false,
+            reason: 'in_progress',
+            message:
+              'O envio deste evento já está em processamento por outra requisição simultânea.',
+            event_key: eventKey,
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+    }
+
+    let eventoId: string | null = null
+
     if (!existingEvent) {
+      // Inserção atômica para travar concorrência
       const { data: insertedEvent, error: insertEventError } = await supabase
         .from('task_email_eventos')
         .insert({
@@ -674,7 +799,7 @@ Deno.serve(async (req: Request) => {
         .maybeSingle()
 
       if (insertEventError) {
-        // Se deu erro de constraint de chave única (concorrência de disparos simultâneos)
+        // Conflito de concorrência (23505)
         if (insertEventError.code === '23505' || insertEventError.message?.includes('23505')) {
           const { data: raceEvent } = await supabase
             .from('task_email_eventos')
@@ -697,18 +822,70 @@ Deno.serve(async (req: Request) => {
               },
             )
           }
-          eventoId = raceEvent?.id
-        } else {
-          console.warn(
-            'Aviso ao registrar evento pendente em task_email_eventos:',
-            insertEventError,
+
+          return new Response(
+            JSON.stringify({
+              triggered: true,
+              sent: false,
+              reason: 'in_progress',
+              message: 'Disparo concorrente detectado para o mesmo evento.',
+              event_key: eventKey,
+            }),
+            {
+              status: 200,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
           )
         }
-      } else if (insertedEvent) {
-        eventoId = insertedEvent.id
+
+        // Qualquer outro erro de banco ao registrar: IMPEDIR SMTP
+        console.error(
+          'Erro impeditivo ao registrar evento em task_email_eventos:',
+          insertEventError,
+        )
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error:
+              'Falha técnica ao registrar controle de evento no banco de dados. Envio cancelado por segurança.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
       }
+
+      eventoId = insertedEvent?.id || null
     } else {
-      // Já existia com status pending ou error, reusar eventoId
+      // Re-tentativa de evento em estado 'error' ou 'pending' expirado:
+      // Trava para pending antes de continuar
+      const { error: updatePendingErr } = await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'pending',
+          to_email: toEmail,
+          cc_email: ccEmail,
+          data_referencia: new Date().toISOString().split('T')[0],
+        })
+        .eq('id', existingEvent.id)
+        .neq('status', 'success')
+
+      if (updatePendingErr) {
+        console.error('Erro ao adquirir bloqueio de evento pendente:', updatePendingErr)
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error: 'Falha ao travar evento para envio.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
       eventoId = existingEvent.id
     }
 

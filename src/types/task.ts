@@ -165,6 +165,8 @@ export interface SaveControleResult {
 
 export interface SaveProvidenciaInput {
   id?: string
+  temp_id?: string
+  tempId?: string
   tarefa_id: string
   providencia: string
   prazo_conclusao: string
