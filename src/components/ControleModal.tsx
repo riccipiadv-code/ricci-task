@@ -779,10 +779,14 @@ export function ControleModal({
     const execNaoMudou = isEditMode && executorUsuarioId === prevExecCore
 
     const selectedResp = usuariosLista.find(
-      (u) => u.id === responsavelUsuarioId || u.core_usuario_id === responsavelUsuarioId,
+      (u) =>
+        (u.core_usuario_id && u.core_usuario_id === responsavelUsuarioId) ||
+        u.id === responsavelUsuarioId,
     )
     const selectedExec = usuariosLista.find(
-      (u) => u.id === executorUsuarioId || u.core_usuario_id === executorUsuarioId,
+      (u) =>
+        (u.core_usuario_id && u.core_usuario_id === executorUsuarioId) ||
+        u.id === executorUsuarioId,
     )
 
     const respCoreId = respNaoMudou
@@ -798,12 +802,16 @@ export function ControleModal({
     // Na criação ou na edição com troca de atribuição, NÃO colar o ID central nas colunas operacionais
     // (deve ser undefined/null, central-only quando não há ponte ou quando houver nova atribuição).
     const opRespPreservado =
-      respNaoMudou && controleToEdit?.responsavel_usuario_id && controleToEdit.responsavel_usuario_id !== respCoreId
+      respNaoMudou &&
+      controleToEdit?.responsavel_usuario_id &&
+      controleToEdit.responsavel_usuario_id !== respCoreId
         ? controleToEdit.responsavel_usuario_id
         : undefined
 
     const opExecPreservado =
-      execNaoMudou && controleToEdit?.executor_usuario_id && controleToEdit.executor_usuario_id !== execCoreId
+      execNaoMudou &&
+      controleToEdit?.executor_usuario_id &&
+      controleToEdit.executor_usuario_id !== execCoreId
         ? controleToEdit.executor_usuario_id
         : undefined
 
@@ -816,8 +824,8 @@ export function ControleModal({
       prazo_conclusao: prazoConclusao || null,
       responsavel_usuario_id: opRespPreservado,
       executor_usuario_id: opExecPreservado,
-      responsavel_core_usuario_id: respCoreId,
-      executor_core_usuario_id: execCoreId,
+      responsavel_core_usuario_id: respCoreId || null,
+      executor_core_usuario_id: execCoreId || null,
       pasta_cliente: pastaCliente.trim() || null,
       pasta_ricci: pastaRicci.trim() || null,
     }

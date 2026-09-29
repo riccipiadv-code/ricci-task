@@ -187,18 +187,13 @@ export default function Index() {
       // Filtro de Responsável
       if (
         responsavelFilter !== 'todos' &&
-        controle.responsavel_core_usuario_id !== responsavelFilter &&
-        controle.responsavel_usuario_id !== responsavelFilter
+        controle.responsavel_core_usuario_id !== responsavelFilter
       ) {
         return false
       }
 
       // Filtro de Executor
-      if (
-        executorFilter !== 'todos' &&
-        controle.executor_core_usuario_id !== executorFilter &&
-        controle.executor_usuario_id !== executorFilter
-      ) {
+      if (executorFilter !== 'todos' && controle.executor_core_usuario_id !== executorFilter) {
         return false
       }
 

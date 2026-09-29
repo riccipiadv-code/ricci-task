@@ -415,9 +415,7 @@ Deno.serve(async (req: Request) => {
       // Autoridade central: usa exclusivamente o executor_core_usuario_id gravado na tarefa.
       // Validando usuário, vínculo com RICCI_TASK, sistema e perfil ativos.
       // Diferenciação estrita: falha técnica vs vínculo comprovadamente inválido.
-      const execResolution = await getRecipientResolution(
-        tarefa.executor_core_usuario_id,
-      )
+      const execResolution = await getRecipientResolution(tarefa.executor_core_usuario_id)
 
       // Se falhou tecnicamente na consulta central do Executor:
       // Registra como 'error' com erro 'falha_consulta_central' (permite retry, não marca skipped/sucesso)
@@ -503,9 +501,7 @@ Deno.serve(async (req: Request) => {
 
       // Obter dados do Responsável validados centralmente
       // Autoridade central: usa exclusivamente o responsavel_core_usuario_id gravado na tarefa.
-      const respResolution = await getRecipientResolution(
-        tarefa.responsavel_core_usuario_id,
-      )
+      const respResolution = await getRecipientResolution(tarefa.responsavel_core_usuario_id)
 
       // Se falhou tecnicamente na consulta do Responsável:
       if (respResolution.status === 'technical_failure') {
