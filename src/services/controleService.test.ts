@@ -113,6 +113,96 @@ describe('controleService.getUsuariosAtivos (Fail-Closed na integração central
       'Falha técnica ao carregar dados centrais',
     )
   })
+
+  it('retorno parcial/vazio de core_usuarios sem erro HTTP (ex: RLS restritivo): fail-closed estrito — rejeita e não oferece lista parcial', async () => {
+    const mockRpcData = [
+      {
+        id: 'tu-1',
+        nome: 'Beto Silva Operacional',
+        email: 'beto.velho@antigo.com',
+        ativo: true,
+      },
+      {
+        id: 'tu-2',
+        nome: 'Ana Lima Operacional',
+        email: 'ana.velho@antigo.com',
+        ativo: true,
+      },
+    ]
+
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: mockRpcData,
+      error: null,
+    } as any)
+
+    // Simula retorno parcial por RLS: tu-1 retornado, tu-2 omitido silenciosamente sem erro HTTP (error: null)
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    id: 'tu-1',
+                    ativo: true,
+                    core_usuario_id: 'cu-1',
+                    core_usuarios: {
+                      id: 'cu-1',
+                      nome: 'Beto Silva Central',
+                      email: 'beto.novo@riccipi.com.br',
+                      ativo: true,
+                    },
+                  },
+                ],
+                error: null,
+              }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    await expect(controleService.getUsuariosAtivos()).rejects.toThrow(
+      'Falha na validação central de usuários elegíveis: retorno parcial ou incompleto',
+    )
+  })
+
+  it('retorno vazio de core_usuarios sem erro HTTP: fail-closed estrito — rejeita se a RPC retornou candidatos', async () => {
+    const mockRpcData = [
+      {
+        id: 'tu-1',
+        nome: 'Beto Silva Operacional',
+        email: 'beto.velho@antigo.com',
+        ativo: true,
+      },
+    ]
+
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: mockRpcData,
+      error: null,
+    } as any)
+
+    // Retorno vazio silencioso (ex: RLS bloqueou leitura de core_usuarios)
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [],
+                error: null,
+              }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    await expect(controleService.getUsuariosAtivos()).rejects.toThrow(
+      'Falha na validação central de usuários elegíveis: retorno parcial ou incompleto',
+    )
+  })
   it('falha na RPC: fail-closed estrito — não oferece candidatos não validados e lança erro amigável', async () => {
     vi.spyOn(supabase, 'rpc').mockResolvedValue({
       data: null,

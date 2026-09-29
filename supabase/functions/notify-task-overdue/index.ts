@@ -768,10 +768,16 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    const hasTechnicalOrProcessingErrors = totalErrors > 0
+    const message = hasTechnicalOrProcessingErrors
+      ? `Processamento de providências atrasadas concluído com falhas (${totalErrors} erro(s), ${totalSent} enviado(s), ${totalSkipped} ignorado(s)).`
+      : `Processamento diário de providências atrasadas concluído com sucesso.`
+
     return new Response(
       JSON.stringify({
-        success: true,
-        message: `Processamento diário de providências atrasadas concluído.`,
+        success: !hasTechnicalOrProcessingErrors,
+        partial: hasTechnicalOrProcessingErrors && totalSent > 0,
+        message,
         today: todayStr,
         processed: providenciasAbertas.length,
         sent: totalSent,
@@ -780,7 +786,10 @@ Deno.serve(async (req: Request) => {
         details: results,
       }),
       {
-        status: 200,
+        // 207 Multi-Status quando há sucesso parcial ou falhas parciais tratadas,
+        // garantindo que os clientes e orquestradores não interpretem como 100% bem-sucedido
+        // enquanto preservam o payload detalhado dos envios que já deram certo.
+        status: hasTechnicalOrProcessingErrors ? 207 : 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     )

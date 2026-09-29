@@ -247,18 +247,35 @@ export const controleService = {
       }
     }
 
-    // Monta a lista elegível usando EXCLUSIVAMENTE nome e e-mail centrais
+    // Validação estrita (Fail-Closed):
+    // TODOS os IDs retornados pela RPC devem ser resolvidos com nome, e-mail e situação central válidos.
+    // Se a leitura vier parcial ou vazia (por exemplo por restrição de RLS ou falha silenciosa sem erro HTTP),
+    // deve ser tratada como falha de validação, não oferecendo lista parcial nem usando dados locais como substituto.
+    const idsNaoResolvidos = taskIds.filter((id: string) => {
+      const c = centralMap.get(id)
+      return !c || !c.nome || !c.nome.trim() || !c.email || !c.email.trim()
+    })
+
+    if (idsNaoResolvidos.length > 0) {
+      console.error(
+        `Falha de validação central: ${idsNaoResolvidos.length} de ${taskIds.length} usuários elegíveis não foram resolvidos em core_usuarios (retorno parcial/vazio via RLS sem erro HTTP):`,
+        idsNaoResolvidos,
+      )
+      throw new Error(
+        'Falha na validação central de usuários elegíveis: retorno parcial ou incompleto do Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
+      )
+    }
+
+    // Monta a lista elegível usando EXCLUSIVAMENTE nome e e-mail centrais validados
     const lista: TaskUsuarioAtivoRecord[] = []
     for (const item of rpcData) {
-      const central = centralMap.get(item.id)
-      if (central && central.email) {
-        lista.push({
-          id: item.id,
-          nome: central.nome || item.nome,
-          email: central.email,
-          ativo: central.ativo,
-        })
-      }
+      const central = centralMap.get(item.id)!
+      lista.push({
+        id: item.id,
+        nome: central.nome.trim(),
+        email: central.email.trim().toLowerCase(),
+        ativo: central.ativo,
+      })
     }
 
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))

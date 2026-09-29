@@ -171,25 +171,35 @@ export function ControleModal({
     return tiposPrazoList[0]?.id || ''
   }, [tiposPrazoList])
 
+  // Validação central de usuários: três estados explícitos ('carregando' | 'válida' | 'falhou')
+  const [validacaoUsuariosStatus, setValidacaoUsuariosStatus] = useState<
+    'carregando' | 'válida' | 'falhou'
+  >('carregando')
   const [erroUsuariosCentrais, setErroUsuariosCentrais] = useState<string | null>(null)
 
   // Carrega listas auxiliares
   const carregarListasAuxiliares = useCallback(async () => {
     setLoadingListas(true)
+    setValidacaoUsuariosStatus('carregando')
     setErroUsuariosCentrais(null)
     try {
       let fetchUsersError: Error | null = null
-      const [nomes, users, stProv] = await Promise.all([
+      let usersValidados: TaskUsuarioAtivoRecord[] = []
+      const [nomes, stProv] = await Promise.all([
         controleService.getNomesControle({ incluirInativos: true }),
-        controleService.getUsuariosAtivos().catch((fetchErr) => {
-          console.error('Falha ao carregar usuários elegíveis com dados centrais:', fetchErr)
-          fetchUsersError = fetchErr
-          return [] as TaskUsuarioAtivoRecord[]
-        }),
         statusProvidenciaList.length > 0
           ? Promise.resolve(statusProvidenciaList)
           : controleService.getStatusProvidencia(),
       ])
+
+      try {
+        usersValidados = await controleService.getUsuariosAtivos()
+        setValidacaoUsuariosStatus('válida')
+      } catch (fetchErr: any) {
+        console.error('Falha ao carregar usuários elegíveis com dados centrais:', fetchErr)
+        fetchUsersError = fetchErr
+        setValidacaoUsuariosStatus('falhou')
+      }
 
       if (fetchUsersError) {
         const errorMsg =
@@ -203,11 +213,10 @@ export function ControleModal({
         })
       }
 
-      // Fail-closed: se a leitura central falhar, `users` é vazio e não permitimos novos candidatos.
-      // Preservação histórica dos casos já gravados:
-      // Se estiver editando e o responsável/executor atual já estiver atribuído,
-      // buscamos os dados cadastrados em task_usuarios APENAS para preservar legivelmente o caso histórico na tela.
-      let listaCombinada = [...users]
+      // Fail-closed: se a leitura central falhar ou estiver carregando,
+      // preservamos EXCLUSIVAMENTE os responsáveis e executores históricos já gravados na edição.
+      // Novos candidatos NÃO são oferecidos até que o estado se torne 'válida'.
+      let listaCombinada = [...usersValidados]
       const respId = controleToEdit?.responsavel_usuario_id
       const execId = controleToEdit?.executor_usuario_id
       const respFalta = respId && !listaCombinada.some((u) => u.id === respId)
@@ -363,15 +372,17 @@ export function ControleModal({
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
   // Opções de Responsáveis:
-  // Se houver erro de leitura central, fail-closed: não oferece candidatos para nova seleção.
-  // Permite exclusivamente o responsável histórico já gravado em caso de edição.
+  // Três estados da validação central: 'carregando', 'válida' ou 'falhou'.
+  // Durante o carregamento inicial e durante "Tentar novamente" (estado !== 'válida'),
+  // NÃO permite selecionar novos candidatos; mantém exclusivamente o responsável histórico
+  // já gravado visível na edição. Libera novas escolhas somente após a validação completa ('válida').
   const opcoesResponsaveis = useMemo(() => {
     const editRespId = controleToEdit?.responsavel_usuario_id
     let list = usuariosLista.filter((u) => {
-      // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo)
+      // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo na visualização)
       if (editRespId && u.id === editRespId) return true
-      // Se a leitura central falhou, não permite candidatos novos
-      if (erroUsuariosCentrais) return false
+      // Durante carregando ou falhou, NÃO oferece candidatos novos
+      if (validacaoUsuariosStatus !== 'válida') return false
       return u.ativo ?? true
     })
     if (buscaRespSelect.trim()) {
@@ -381,18 +392,19 @@ export function ControleModal({
       )
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [usuariosLista, controleToEdit, erroUsuariosCentrais, buscaRespSelect])
+  }, [usuariosLista, controleToEdit, validacaoUsuariosStatus, buscaRespSelect])
 
   // Opções de Executores:
-  // Se houver erro de leitura central, fail-closed: não oferece candidatos para nova seleção.
-  // Permite exclusivamente o executor histórico já gravado em caso de edição.
+  // Durante carregamento inicial e "Tentar novamente" (estado !== 'válida'),
+  // NÃO permite selecionar novos candidatos; mantém exclusivamente o executor histórico
+  // já gravado visível na edição. Libera novas escolhas somente após a validação completa ('válida').
   const opcoesExecutores = useMemo(() => {
     const editExecId = controleToEdit?.executor_usuario_id
     let list = usuariosLista.filter((u) => {
-      // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo)
+      // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo na visualização)
       if (editExecId && u.id === editExecId) return true
-      // Se a leitura central falhou, não permite candidatos novos
-      if (erroUsuariosCentrais) return false
+      // Durante carregando ou falhou, NÃO oferece candidatos novos
+      if (validacaoUsuariosStatus !== 'válida') return false
       return u.ativo ?? true
     })
     if (buscaExecSelect.trim()) {
@@ -402,7 +414,7 @@ export function ControleModal({
       )
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [usuariosLista, controleToEdit, erroUsuariosCentrais, buscaExecSelect])
+  }, [usuariosLista, controleToEdit, validacaoUsuariosStatus, buscaExecSelect])
 
   // Ref para o container de scroll interno do modal
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -603,35 +615,43 @@ export function ControleModal({
     if (!responsavelUsuarioId) {
       setResponsavelError(true)
       hasError = true
-    } else if (
-      erroUsuariosCentrais &&
-      (!controleToEdit || responsavelUsuarioId !== controleToEdit.responsavel_usuario_id)
-    ) {
-      setResponsavelError(true)
-      hasError = true
-      toast({
-        variant: 'destructive',
-        title: 'Atribuição bloqueada',
-        description:
-          'A validação central de usuários está temporariamente indisponível. Não é possível alterar ou atribuir novo responsável.',
-      })
+    } else if (validacaoUsuariosStatus !== 'válida') {
+      // Bloqueia nova atribuição tanto durante 'carregando' quanto durante 'falhou'
+      const isHistoricoPreservado =
+        controleToEdit && responsavelUsuarioId === controleToEdit.responsavel_usuario_id
+      if (!isHistoricoPreservado) {
+        setResponsavelError(true)
+        hasError = true
+        toast({
+          variant: 'destructive',
+          title: 'Atribuição bloqueada',
+          description:
+            validacaoUsuariosStatus === 'carregando'
+              ? 'A validação central de usuários está em andamento. Aguarde a validação completa para salvar novas atribuições.'
+              : 'A validação central de usuários falhou ou está indisponível. Não é possível alterar ou atribuir novo responsável.',
+        })
+      }
     }
 
     if (!executorUsuarioId) {
       setExecutorError(true)
       hasError = true
-    } else if (
-      erroUsuariosCentrais &&
-      (!controleToEdit || executorUsuarioId !== controleToEdit.executor_usuario_id)
-    ) {
-      setExecutorError(true)
-      hasError = true
-      toast({
-        variant: 'destructive',
-        title: 'Atribuição bloqueada',
-        description:
-          'A validação central de usuários está temporariamente indisponível. Não é possível alterar ou atribuir novo executor.',
-      })
+    } else if (validacaoUsuariosStatus !== 'válida') {
+      // Bloqueia nova atribuição tanto durante 'carregando' quanto durante 'falhou'
+      const isHistoricoPreservado =
+        controleToEdit && executorUsuarioId === controleToEdit.executor_usuario_id
+      if (!isHistoricoPreservado) {
+        setExecutorError(true)
+        hasError = true
+        toast({
+          variant: 'destructive',
+          title: 'Atribuição bloqueada',
+          description:
+            validacaoUsuariosStatus === 'carregando'
+              ? 'A validação central de usuários está em andamento. Aguarde a validação completa para salvar novas atribuições.'
+              : 'A validação central de usuários falhou ou está indisponível. Não é possível alterar ou atribuir novo executor.',
+        })
+      }
     }
 
     if (hasError) {
@@ -1149,12 +1169,21 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Alerta de erro central em bloco 3 caso haja falha técnica */}
-                {erroUsuariosCentrais && (
+                {/* Alerta de status da validação central de usuários */}
+                {validacaoUsuariosStatus === 'carregando' && (
+                  <div className="p-3.5 rounded-xl bg-primary/10 border border-primary/20 text-xs text-foreground flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" />
+                    <span>Validando usuários elegíveis no Gestor de Acessos Ricci...</span>
+                  </div>
+                )}
+
+                {validacaoUsuariosStatus === 'falhou' && (
                   <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>{erroUsuariosCentrais}</span>
+                      <span>
+                        {erroUsuariosCentrais || 'Falha na validação central de usuários.'}
+                      </span>
                     </div>
                     <Button
                       type="button"
@@ -1190,17 +1219,22 @@ export function ControleModal({
                     <div className="relative">
                       <Select
                         value={responsavelUsuarioId}
-                        disabled={Boolean(erroUsuariosCentrais && !controleToEdit)}
+                        disabled={
+                          validacaoUsuariosStatus !== 'válida' &&
+                          !controleToEdit?.responsavel_usuario_id
+                        }
                         onValueChange={(val) => {
                           if (
-                            erroUsuariosCentrais &&
+                            validacaoUsuariosStatus !== 'válida' &&
                             val !== controleToEdit?.responsavel_usuario_id
                           ) {
                             toast({
                               variant: 'destructive',
                               title: 'Seleção bloqueada',
                               description:
-                                'Não é possível selecionar novos usuários durante falha da validação central.',
+                                validacaoUsuariosStatus === 'carregando'
+                                  ? 'Aguarde a validação central de usuários concluir antes de fazer novas escolhas.'
+                                  : 'Não é possível selecionar novos usuários durante falha da validação central.',
                             })
                             return
                           }
@@ -1235,14 +1269,16 @@ export function ControleModal({
                             </div>
                           </div>
 
-                          {loadingListas ? (
+                          {validacaoUsuariosStatus === 'carregando' ? (
                             <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                               <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                              <span>Carregando responsáveis...</span>
+                              <span>Validando responsáveis centrais...</span>
                             </div>
                           ) : opcoesResponsaveis.length === 0 ? (
                             <div className="p-4 text-center text-xs text-muted-foreground">
-                              Nenhum responsável disponível encontrado.
+                              {validacaoUsuariosStatus === 'falhou'
+                                ? 'Validação central falhou. Novas escolhas suspensas.'
+                                : 'Nenhum responsável disponível encontrado.'}
                             </div>
                           ) : (
                             opcoesResponsaveis.map((r) => {
@@ -1319,15 +1355,22 @@ export function ControleModal({
                       <Select
                         value={executorUsuarioId}
                         disabled={
-                          executorIsResponsavel || Boolean(erroUsuariosCentrais && !controleToEdit)
+                          executorIsResponsavel ||
+                          (validacaoUsuariosStatus !== 'válida' &&
+                            !controleToEdit?.executor_usuario_id)
                         }
                         onValueChange={(val) => {
-                          if (erroUsuariosCentrais && val !== controleToEdit?.executor_usuario_id) {
+                          if (
+                            validacaoUsuariosStatus !== 'válida' &&
+                            val !== controleToEdit?.executor_usuario_id
+                          ) {
                             toast({
                               variant: 'destructive',
                               title: 'Seleção bloqueada',
                               description:
-                                'Não é possível selecionar novos usuários durante falha da validação central.',
+                                validacaoUsuariosStatus === 'carregando'
+                                  ? 'Aguarde a validação central de usuários concluir antes de fazer novas escolhas.'
+                                  : 'Não é possível selecionar novos usuários durante falha da validação central.',
                             })
                             return
                           }
@@ -1336,7 +1379,11 @@ export function ControleModal({
                         }}
                       >
                         <SelectTrigger
-                          disabled={executorIsResponsavel}
+                          disabled={
+                            executorIsResponsavel ||
+                            (validacaoUsuariosStatus !== 'válida' &&
+                              !controleToEdit?.executor_usuario_id)
+                          }
                           className={cn(
                             'h-12 rounded-xl bg-background text-sm font-medium',
                             executorIsResponsavel && 'opacity-70 cursor-not-allowed bg-muted/50',
@@ -1360,14 +1407,16 @@ export function ControleModal({
                             </div>
                           </div>
 
-                          {loadingListas ? (
+                          {validacaoUsuariosStatus === 'carregando' ? (
                             <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                               <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                              <span>Carregando executores...</span>
+                              <span>Validando executores centrais...</span>
                             </div>
                           ) : opcoesExecutores.length === 0 ? (
                             <div className="p-4 text-center text-xs text-muted-foreground">
-                              Nenhum executor disponível encontrado.
+                              {validacaoUsuariosStatus === 'falhou'
+                                ? 'Validação central falhou. Novas escolhas suspensas.'
+                                : 'Nenhum executor disponível encontrado.'}
                             </div>
                           ) : (
                             opcoesExecutores.map((e) => {
