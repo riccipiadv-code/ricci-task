@@ -712,7 +712,27 @@ Deno.serve(async (req: Request) => {
 
     bodyLines.push('')
     bodyLines.push('Acesse o Ricci Task para consultar o caso.')
-    bodyLines.push('https://riccitask.goskip.app/')
+    bodyLines.push('https://ricci-task.goskip.app/')
+
+    const emailHtml = `
+      <div style="font-family: sans-serif; color: #1e293b; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #0f172a; margin-bottom: 16px;">${subject}</h2>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          ${bodyLines
+            .filter((line) => line !== 'https://ricci-task.goskip.app/')
+            .map((line) => (line === '' ? '<br/>' : `<p style="margin: 4px 0;">${line}</p>`))
+            .join('')}
+        </div>
+        <p style="margin-top: 24px;">
+          <a href="https://ricci-task.goskip.app/" style="background-color: #0284c7; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: 500; display: inline-block;">
+            Acessar o Ricci Task
+          </a>
+        </p>
+        <p style="margin-top: 16px; font-size: 13px; color: #64748b;">
+          Link direto: <a href="https://ricci-task.goskip.app/" style="color: #0284c7;">https://ricci-task.goskip.app/</a>
+        </p>
+      </div>
+    `
 
     const emailText = bodyLines.join('\n')
 
@@ -772,6 +792,7 @@ Deno.serve(async (req: Request) => {
       replyTo?: string
       subject: string
       text: string
+      html: string
     } = {
       from: `"${senderName}" <${setting.sender_email}>`,
       to: toEmail,
@@ -779,6 +800,7 @@ Deno.serve(async (req: Request) => {
       replyTo: setting.reply_to || undefined,
       subject,
       text: emailText,
+      html: emailHtml,
     }
 
     // 10. Envio e registro em email_send_logs e task_email_eventos

@@ -1409,14 +1409,89 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     eventoId = insertedEvent?.id
   }
 
+  const execNomeFull = 'Executor Teste'
+  const execFirstName = 'Executor'
+  const respNomeFull = 'Responsável Teste'
+  const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
+  const nomeControle = 'Controle Teste'
+
+  let subject = ''
+  const bodyLines: string[] = []
+
+  if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
+    subject = `Alteração de atribuição Ricci Task [Caso ${numeroCasoStr}]`
+    bodyLines.push(`Olá, ${execFirstName}.`)
+    bodyLines.push('')
+    bodyLines.push('Houve uma alteração de atribuição no seu caso no Ricci Task.')
+    bodyLines.push('')
+    if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+    bodyLines.push(`Caso: ${numeroCasoStr}`)
+    if (tarefa.identificacao_caso?.trim())
+      bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+    bodyLines.push(`Executor: ${execNomeFull || 'Não definido'}`)
+    if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+  } else if (dbTipoEvento === 'providencia_inclusao') {
+    subject = `Nova providência Ricci Task [Caso ${numeroCasoStr}]`
+    bodyLines.push(`Olá, ${execFirstName}.`)
+    bodyLines.push('')
+    bodyLines.push('Uma nova providência foi incluída no Ricci Task para o seu caso.')
+    bodyLines.push('')
+    if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+    bodyLines.push(`Caso: ${numeroCasoStr}`)
+    if (tarefa.identificacao_caso?.trim())
+      bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+    if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+    bodyLines.push('')
+    bodyLines.push(`Providência: Providência Teste`)
+  } else {
+    subject = `Providência atualizada Ricci Task [Caso ${numeroCasoStr}]`
+    bodyLines.push(`Olá, ${execFirstName}.`)
+    bodyLines.push('')
+    bodyLines.push('Uma providência foi atualizada no Ricci Task para o seu caso.')
+    bodyLines.push('')
+    if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+    bodyLines.push(`Caso: ${numeroCasoStr}`)
+    if (tarefa.identificacao_caso?.trim())
+      bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+    if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+    bodyLines.push('')
+    bodyLines.push(`Providência: Providência Teste`)
+  }
+
+  bodyLines.push('')
+  bodyLines.push('Acesse o Ricci Task para consultar o caso.')
+  bodyLines.push('https://ricci-task.goskip.app/')
+
+  const emailText = bodyLines.join('\n')
+  const emailHtml = `
+      <div style="font-family: sans-serif; color: #1e293b; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #0f172a; margin-bottom: 16px;">${subject}</h2>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          ${bodyLines
+            .filter((line) => line !== 'https://ricci-task.goskip.app/')
+            .map((line) => (line === '' ? '<br/>' : `<p style="margin: 4px 0;">${line}</p>`))
+            .join('')}
+        </div>
+        <p style="margin-top: 24px;">
+          <a href="https://ricci-task.goskip.app/" style="background-color: #0284c7; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: 500; display: inline-block;">
+            Acessar o Ricci Task
+          </a>
+        </p>
+        <p style="margin-top: 16px; font-size: 13px; color: #64748b;">
+          Link direto: <a href="https://ricci-task.goskip.app/" style="color: #0284c7;">https://ricci-task.goskip.app/</a>
+        </p>
+      </div>
+    `
+
   // Disparo SMTP
   try {
     await ctx.transporter.sendMail({
       from: '"Ricci Task" <nao-responder@riccitask.com.br>',
       to: toEmail,
       ...(ccEmail ? { cc: ccEmail } : {}),
-      subject: `Alteração de atribuição Ricci Task [Caso ${tarefa.numero_caso}]`,
-      text: 'Houve uma alteração de atribuição no seu caso no Ricci Task.',
+      subject,
+      text: emailText,
+      html: emailHtml,
     })
 
     if (eventoId) {
@@ -1676,6 +1751,7 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
 
     const toEmail = execResolution.recipient.email.trim().toLowerCase()
     let ccEmail: string | null = null
+    let validatedRespForMail: any = null
 
     const respTargetId = tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id
     if (respTargetId) {
@@ -1700,6 +1776,7 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
         totalErrors++
         continue
       }
+      validatedRespForMail = respResolution.recipient
       const respEmailRaw = respResolution.recipient?.email?.trim().toLowerCase() || ''
       if (respEmailRaw && respEmailRaw !== toEmail) {
         ccEmail = respEmailRaw
@@ -1723,13 +1800,62 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
       eventoId = insertedEvent?.id
     }
 
+    const execNomeFull = (execResolution.recipient?.nome || '').trim()
+    const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
+    const respNomeFull = (validatedRespForMail?.nome || '').trim()
+    const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
+    const identificacaoCasoStr = (tarefa.identificacao_caso || '').trim()
+    const provDescricao = (prov.providencia || '').trim()
+
+    const subject = `Providência atrasada Ricci Task [Caso ${numeroCasoStr}]`
+
+    const bodyLines: string[] = []
+    bodyLines.push(`Olá, ${execFirstName}.`)
+    bodyLines.push('')
+    bodyLines.push(
+      'Constatamos que uma providência sob sua execução está com o prazo vencido no Ricci Task.',
+    )
+    bodyLines.push('')
+    if (tarefa.nome_controle?.nome) bodyLines.push(`Controle: ${tarefa.nome_controle.nome}`)
+    if (numeroCasoStr) bodyLines.push(`Caso nº: ${numeroCasoStr}`)
+    if (identificacaoCasoStr) bodyLines.push(`Identificação do Caso: ${identificacaoCasoStr}`)
+    if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+    bodyLines.push('')
+    if (provDescricao) bodyLines.push(`Providência: ${provDescricao}`)
+    if (prov.prazo_conclusao) bodyLines.push(`Prazo Vencido: ${prov.prazo_conclusao}`)
+    bodyLines.push('')
+    bodyLines.push('Acesse o Ricci Task para consultar e atualizar a providência.')
+    bodyLines.push('https://ricci-task.goskip.app/')
+
+    const emailText = bodyLines.join('\n')
+    const emailHtml = `
+      <div style="font-family: sans-serif; color: #1e293b; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #b91c1c; margin-bottom: 16px;">${subject}</h2>
+        <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          ${bodyLines
+            .filter((line) => line !== 'https://ricci-task.goskip.app/')
+            .map((line) => (line === '' ? '<br/>' : `<p style="margin: 4px 0;">${line}</p>`))
+            .join('')}
+        </div>
+        <p style="margin-top: 24px;">
+          <a href="https://ricci-task.goskip.app/" style="background-color: #dc2626; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: 500; display: inline-block;">
+            Acessar o Ricci Task
+          </a>
+        </p>
+        <p style="margin-top: 16px; font-size: 13px; color: #64748b;">
+          Link direto: <a href="https://ricci-task.goskip.app/" style="color: #dc2626;">https://ricci-task.goskip.app/</a>
+        </p>
+      </div>
+    `
+
     try {
       await ctx.transporter.sendMail({
         from: '"Ricci Task" <nao-responder@riccitask.com.br>',
         to: toEmail,
         ...(ccEmail ? { cc: ccEmail } : {}),
-        subject: `Providência atrasada Ricci Task [Caso ${tarefa.numero_caso}]`,
-        text: 'Corpo da mensagem...',
+        subject,
+        text: emailText,
+        html: emailHtml,
       })
 
       if (eventoId) {
@@ -4342,6 +4468,304 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
         expect(res.status).toBe(200)
         expect(taskUsuariosQueried).toBe(false)
       })
+    })
+  })
+
+  describe('Verificação dos 4 Modelos de E-mail (Links https://ricci-task.goskip.app/)', () => {
+    it('1. notify-task-assignment: modelo de alteração de atribuição (HTML e Texto) contém https://ricci-task.goskip.app/ e não contém riccitask', async () => {
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-user-link' } },
+            error: null,
+          }),
+        },
+        from: vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-chamador-link',
+                        auth_user_id: 'auth-user-link',
+                        nome: 'Chamador Link',
+                        email: 'chamador@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-link-101',
+                        numero_caso: 101,
+                        identificacao_caso: 'Caso Alteração Atribuição',
+                        executor_core_usuario_id: 'cu-exec-link',
+                        responsavel_core_usuario_id: 'cu-resp-link',
+                        updated_at: '2025-05-10T12:00:00Z',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            return {
+              select: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  in: () => chain,
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'link-exec',
+                        ativo: true,
+                        core_usuarios: {
+                          id: 'cu-exec-link',
+                          nome: 'Carlos Executor',
+                          email: 'carlos.executor@riccipi.com.br',
+                          ativo: true,
+                        },
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                      error: null,
+                    }),
+                  then: (resolve: any) =>
+                    resolve({
+                      data: [
+                        {
+                          id: 'link-caller',
+                          ativo: true,
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                      ],
+                      error: null,
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () => Promise.resolve({ data: { id: 'evt-link-1' }, error: null }),
+                }),
+              }),
+              update: () => ({
+                eq: () => Promise.resolve({ data: null, error: null }),
+              }),
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-jwt-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'tarefa-link-101',
+          tipo: 'alteracao_atribuicao',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(200)
+      expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
+
+      const mailArgs = ctx.transporter.sentMails[0]
+      expect(mailArgs).toBeDefined()
+
+      // Modelo 1: Alteração de atribuição - Versão Texto
+      expect(mailArgs.text).toContain('https://ricci-task.goskip.app/')
+      expect(mailArgs.text).not.toContain('https://riccitask.goskip.app/')
+      expect(mailArgs.text).not.toContain('riccitask.goskip')
+
+      // Modelo 2: Alteração de atribuição - Corpo HTML
+      expect(mailArgs.html).toBeDefined()
+      expect(mailArgs.html).toContain('href="https://ricci-task.goskip.app/"')
+      expect(mailArgs.html).toContain('https://ricci-task.goskip.app/')
+      expect(mailArgs.html).not.toContain('https://riccitask.goskip.app/')
+      expect(mailArgs.html).not.toContain('riccitask.goskip')
+    })
+
+    it('2. notify-task-overdue: modelo de providência atrasada (HTML e Texto) contém https://ricci-task.goskip.app/ e não contém riccitask', async () => {
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn(),
+        },
+        from: vi.fn((table: string) => {
+          if (table === 'task_providencias') {
+            return {
+              select: () => ({
+                is: () => ({
+                  eq: () => ({
+                    eq: () => ({
+                      not: () => ({
+                        lt: () => ({
+                          order: () =>
+                            Promise.resolve({
+                              data: [
+                                {
+                                  id: 'prov-overdue-1',
+                                  tarefa_id: 'tarefa-overdue-202',
+                                  providencia: 'Apresentar contestação urgente',
+                                  prazo_conclusao: '2025-05-01',
+                                  status: { finaliza: false },
+                                },
+                              ],
+                              error: null,
+                            }),
+                        }),
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-overdue-202',
+                        numero_caso: 202,
+                        identificacao_caso: 'Caso Providência Atrasada',
+                        executor_core_usuario_id: 'cu-exec-overdue',
+                        responsavel_core_usuario_id: null,
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+                in: () =>
+                  Promise.resolve({
+                    data: [
+                      {
+                        id: 'tarefa-overdue-202',
+                        numero_caso: 202,
+                        identificacao_caso: 'Caso Providência Atrasada',
+                        executor_core_usuario_id: 'cu-exec-overdue',
+                        responsavel_core_usuario_id: null,
+                        deleted_at: null,
+                      },
+                    ],
+                    error: null,
+                  }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    eq: () => ({
+                      not: () => ({
+                        order: () => ({
+                          limit: () => ({
+                            maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                          }),
+                        }),
+                      }),
+                    }),
+                  }),
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({ data: { id: 'evt-overdue-1' }, error: null }),
+                }),
+              }),
+              update: () => ({
+                eq: () => Promise.resolve({ data: null, error: null }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  in: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'link-exec-overdue',
+                          ativo: true,
+                          core_usuarios: {
+                            id: 'cu-exec-overdue',
+                            nome: 'Mariana Silva',
+                            email: 'mariana.silva@riccipi.com.br',
+                            ativo: true,
+                          },
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }),
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-overdue', {
+        method: 'POST',
+        headers: {
+          'x-task-cron-secret': 'cron-secret-12345',
+          'Content-Type': 'application/json',
+        },
+      })
+
+      const res = await handleNotifyTaskOverdue(req, ctx)
+      expect(res.status).toBe(200)
+      expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
+
+      const mailArgs = ctx.transporter.sentMails[0]
+      expect(mailArgs).toBeDefined()
+
+      // Modelo 3: Providência atrasada - Versão Texto
+      expect(mailArgs.text).toContain('https://ricci-task.goskip.app/')
+      expect(mailArgs.text).not.toContain('https://riccitask.goskip.app/')
+      expect(mailArgs.text).not.toContain('riccitask.goskip')
+
+      // Modelo 4: Providência atrasada - Corpo HTML
+      expect(mailArgs.html).toBeDefined()
+      expect(mailArgs.html).toContain('href="https://ricci-task.goskip.app/"')
+      expect(mailArgs.html).toContain('https://ricci-task.goskip.app/')
+      expect(mailArgs.html).not.toContain('https://riccitask.goskip.app/')
+      expect(mailArgs.html).not.toContain('riccitask.goskip')
     })
   })
 })
