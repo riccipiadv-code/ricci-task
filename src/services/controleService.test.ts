@@ -336,7 +336,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     expect(result.executor_core_usuario_id).toBe('cu-exec')
   })
 
-  it('alteração de responsável/executor: grava ambos os IDs (operacional e central) e atualiza updated_at', async () => {
+  it('mudança REAL: chama update em task_tarefas, NÃO envia updated_at no payload e usa o valor retornado pelo banco', async () => {
+    const dbGeneratedUpdatedAt = '2025-05-20T18:45:00.000Z'
     const existingDbRecord = {
       id: 'tarefa-101',
       nome_controle_id: 'nc-1',
@@ -355,6 +356,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     }
 
     let updatePayloadCaptured: any = null
+    let updateCalled = false
 
     vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
       if (table === 'task_status') {
@@ -374,13 +376,18 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
             }),
           }),
           update: (payload: any) => {
+            updateCalled = true
             updatePayloadCaptured = payload
             return {
               eq: () => ({
                 select: () => ({
                   single: () =>
                     Promise.resolve({
-                      data: { ...existingDbRecord, ...payload },
+                      data: {
+                        ...existingDbRecord,
+                        ...payload,
+                        updated_at: dbGeneratedUpdatedAt,
+                      },
                       error: null,
                     }),
                 }),
@@ -420,7 +427,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       },
     ]
 
-    await controleService.saveControle(
+    const result = await controleService.saveControle(
       {
         id: 'tarefa-101',
         nome_controle_id: 'nc-1',
@@ -434,16 +441,19 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       usuariosLista,
     )
 
+    expect(updateCalled).toBe(true)
     expect(updatePayloadCaptured).not.toBeNull()
     expect(updatePayloadCaptured.responsavel_usuario_id).toBe('tu-resp-novo')
     expect(updatePayloadCaptured.executor_usuario_id).toBe('tu-exec-novo')
     expect(updatePayloadCaptured.responsavel_core_usuario_id).toBe('cu-resp-novo')
     expect(updatePayloadCaptured.executor_core_usuario_id).toBe('cu-exec-novo')
-    // Como houve alteração real de responsável e executor, updated_at deve ser gerado
-    expect(updatePayloadCaptured.updated_at).toBeDefined()
+    // Regra 3: NÃO deve enviar updated_at no payload do update (o gatilho do banco é quem atualiza)
+    expect(updatePayloadCaptured.updated_at).toBeUndefined()
+    // E o valor retornado pela operação deve ser o timestamp definido pelo banco
+    expect(result.updated_at).toBe(dbGeneratedUpdatedAt)
   })
 
-  it('edição sem alteração de atribuição nem de conteúdo: preserva atribuição e NÃO altera updated_at', async () => {
+  it('salvar SEM mudança de nenhum campo NÃO chama update em task_tarefas e retorna o registro existente', async () => {
     const originalUpdatedAt = '2025-01-10T12:00:00.000Z'
     const existingDbRecord = {
       id: 'tarefa-101',
@@ -456,13 +466,13 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       executor_usuario_id: 'tu-inativo-exec',
       responsavel_core_usuario_id: 'cu-inativo-resp',
       executor_core_usuario_id: 'cu-inativo-exec',
-      pasta_cliente: null,
-      pasta_ricci: null,
+      pasta_cliente: 'Cliente Pasta',
+      pasta_ricci: 'Ricci Pasta',
       updated_at: originalUpdatedAt,
       arquivado_at: null,
     }
 
-    let updatePayloadCaptured: any = null
+    let updateCalled = false
 
     vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
       if (table === 'task_status') {
@@ -481,16 +491,244 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
               single: () => Promise.resolve({ data: existingDbRecord, error: null }),
             }),
           }),
-          update: (payload: any) => {
-            updatePayloadCaptured = payload
+          update: () => {
+            updateCalled = true
             return {
               eq: () => ({
                 select: () => ({
-                  single: () =>
-                    Promise.resolve({
-                      data: { ...existingDbRecord, ...payload },
-                      error: null,
-                    }),
+                  single: () => Promise.resolve({ data: existingDbRecord, error: null }),
+                }),
+              }),
+            }
+          },
+        }
+      }
+      if (table === 'task_providencias') {
+        return {
+          select: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => ({
+                  order: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    // Salva exatamente com os mesmos dados atuais
+    const result = await controleService.saveControle(
+      {
+        id: 'tarefa-101',
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Processo X',
+        status_id: 'st-aberto',
+        data_autorizacao: '2025-01-10',
+        prazo_conclusao: '2025-02-10',
+        responsavel_usuario_id: 'tu-inativo-resp',
+        executor_usuario_id: 'tu-inativo-exec',
+        responsavel_core_usuario_id: 'cu-inativo-resp',
+        executor_core_usuario_id: 'cu-inativo-exec',
+        pasta_cliente: 'Cliente Pasta',
+        pasta_ricci: 'Ricci Pasta',
+      },
+      [],
+    )
+
+    // Regra 1: NÃO deve chamar update
+    expect(updateCalled).toBe(false)
+    // Retorna o registro existente hidratado
+    expect(result.id).toBe('tarefa-101')
+    expect(result.updated_at).toBe(originalUpdatedAt)
+    expect(result.responsavel_core_usuario_id).toBe('cu-inativo-resp')
+    expect(result.executor_core_usuario_id).toBe('cu-inativo-exec')
+  })
+
+  it('falha na leitura do registro anterior BLOQUEIA o salvamento com erro (fail-closed)', async () => {
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_tarefas') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: null,
+                  error: { message: 'Erro de rede ao ler registro anterior' },
+                }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    await expect(
+      controleService.saveControle(
+        {
+          id: 'tarefa-101',
+          nome_controle_id: 'nc-1',
+          identificacao_caso: 'Processo X',
+          status_id: 'st-aberto',
+          responsavel_usuario_id: 'tu-resp',
+          executor_usuario_id: 'tu-exec',
+        },
+        [],
+      ),
+    ).rejects.toThrow(
+      'Gravação bloqueada: não foi possível carregar os dados anteriores do controle para validação.',
+    )
+  })
+
+  it('IDs centrais divergentes do respectivo task_usuarios.core_usuario_id são REJEITADOS com erro', async () => {
+    // 1. Caso criação com ID central divergente da lista de ativos elegíveis
+    const usuariosLista = [
+      {
+        id: 'tu-resp',
+        nome: 'Responsável A',
+        email: 'resp.a@riccipi.com.br',
+        core_usuario_id: 'cu-pessoa-a',
+      },
+      {
+        id: 'tu-exec',
+        nome: 'Executor B',
+        email: 'exec.b@riccipi.com.br',
+        core_usuario_id: 'cu-pessoa-b',
+      },
+    ]
+
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    // Envia responsavel_usuario_id de pessoa A, mas responsavel_core_usuario_id de pessoa B
+    await expect(
+      controleService.saveControle(
+        {
+          nome_controle_id: 'nc-1',
+          identificacao_caso: 'Caso Divergente',
+          status_id: 'st-aberto',
+          responsavel_usuario_id: 'tu-resp',
+          executor_usuario_id: 'tu-exec',
+          responsavel_core_usuario_id: 'cu-pessoa-b', // DIVERGENTE!
+          executor_core_usuario_id: 'cu-pessoa-b',
+        },
+        usuariosLista,
+      ),
+    ).rejects.toThrow(
+      'Gravação bloqueada: o ID central do Responsável diverge do vínculo correspondente em task_usuarios.',
+    )
+
+    // 2. Caso com bridge lookup onde o banco retorna cu-pessoa-a e o input enviou cu-trocado
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [
+                  { id: 'tu-resp', core_usuario_id: 'cu-pessoa-a' },
+                  { id: 'tu-exec', core_usuario_id: 'cu-pessoa-b' },
+                ],
+                error: null,
+              }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    await expect(
+      controleService.saveControle(
+        {
+          nome_controle_id: 'nc-1',
+          identificacao_caso: 'Caso Divergente Executor',
+          status_id: 'st-aberto',
+          responsavel_usuario_id: 'tu-resp',
+          executor_usuario_id: 'tu-exec',
+          responsavel_core_usuario_id: 'cu-pessoa-a',
+          executor_core_usuario_id: 'cu-trocado', // DIVERGENTE!
+        },
+        [],
+      ),
+    ).rejects.toThrow(
+      'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
+    )
+  })
+
+  it('preservação de atribuição histórica de pessoa inativa: mantém o par já gravado sem re-resolver nem alterar updated_at', async () => {
+    const originalUpdatedAt = '2025-01-10T12:00:00.000Z'
+    const existingDbRecord = {
+      id: 'tarefa-101',
+      nome_controle_id: 'nc-1',
+      identificacao_caso: 'Processo X',
+      status_id: 'st-aberto',
+      data_autorizacao: '2025-01-10',
+      prazo_conclusao: '2025-02-10',
+      responsavel_usuario_id: 'tu-inativo-resp',
+      executor_usuario_id: 'tu-inativo-exec',
+      responsavel_core_usuario_id: 'cu-inativo-resp',
+      executor_core_usuario_id: 'cu-inativo-exec',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      updated_at: originalUpdatedAt,
+      arquivado_at: null,
+    }
+
+    let updateCalled = false
+
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_tarefas') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: existingDbRecord, error: null }),
+            }),
+          }),
+          update: () => {
+            updateCalled = true
+            return {
+              eq: () => ({
+                select: () => ({
+                  single: () => Promise.resolve({ data: existingDbRecord, error: null }),
                 }),
               }),
             }
@@ -514,8 +752,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     }) as any)
 
     // Simulando que os usuários inativos não estão na lista de ativos elegíveis atuais
-    // mas os IDs centrais preservados são repassados (ou resolvidos)
-    await controleService.saveControle(
+    // mas os IDs centrais preservados são repassados
+    const result = await controleService.saveControle(
       {
         id: 'tarefa-101',
         nome_controle_id: 'nc-1',
@@ -531,14 +769,12 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       [], // lista vazia de ativos elegíveis
     )
 
-    expect(updatePayloadCaptured).not.toBeNull()
-    // Preserva rigorosamente os IDs operacionais e centrais
-    expect(updatePayloadCaptured.responsavel_usuario_id).toBe('tu-inativo-resp')
-    expect(updatePayloadCaptured.executor_usuario_id).toBe('tu-inativo-exec')
-    expect(updatePayloadCaptured.responsavel_core_usuario_id).toBe('cu-inativo-resp')
-    expect(updatePayloadCaptured.executor_core_usuario_id).toBe('cu-inativo-exec')
-    // Não altera updated_at para não invalidar idempotência de e-mails
-    expect(updatePayloadCaptured.updated_at).toBeUndefined()
+    expect(updateCalled).toBe(false)
+    expect(result.responsavel_usuario_id).toBe('tu-inativo-resp')
+    expect(result.executor_usuario_id).toBe('tu-inativo-exec')
+    expect(result.responsavel_core_usuario_id).toBe('cu-inativo-resp')
+    expect(result.executor_core_usuario_id).toBe('cu-inativo-exec')
+    expect(result.updated_at).toBe(originalUpdatedAt)
   })
 
   it('bloqueia gravação se responsável ou executor não possuir vínculo central válido', async () => {

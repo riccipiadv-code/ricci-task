@@ -819,61 +819,134 @@ export const controleService = {
       console.error('Aviso ao verificar se status do controle finaliza:', checkErr)
     }
 
-    // Resolução dos IDs centrais correspondentes:
-    // 1. Se fornecidos explicitamente no input (ex: vindos da seleção ou preservação do modal), utiliza-os.
-    // 2. Se ausentes, busca na lista de usuários informada (usuariosParam).
-    // 3. Se ainda ausente ou se novos IDs centrais precisarem ser resolvidos contra task_usuarios:
-    let resolvedRespCoreId = input.responsavel_core_usuario_id || null
-    let resolvedExecCoreId = input.executor_core_usuario_id || null
+    // Se for edição (input.id presente), precisamos consultar o registro anterior primeiro (fail-closed estrito)
+    // para viabilizar:
+    // a) Preservação histórica sem re-resolução de IDs centrais caso a atribuição não tenha mudado;
+    // b) Detecção de alteração real antes de executar qualquer UPDATE;
+    // c) Bloqueio caso a consulta do registro anterior falhe.
+    let existingRecord: any = null
+    if (input.id) {
+      const { data: existingData, error: existingErr } = await supabase
+        .from('task_tarefas')
+        .select(`
+          id,
+          nome_controle_id,
+          numero_caso,
+          identificacao_caso,
+          status_id,
+          data_autorizacao,
+          prazo_conclusao,
+          responsavel_usuario_id,
+          executor_usuario_id,
+          responsavel_core_usuario_id,
+          executor_core_usuario_id,
+          pasta_cliente,
+          pasta_ricci,
+          updated_at,
+          arquivado_at
+        `)
+        .eq('id', input.id)
+        .single()
+
+      if (existingErr || !existingData) {
+        console.error(
+          'Falha ao consultar registro anterior de task_tarefas para checagem de alteração:',
+          existingErr,
+        )
+        throw new Error(
+          'Gravação bloqueada: não foi possível carregar os dados anteriores do controle para validação.',
+        )
+      }
+      existingRecord = existingData
+    }
+
+    // Regra 5: Para atribuição histórica sem mudança em edição, preservar o par já gravado no registro
+    // (central + operacional juntos), sem tentar re-resolver ou sobrescrever com candidatos atuais.
+    let resolvedRespCoreId: string | null = null
+    let resolvedExecCoreId: string | null = null
+
+    const respNaoMudou = Boolean(
+      existingRecord &&
+      existingRecord.responsavel_usuario_id === input.responsavel_usuario_id &&
+      existingRecord.responsavel_core_usuario_id,
+    )
+    if (respNaoMudou) {
+      // Se um ID central diferente foi enviado no input com o mesmo operacional, valida consistência
+      if (
+        input.responsavel_core_usuario_id &&
+        input.responsavel_core_usuario_id !== existingRecord.responsavel_core_usuario_id
+      ) {
+        throw new Error(
+          'Gravação bloqueada: o ID central do Responsável diverge do vínculo gravado no sistema.',
+        )
+      }
+      resolvedRespCoreId = existingRecord.responsavel_core_usuario_id
+    }
+
+    const execNaoMudou = Boolean(
+      existingRecord &&
+      existingRecord.executor_usuario_id === input.executor_usuario_id &&
+      existingRecord.executor_core_usuario_id,
+    )
+    if (execNaoMudou) {
+      if (
+        input.executor_core_usuario_id &&
+        input.executor_core_usuario_id !== existingRecord.executor_core_usuario_id
+      ) {
+        throw new Error(
+          'Gravação bloqueada: o ID central do Executor diverge do vínculo gravado no sistema.',
+        )
+      }
+      resolvedExecCoreId = existingRecord.executor_core_usuario_id
+    }
+
+    // Resolução dos IDs centrais para os casos que não foram preservados:
+    // 1. Busca na lista informada de usuários elegíveis validados (usuariosParam)
+    // 2. Se ausente, busca direto em task_usuarios (bridge lookup)
+    const needBridgeLookup: string[] = []
 
     if (!resolvedRespCoreId && input.responsavel_usuario_id) {
       const foundResp = (usuariosParam || []).find((u) => u.id === input.responsavel_usuario_id)
       if (foundResp && foundResp.core_usuario_id) {
         resolvedRespCoreId = foundResp.core_usuario_id
+      } else {
+        needBridgeLookup.push(input.responsavel_usuario_id)
       }
     }
+
     if (!resolvedExecCoreId && input.executor_usuario_id) {
       const foundExec = (usuariosParam || []).find((u) => u.id === input.executor_usuario_id)
       if (foundExec && foundExec.core_usuario_id) {
         resolvedExecCoreId = foundExec.core_usuario_id
+      } else if (!needBridgeLookup.includes(input.executor_usuario_id)) {
+        needBridgeLookup.push(input.executor_usuario_id)
       }
-    }
-
-    // Se algum dos dois ainda não tem core_usuario_id resolvido, busca direto em task_usuarios
-    const needBridgeLookup: string[] = []
-    if (!resolvedRespCoreId && input.responsavel_usuario_id) {
-      needBridgeLookup.push(input.responsavel_usuario_id)
-    }
-    if (
-      !resolvedExecCoreId &&
-      input.executor_usuario_id &&
-      !needBridgeLookup.includes(input.executor_usuario_id)
-    ) {
-      needBridgeLookup.push(input.executor_usuario_id)
     }
 
     if (needBridgeLookup.length > 0) {
-      try {
-        const { data: usersBridge } = await supabase
-          .from('task_usuarios')
-          .select('id, core_usuario_id')
-          .in('id', needBridgeLookup)
+      const { data: usersBridge, error: bridgeErr } = await supabase
+        .from('task_usuarios')
+        .select('id, core_usuario_id')
+        .in('id', needBridgeLookup)
 
-        for (const u of usersBridge || []) {
-          if (u.id === input.responsavel_usuario_id && !resolvedRespCoreId) {
-            resolvedRespCoreId = u.core_usuario_id || null
-          }
-          if (u.id === input.executor_usuario_id && !resolvedExecCoreId) {
-            resolvedExecCoreId = u.core_usuario_id || null
-          }
+      if (bridgeErr) {
+        console.error('Erro ao consultar task_usuarios para mapear core_usuario_id:', bridgeErr)
+        throw new Error(
+          'Gravação bloqueada: falha ao verificar os vínculos centrais dos usuários em task_usuarios.',
+        )
+      }
+
+      for (const u of usersBridge || []) {
+        if (u.id === input.responsavel_usuario_id && !resolvedRespCoreId) {
+          resolvedRespCoreId = u.core_usuario_id || null
         }
-      } catch (lookupErr) {
-        console.error('Aviso ao consultar task_usuarios para mapear core_usuario_id:', lookupErr)
+        if (u.id === input.executor_usuario_id && !resolvedExecCoreId) {
+          resolvedExecCoreId = u.core_usuario_id || null
+        }
       }
     }
 
-    // Validação estrita do vínculo central:
-    // Todo responsável e executor deve ter vínculo central válido gravado.
+    // Validação estrita do vínculo central (presença):
     if (!resolvedRespCoreId) {
       throw new Error(
         'Gravação bloqueada: o Responsável selecionado não possui vínculo central (core_usuario_id) válido no Gestor de Acessos.',
@@ -885,80 +958,74 @@ export const controleService = {
       )
     }
 
+    // Regra 4: Valide que cada ID central enviado corresponde ao task_usuarios.core_usuario_id do respectivo ID operacional.
+    // NÃO aceite uma dupla divergente (ex.: responsavel_usuario_id de pessoa A com responsavel_core_usuario_id de pessoa B).
+    if (
+      input.responsavel_core_usuario_id &&
+      input.responsavel_core_usuario_id !== resolvedRespCoreId
+    ) {
+      throw new Error(
+        'Gravação bloqueada: o ID central do Responsável diverge do vínculo correspondente em task_usuarios.',
+      )
+    }
+    if (input.executor_core_usuario_id && input.executor_core_usuario_id !== resolvedExecCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
+      )
+    }
+
     const nowIso = new Date().toISOString()
 
-    if (input.id) {
-      // Regra de Preservação e Detecção de Mudança Real na Edição:
-      // Busca registro existente para verificar se houve alteração real de conteúdo ou atribuição.
-      // "Não mude updated_at apenas para converter IDs"
-      let existingRecord: any = null
-      try {
-        const { data: existingData } = await supabase
-          .from('task_tarefas')
-          .select(`
-            nome_controle_id,
-            identificacao_caso,
-            status_id,
-            data_autorizacao,
-            prazo_conclusao,
-            responsavel_usuario_id,
-            executor_usuario_id,
-            responsavel_core_usuario_id,
-            executor_core_usuario_id,
-            pasta_cliente,
-            pasta_ricci,
-            updated_at,
-            arquivado_at
-          `)
-          .eq('id', input.id)
-          .single()
-        existingRecord = existingData
-      } catch (fetchExistingErr) {
-        console.error(
-          'Aviso ao buscar registro anterior de task_tarefas para checagem de alteração:',
-          fetchExistingErr,
-        )
-      }
-
+    if (input.id && existingRecord) {
+      // Regra de Detecção de Mudança Real na Edição:
       const cleanNewIdent = input.identificacao_caso.trim()
       const cleanNewDataAut = input.data_autorizacao || null
       const cleanNewPrazo = input.prazo_conclusao || null
       const cleanNewPastaCliente = input.pasta_cliente?.trim() || null
       const cleanNewPastaRicci = input.pasta_ricci?.trim() || null
 
-      let houveMudancaReal = true
-      if (existingRecord) {
-        const mudouNome = existingRecord.nome_controle_id !== input.nome_controle_id
-        const mudouIdent = (existingRecord.identificacao_caso || '').trim() !== cleanNewIdent
-        const mudouStatus = existingRecord.status_id !== input.status_id
-        const mudouDataAut =
-          (existingRecord.data_autorizacao
-            ? existingRecord.data_autorizacao.split('T')[0]
-            : null) !== (cleanNewDataAut ? cleanNewDataAut.split('T')[0] : null)
-        const mudouPrazo =
-          (existingRecord.prazo_conclusao ? existingRecord.prazo_conclusao.split('T')[0] : null) !==
-          (cleanNewPrazo ? cleanNewPrazo.split('T')[0] : null)
-        const mudouResp = existingRecord.responsavel_usuario_id !== input.responsavel_usuario_id
-        const mudouExec = existingRecord.executor_usuario_id !== input.executor_usuario_id
-        const mudouPastaCli =
-          (existingRecord.pasta_cliente || '').trim() !== (cleanNewPastaCliente || '')
-        const mudouPastaRicci =
-          (existingRecord.pasta_ricci || '').trim() !== (cleanNewPastaRicci || '')
-        const mudouArquivado = Boolean(statusFinaliza && !existingRecord.arquivado_at)
+      const mudouNome = existingRecord.nome_controle_id !== input.nome_controle_id
+      const mudouIdent = (existingRecord.identificacao_caso || '').trim() !== cleanNewIdent
+      const mudouStatus = existingRecord.status_id !== input.status_id
+      const mudouDataAut =
+        (existingRecord.data_autorizacao ? existingRecord.data_autorizacao.split('T')[0] : null) !==
+        (cleanNewDataAut ? cleanNewDataAut.split('T')[0] : null)
+      const mudouPrazo =
+        (existingRecord.prazo_conclusao ? existingRecord.prazo_conclusao.split('T')[0] : null) !==
+        (cleanNewPrazo ? cleanNewPrazo.split('T')[0] : null)
+      const mudouResp =
+        existingRecord.responsavel_usuario_id !== input.responsavel_usuario_id ||
+        (existingRecord.responsavel_core_usuario_id || null) !== resolvedRespCoreId
+      const mudouExec =
+        existingRecord.executor_usuario_id !== input.executor_usuario_id ||
+        (existingRecord.executor_core_usuario_id || null) !== resolvedExecCoreId
+      const mudouPastaCli =
+        (existingRecord.pasta_cliente || '').trim() !== (cleanNewPastaCliente || '')
+      const mudouPastaRicci =
+        (existingRecord.pasta_ricci || '').trim() !== (cleanNewPastaRicci || '')
+      const mudouArquivado = Boolean(statusFinaliza && !existingRecord.arquivado_at)
 
-        houveMudancaReal =
-          mudouNome ||
-          mudouIdent ||
-          mudouStatus ||
-          mudouDataAut ||
-          mudouPrazo ||
-          mudouResp ||
-          mudouExec ||
-          mudouPastaCli ||
-          mudouPastaRicci ||
-          mudouArquivado
+      const houveMudancaReal =
+        mudouNome ||
+        mudouIdent ||
+        mudouStatus ||
+        mudouDataAut ||
+        mudouPrazo ||
+        mudouResp ||
+        mudouExec ||
+        mudouPastaCli ||
+        mudouPastaRicci ||
+        mudouArquivado
+
+      // Regra 1: Quando a edição NÃO altera nenhum campo da tarefa, NÃO execute UPDATE em task_tarefas.
+      // Retorne o registro existente hidratado.
+      if (!houveMudancaReal) {
+        const loaded = await this.getControleById(existingRecord.id, usuariosParam)
+        return (loaded || existingRecord) as TaskControleRecord
       }
 
+      // Regra 3: Quando houver alteração real, NÃO envie updated_at no payload de update;
+      // deixe o gatilho do banco definir updated_at e use o valor retornado pelo banco (.select().single()).
       const updatePayload: {
         nome_controle_id: string
         identificacao_caso: string
@@ -971,7 +1038,6 @@ export const controleService = {
         executor_core_usuario_id: string | null
         pasta_cliente: string | null
         pasta_ricci: string | null
-        updated_at?: string
         updated_by: string | null
         arquivado_at?: string
       } = {
@@ -989,13 +1055,8 @@ export const controleService = {
         updated_by: userId,
       }
 
-      // Só atualiza updated_at quando houver mudança real de conteúdo/atribuição
-      if (houveMudancaReal) {
-        updatePayload.updated_at = nowIso
-      }
-
       if (statusFinaliza) {
-        updatePayload.arquivado_at = existingRecord?.arquivado_at || nowIso
+        updatePayload.arquivado_at = existingRecord.arquivado_at || nowIso
       }
 
       const { data, error } = await supabase
@@ -1020,7 +1081,12 @@ export const controleService = {
       }
 
       const loaded = await this.getControleById(data.id, usuariosParam)
-      return (loaded || data) as TaskControleRecord
+      if (loaded) {
+        // Assegura que o updated_at retornado pelo banco após o trigger prevaleça
+        loaded.updated_at = data.updated_at
+        return loaded
+      }
+      return data as TaskControleRecord
     } else {
       const insertPayload: any = {
         nome_controle_id: input.nome_controle_id,
