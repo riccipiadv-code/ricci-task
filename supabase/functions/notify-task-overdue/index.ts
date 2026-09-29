@@ -392,6 +392,10 @@ Deno.serve(async (req: Request) => {
       // - Depois, só permitir novo envio quando tiverem transcorrido 72 horas do sent_at do último envio BEM-SUCEDIDO daquela providência.
       // - Repetir a cada 72 horas enquanto continuar atrasada e com alertas ativos.
       // - Consulta o último evento BEM-SUCEDIDO (status = 'success' AND sent_at IS NOT NULL) desta providência.
+      // Idempotência do ciclo diário para proteção contra disparos repetidos/concorrentes no mesmo dia
+      // providencia_atraso:{providencia_id}:{AAAA-MM-DD}
+      const eventKey = `providencia_atraso:${prov.id}:${todayStr}`
+
       const { data: ultimoEnvioSucesso, error: checkUltimoSucessoError } = await supabase
         .from('task_email_eventos')
         .select('id, sent_at')
@@ -404,11 +408,23 @@ Deno.serve(async (req: Request) => {
         .maybeSingle()
 
       if (checkUltimoSucessoError) {
-        console.warn(
-          'Aviso ao consultar último envio de sucesso para providência',
-          prov.id,
+        console.error(
+          `Falha técnica ao consultar último envio de sucesso para providência ${prov.id}:`,
           checkUltimoSucessoError,
         )
+        const errMsg =
+          checkUltimoSucessoError.message || 'Falha técnica ao consultar histórico de envios'
+
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'error',
+          reason: 'falha_consulta_central',
+          error: errMsg,
+        })
+        totalErrors++
+        continue
       }
 
       if (ultimoEnvioSucesso && ultimoEnvioSucesso.sent_at) {
@@ -421,7 +437,7 @@ Deno.serve(async (req: Request) => {
           results.push({
             providencia_id: prov.id,
             tarefa_id: tarefa.id,
-            event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+            event_key: eventKey,
             status: 'skipped',
             reason: 'intervalo_72h_nao_atingido',
           })
@@ -429,10 +445,6 @@ Deno.serve(async (req: Request) => {
           continue
         }
       }
-
-      // Idempotência do ciclo diário para proteção contra disparos repetidos/concorrentes no mesmo dia
-      // providencia_atraso:{providencia_id}:{AAAA-MM-DD}
-      const eventKey = `providencia_atraso:${prov.id}:${todayStr}`
 
       // Verificar se o evento deste dia já foi enviado com sucesso
       const { data: existingEvent, error: checkEventError } = await supabase
@@ -442,7 +454,22 @@ Deno.serve(async (req: Request) => {
         .maybeSingle()
 
       if (checkEventError) {
-        console.warn('Aviso ao consultar task_email_eventos para chave', eventKey, checkEventError)
+        console.error(
+          `Falha técnica ao consultar task_email_eventos para chave ${eventKey}:`,
+          checkEventError,
+        )
+        const errMsg = checkEventError.message || 'Falha técnica ao consultar chave de idempotência'
+
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'error',
+          reason: 'falha_consulta_central',
+          error: errMsg,
+        })
+        totalErrors++
+        continue
       }
 
       if (existingEvent && existingEvent.status === 'success') {

@@ -1553,9 +1553,11 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
       continue
     }
 
+    const eventKey = `providencia_atraso:${prov.id}:${todayStr}`
+
     // REGRA DE REPETIÇÃO A CADA 72 HORAS:
     // Consulta o último envio bem-sucedido desta providência
-    const { data: ultimoEnvioSucesso } = await ctx.supabase
+    const { data: ultimoEnvioSucesso, error: ultimoEnvioError } = await ctx.supabase
       .from('task_email_eventos')
       .select('id, sent_at')
       .eq('providencia_id', prov.id)
@@ -1566,6 +1568,19 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
       .limit(1)
       .maybeSingle()
 
+    if (ultimoEnvioError) {
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: tarefa.id,
+        event_key: eventKey,
+        status: 'error',
+        reason: 'falha_consulta_central',
+        error: ultimoEnvioError.message || 'Falha técnica ao consultar histórico de envios',
+      })
+      totalErrors++
+      continue
+    }
+
     if (ultimoEnvioSucesso && ultimoEnvioSucesso.sent_at) {
       const sentAtMs = new Date(ultimoEnvioSucesso.sent_at).getTime()
       const agoraMs = ctx.env.MOCK_NOW_MS ? Number(ctx.env.MOCK_NOW_MS) : Date.now()
@@ -1574,7 +1589,7 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
       if (diferencaMs < INTERVALO_REENVIO_MS) {
         results.push({
           providencia_id: prov.id,
-          event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+          event_key: eventKey,
           status: 'skipped',
           reason: 'intervalo_72h_nao_atingido',
         })
@@ -1583,12 +1598,24 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
       }
     }
 
-    const eventKey = `providencia_atraso:${prov.id}:${todayStr}`
-    const { data: existingEvent } = await ctx.supabase
+    const { data: existingEvent, error: existingEventError } = await ctx.supabase
       .from('task_email_eventos')
       .select('id, status')
       .eq('event_key', eventKey)
       .maybeSingle()
+
+    if (existingEventError) {
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: tarefa.id,
+        event_key: eventKey,
+        status: 'error',
+        reason: 'falha_consulta_central',
+        error: existingEventError.message || 'Falha técnica ao consultar chave de idempotência',
+      })
+      totalErrors++
+      continue
+    }
 
     if (existingEvent && existingEvent.status === 'success') {
       results.push({
@@ -3738,6 +3765,196 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       // SMTP foi invocado para a tarefa de sucesso
       expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
       expect(ctx.transporter.sentMails[0].to).toBe('exec.sucesso@riccipi.com.br')
+    })
+
+    it('7. Fail-closed: falha técnica na consulta do último sent_at bem-sucedido bloqueia o envio e marca status error', async () => {
+      ctx.supabase = {
+        from: vi.fn((table: string) => {
+          if (table === 'task_providencias') {
+            return {
+              select: () =>
+                Promise.resolve({
+                  data: [{ id: 'prov-err-sent-at', tarefa_id: 'tarefa-1' }],
+                  error: null,
+                }),
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-1',
+                        numero_caso: 601,
+                        executor_core_usuario_id: 'cu-exec-1',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'link-exec',
+                    ativo: true,
+                    core_usuarios: {
+                      id: 'cu-exec-1',
+                      nome: 'Exec Teste',
+                      email: 'exec.teste@riccipi.com.br',
+                      ativo: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  not: () => chain,
+                  order: () => chain,
+                  limit: () => chain,
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: null,
+                      error: { message: 'Database timeout ao consultar sent_at' },
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-overdue', {
+        method: 'POST',
+        headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+      })
+
+      const res = await handleNotifyTaskOverdue(req, ctx)
+      expect(res.status).toBe(207)
+
+      const body = await res.json()
+      expect(body.success).toBe(false)
+      expect(body.sent).toBe(0)
+      expect(body.errors).toBe(1)
+      expect(body.details[0].status).toBe('error')
+      expect(body.details[0].reason).toBe('falha_consulta_central')
+      expect(body.details[0].error).toContain('Database timeout ao consultar sent_at')
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    it('8. Fail-closed: falha técnica na consulta da chave de idempotência bloqueia o envio e marca status error', async () => {
+      ctx.supabase = {
+        from: vi.fn((table: string) => {
+          if (table === 'task_providencias') {
+            return {
+              select: () =>
+                Promise.resolve({
+                  data: [{ id: 'prov-err-event-key', tarefa_id: 'tarefa-2' }],
+                  error: null,
+                }),
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-2',
+                        numero_caso: 602,
+                        executor_core_usuario_id: 'cu-exec-2',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'link-exec',
+                    ativo: true,
+                    core_usuarios: {
+                      id: 'cu-exec-2',
+                      nome: 'Exec Teste 2',
+                      email: 'exec.teste2@riccipi.com.br',
+                      ativo: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_email_eventos') {
+            let callCount = 0
+            return {
+              select: () => {
+                callCount++
+                const chain: any = {
+                  eq: () => chain,
+                  not: () => chain,
+                  order: () => chain,
+                  limit: () => chain,
+                  maybeSingle: () => {
+                    // Chamada 1: consulta sent_at (sucesso, nenhum anterior)
+                    if (callCount === 1) {
+                      return Promise.resolve({ data: null, error: null })
+                    }
+                    // Chamada 2: consulta event_key de hoje (falha técnica)
+                    return Promise.resolve({
+                      data: null,
+                      error: { message: 'Connection reset ao consultar chave de idempotência' },
+                    })
+                  },
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-overdue', {
+        method: 'POST',
+        headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+      })
+
+      const res = await handleNotifyTaskOverdue(req, ctx)
+      expect(res.status).toBe(207)
+
+      const body = await res.json()
+      expect(body.success).toBe(false)
+      expect(body.sent).toBe(0)
+      expect(body.errors).toBe(1)
+      expect(body.details[0].status).toBe('error')
+      expect(body.details[0].reason).toBe('falha_consulta_central')
+      expect(body.details[0].error).toContain('Connection reset ao consultar chave de idempotência')
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
     })
 
     describe('Provas Obrigatórias v0.0.74 (Regras de Event Key, Ponte e Transição)', () => {
