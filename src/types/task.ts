@@ -152,6 +152,15 @@ export interface SaveControleInput {
   executor_core_usuario_id: string // Campo central obrigatório
   pasta_cliente?: string | null
   pasta_ricci?: string | null
+  providencias?: Omit<SaveProvidenciaInput, 'tarefa_id'>[]
+  motivo_transicao?: string | null
+}
+
+export interface SaveControleResult {
+  controle: TaskControleRecord
+  transicao_id?: string | null
+  perda_acesso?: boolean
+  providencias?: TaskProvidenciaRecord[]
 }
 
 export interface SaveProvidenciaInput {

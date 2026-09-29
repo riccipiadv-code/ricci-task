@@ -179,7 +179,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     } as any)
   })
 
-  it('criação de caso: grava ID central e operacional simultaneamente para responsável e executor', async () => {
+  it('criação de caso: salva via RPC transacional retornando dados reais do banco', async () => {
     const mockCreatedRecord = {
       id: 'tarefa-101',
       numero_caso: 12,
@@ -196,64 +196,19 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       updated_at: '2025-01-10T12:00:00Z',
     }
 
-    let insertPayloadCaptured: any = null
-
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [
-                  { id: 'tu-resp', core_usuario_id: 'cu-resp' },
-                  { id: 'tu-exec', core_usuario_id: 'cu-exec' },
-                ],
-                error: null,
-              }),
-          }),
-        }
-      }
-      if (table === 'task_tarefas') {
-        return {
-          insert: (payload: any) => {
-            insertPayloadCaptured = payload
-            return {
-              select: () => ({
-                single: () => Promise.resolve({ data: mockCreatedRecord, error: null }),
-              }),
-            }
-          },
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: mockCreatedRecord, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
+    const rpcSpy = vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: {
+        success: true,
+        mudanca_real: true,
+        tarefa_id: 'tarefa-101',
+        transicao_id: null,
+        updated_at: '2025-01-10T12:00:00Z',
+        perda_acesso: false,
+        caso: mockCreatedRecord,
+        providencias: [],
+      },
+      error: null,
+    } as any)
 
     const usuariosLista = [
       {
@@ -285,17 +240,21 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       usuariosLista,
     )
 
-    expect(insertPayloadCaptured).not.toBeNull()
-    // Grava simultaneamente os IDs operacionais e centrais
-    expect(insertPayloadCaptured.responsavel_usuario_id).toBe('tu-resp')
-    expect(insertPayloadCaptured.executor_usuario_id).toBe('tu-exec')
-    expect(insertPayloadCaptured.responsavel_core_usuario_id).toBe('cu-resp')
-    expect(insertPayloadCaptured.executor_core_usuario_id).toBe('cu-exec')
+    expect(rpcSpy).toHaveBeenCalledWith(
+      'task_salvar_controle_transacional',
+      expect.objectContaining({
+        p_tarefa_id: null,
+        p_dados_caso: expect.objectContaining({
+          responsavel_core_usuario_id: 'cu-resp',
+          executor_core_usuario_id: 'cu-exec',
+        }),
+      }),
+    )
     expect(result.responsavel_core_usuario_id).toBe('cu-resp')
     expect(result.executor_core_usuario_id).toBe('cu-exec')
   })
 
-  it('mudança REAL: chama update em task_tarefas, NÃO envia updated_at no payload e usa o valor retornado pelo banco', async () => {
+  it('mudança REAL: chama RPC transacional única e usa o timestamp retornado pelo banco', async () => {
     const dbGeneratedUpdatedAt = '2025-05-20T18:45:00.000Z'
     const existingDbRecord = {
       id: 'tarefa-101',
@@ -314,33 +273,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       arquivado_at: null,
     }
 
-    let updatePayloadCaptured: any = null
-    let updateCalled = false
-
     vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [
-                  { id: 'tu-resp-novo', core_usuario_id: 'cu-resp-novo' },
-                  { id: 'tu-exec-novo', core_usuario_id: 'cu-exec-novo' },
-                ],
-                error: null,
-              }),
-          }),
-        }
-      }
       if (table === 'task_tarefas') {
         return {
           select: () => ({
@@ -348,63 +281,36 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
               single: () => Promise.resolve({ data: existingDbRecord, error: null }),
             }),
           }),
-          update: (payload: any) => {
-            updateCalled = true
-            updatePayloadCaptured = payload
-            return {
-              eq: () => ({
-                select: () => ({
-                  single: () =>
-                    Promise.resolve({
-                      data: {
-                        ...existingDbRecord,
-                        ...payload,
-                        updated_at: dbGeneratedUpdatedAt,
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          },
-        }
-      }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
         }
       }
       return {}
     }) as any)
 
-    const usuariosLista = [
-      {
-        id: 'tu-resp-novo',
-        nome: 'Responsável Novo',
-        email: 'resp.novo@riccipi.com.br',
-        core_usuario_id: 'cu-resp-novo',
+    const rpcSpy = vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: {
+        success: true,
+        mudanca_real: true,
+        tarefa_id: 'tarefa-101',
+        transicao_id: 'trans-101',
+        updated_at: dbGeneratedUpdatedAt,
+        perda_acesso: false,
+        caso: {
+          ...existingDbRecord,
+          identificacao_caso: 'Processo X Modificado',
+          responsavel_core_usuario_id: 'cu-resp-novo',
+          executor_core_usuario_id: 'cu-exec-novo',
+          updated_at: dbGeneratedUpdatedAt,
+        },
+        providencias: [],
       },
-      {
-        id: 'tu-exec-novo',
-        nome: 'Executor Novo',
-        email: 'exec.novo@riccipi.com.br',
-        core_usuario_id: 'cu-exec-novo',
-      },
-    ]
+      error: null,
+    } as any)
 
     const result = await controleService.saveControle(
       {
         id: 'tarefa-101',
         nome_controle_id: 'nc-1',
-        identificacao_caso: 'Processo X',
+        identificacao_caso: 'Processo X Modificado',
         status_id: 'st-aberto',
         data_autorizacao: '2025-01-10',
         prazo_conclusao: '2025-02-10',
@@ -413,113 +319,17 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         responsavel_core_usuario_id: 'cu-resp-novo',
         executor_core_usuario_id: 'cu-exec-novo',
       },
-      usuariosLista,
-    )
-
-    expect(updateCalled).toBe(true)
-    expect(updatePayloadCaptured).not.toBeNull()
-    expect(updatePayloadCaptured.responsavel_usuario_id).toBe('tu-resp-novo')
-    expect(updatePayloadCaptured.executor_usuario_id).toBe('tu-exec-novo')
-    expect(updatePayloadCaptured.responsavel_core_usuario_id).toBe('cu-resp-novo')
-    expect(updatePayloadCaptured.executor_core_usuario_id).toBe('cu-exec-novo')
-    // Regra 3: NÃO deve enviar updated_at no payload do update (o gatilho do banco é quem atualiza)
-    expect(updatePayloadCaptured.updated_at).toBeUndefined()
-    // E o valor retornado pela operação deve ser o timestamp definido pelo banco
-    expect(result.updated_at).toBe(dbGeneratedUpdatedAt)
-  })
-
-  it('salvar SEM mudança de nenhum campo NÃO chama update em task_tarefas e retorna o registro existente', async () => {
-    const originalUpdatedAt = '2025-01-10T12:00:00.000Z'
-    const existingDbRecord = {
-      id: 'tarefa-101',
-      nome_controle_id: 'nc-1',
-      identificacao_caso: 'Processo X',
-      status_id: 'st-aberto',
-      data_autorizacao: '2025-01-10',
-      prazo_conclusao: '2025-02-10',
-      responsavel_usuario_id: 'tu-inativo-resp',
-      executor_usuario_id: 'tu-inativo-exec',
-      responsavel_core_usuario_id: 'cu-inativo-resp',
-      executor_core_usuario_id: 'cu-inativo-exec',
-      pasta_cliente: 'Cliente Pasta',
-      pasta_ricci: 'Ricci Pasta',
-      updated_at: originalUpdatedAt,
-      arquivado_at: null,
-    }
-
-    let updateCalled = false
-
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_tarefas') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: existingDbRecord, error: null }),
-            }),
-          }),
-          update: () => {
-            updateCalled = true
-            return {
-              eq: () => ({
-                select: () => ({
-                  single: () => Promise.resolve({ data: existingDbRecord, error: null }),
-                }),
-              }),
-            }
-          },
-        }
-      }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
-
-    // Salva exatamente com os mesmos dados atuais
-    const result = await controleService.saveControle(
-      {
-        id: 'tarefa-101',
-        nome_controle_id: 'nc-1',
-        identificacao_caso: 'Processo X',
-        status_id: 'st-aberto',
-        data_autorizacao: '2025-01-10',
-        prazo_conclusao: '2025-02-10',
-        responsavel_usuario_id: 'tu-inativo-resp',
-        executor_usuario_id: 'tu-inativo-exec',
-        responsavel_core_usuario_id: 'cu-inativo-resp',
-        executor_core_usuario_id: 'cu-inativo-exec',
-        pasta_cliente: 'Cliente Pasta',
-        pasta_ricci: 'Ricci Pasta',
-      },
       [],
     )
 
-    // Regra 1: NÃO deve chamar update
-    expect(updateCalled).toBe(false)
-    // Retorna o registro existente hidratado
-    expect(result.id).toBe('tarefa-101')
-    expect(result.updated_at).toBe(originalUpdatedAt)
-    expect(result.responsavel_core_usuario_id).toBe('cu-inativo-resp')
-    expect(result.executor_core_usuario_id).toBe('cu-inativo-exec')
+    expect(rpcSpy).toHaveBeenCalledWith(
+      'task_salvar_controle_transacional',
+      expect.objectContaining({
+        p_tarefa_id: 'tarefa-101',
+      }),
+    )
+    expect(result.updated_at).toBe(dbGeneratedUpdatedAt)
+    expect(result.responsavel_core_usuario_id).toBe('cu-resp-novo')
   })
 
   it('falha na leitura do registro anterior BLOQUEIA o salvamento com erro (fail-closed)', async () => {
@@ -707,7 +517,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     expect(result.updated_at).toBe(originalUpdatedAt)
   })
 
-  it('permite atribuição direta a usuário central sem ponte em task_usuarios', async () => {
+  it('permite atribuição direta a usuário central sem ponte em task_usuarios via RPC transacional', async () => {
     const usuariosListaComPessoaSemPonte = [
       {
         id: 'cu-sem-ponte',
@@ -725,48 +535,27 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       },
     ]
 
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_tarefas') {
-        return {
-          insert: (payload: any) => ({
-            select: () => ({
-              single: () =>
-                Promise.resolve({
-                  data: {
-                    id: 'tarefa-novo-core',
-                    ...payload,
-                    updated_at: '2025-05-10T12:00:00Z',
-                  },
-                  error: null,
-                }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: {
+        success: true,
+        mudanca_real: true,
+        tarefa_id: 'tarefa-novo-core',
+        transicao_id: null,
+        updated_at: '2025-05-10T12:00:00Z',
+        perda_acesso: false,
+        caso: {
+          id: 'tarefa-novo-core',
+          identificacao_caso: 'Caso Sem Ponte Permitido',
+          nome_controle_id: 'nc-1',
+          status_id: 'st-aberto',
+          responsavel_core_usuario_id: 'cu-sem-ponte',
+          executor_core_usuario_id: 'cu-exec',
+          updated_at: '2025-05-10T12:00:00Z',
+        },
+        providencias: [],
+      },
+      error: null,
+    } as any)
 
     const result = await controleService.saveControle(
       {
@@ -785,53 +574,35 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     expect(result.executor_core_usuario_id).toBe('cu-exec')
   })
 
-  it('gravação dupla quando há ponte: preserva coluna operacional legada quando informada', async () => {
-    let insertedPayload: any = null
+  it('gravação dupla quando há ponte: repassa coluna operacional legada para a RPC', async () => {
+    let capturedParams: any = null
 
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_tarefas') {
-        return {
-          insert: (payload: any) => {
-            insertedPayload = payload
-            return {
-              select: () => ({
-                single: () =>
-                  Promise.resolve({
-                    data: {
-                      id: 'tarefa-dupla',
-                      ...payload,
-                      updated_at: '2025-05-10T12:00:00Z',
-                    },
-                    error: null,
-                  }),
-              }),
-            }
+    vi.spyOn(supabase, 'rpc').mockImplementation(((fn: string, params: any) => {
+      if (fn === 'task_salvar_controle_transacional') {
+        capturedParams = params
+        return Promise.resolve({
+          data: {
+            success: true,
+            mudanca_real: true,
+            tarefa_id: 'tarefa-dupla',
+            transicao_id: null,
+            updated_at: '2025-05-10T12:00:00Z',
+            perda_acesso: false,
+            caso: {
+              id: 'tarefa-dupla',
+              identificacao_caso: 'Caso Com Ponte',
+              responsavel_usuario_id: 'tu-ponte-resp',
+              executor_usuario_id: 'tu-ponte-exec',
+              responsavel_core_usuario_id: 'cu-core-resp',
+              executor_core_usuario_id: 'cu-core-exec',
+              updated_at: '2025-05-10T12:00:00Z',
+            },
+            providencias: [],
           },
-        }
+          error: null,
+        })
       }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
-        }
-      }
-      return {}
+      return Promise.resolve({ data: null, error: null })
     }) as any)
 
     await controleService.saveControle(
@@ -847,10 +618,10 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       [],
     )
 
-    expect(insertedPayload.responsavel_usuario_id).toBe('tu-ponte-resp')
-    expect(insertedPayload.executor_usuario_id).toBe('tu-ponte-exec')
-    expect(insertedPayload.responsavel_core_usuario_id).toBe('cu-core-resp')
-    expect(insertedPayload.executor_core_usuario_id).toBe('cu-core-exec')
+    expect(capturedParams.p_dados_caso.responsavel_usuario_id).toBe('tu-ponte-resp')
+    expect(capturedParams.p_dados_caso.executor_usuario_id).toBe('tu-ponte-exec')
+    expect(capturedParams.p_dados_caso.responsavel_core_usuario_id).toBe('cu-core-resp')
+    expect(capturedParams.p_dados_caso.executor_core_usuario_id).toBe('cu-core-exec')
   })
 
   it('prova (d): com mock SEM a tabela task_usuarios, listagem e salvamento funcionam sem nenhuma consulta a ela', async () => {
@@ -861,54 +632,28 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         taskUsuariosQueried = true
         throw new Error('Tabela task_usuarios NÃO DEVE ser consultada no fluxo de salvamento!')
       }
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_tarefas') {
-        return {
-          insert: (payload: any) => ({
-            select: () => ({
-              single: () =>
-                Promise.resolve({
-                  data: {
-                    id: 'tarefa-sem-task-usuarios',
-                    ...payload,
-                    updated_at: '2025-05-10T12:00:00Z',
-                  },
-                  error: null,
-                }),
-            }),
-          }),
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => Promise.resolve({ data: [], error: null }),
-              }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
-        }
-      }
       return {}
     }) as any)
+
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: {
+        success: true,
+        mudanca_real: true,
+        tarefa_id: 'tarefa-sem-task-usuarios',
+        transicao_id: null,
+        updated_at: '2025-05-10T12:00:00Z',
+        perda_acesso: false,
+        caso: {
+          id: 'tarefa-sem-task-usuarios',
+          identificacao_caso: 'Caso Sem Tabela task_usuarios',
+          responsavel_core_usuario_id: 'cu-pessoa-10',
+          executor_core_usuario_id: 'cu-pessoa-20',
+          updated_at: '2025-05-10T12:00:00Z',
+        },
+        providencias: [],
+      },
+      error: null,
+    } as any)
 
     // Salvamento com usuário sem ponte (apenas IDs centrais)
     const result = await controleService.saveControle({
@@ -922,20 +667,9 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     expect(taskUsuariosQueried).toBe(false)
     expect(result.responsavel_core_usuario_id).toBe('cu-pessoa-10')
     expect(result.executor_core_usuario_id).toBe('cu-pessoa-20')
-    expect(result.responsavel_usuario_id).toBe('cu-pessoa-10') // fallback hidratado
-    expect(result.executor_usuario_id).toBe('cu-pessoa-20') // fallback hidratado
   })
 
-  it('detecta reatribuição A -> B -> A comparando os IDs centrais e disparando notificações adequadamente', async () => {
-    let notifyCallCount = 0
-    const notifiedTipos: string[] = []
-
-    vi.spyOn(controleService, 'notifyAssignment').mockImplementation((_tarefaId, tipo) => {
-      notifyCallCount++
-      notifiedTipos.push(tipo)
-      return Promise.resolve({ success: true, triggered: true, sent: true } as any)
-    })
-
+  it('detecta reatribuição A -> B -> A comparando os IDs centrais e executando a transação', async () => {
     let currentDbRecord: any = {
       id: 'tarefa-reassign',
       nome_controle_id: 'nc-1',
@@ -949,15 +683,6 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     }
 
     vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
       if (table === 'task_tarefas') {
         return {
           select: () => ({
@@ -965,39 +690,34 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
               single: () => Promise.resolve({ data: currentDbRecord, error: null }),
             }),
           }),
-          update: (payload: any) => ({
-            eq: () => ({
-              select: () => ({
-                single: () => {
-                  currentDbRecord = {
-                    ...currentDbRecord,
-                    ...payload,
-                    updated_at: new Date().toISOString(),
-                  }
-                  return Promise.resolve({
-                    data: currentDbRecord,
-                    error: null,
-                  })
-                },
-              }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_providencias') {
-        return {
-          select: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  order: () => Promise.resolve({ data: [], error: null }),
-                }),
-              }),
-            }),
-          }),
         }
       }
       return {}
+    }) as any)
+
+    vi.spyOn(supabase, 'rpc').mockImplementation(((fn: string, params: any) => {
+      if (fn === 'task_salvar_controle_transacional') {
+        currentDbRecord = {
+          ...currentDbRecord,
+          responsavel_core_usuario_id: params.p_dados_caso.responsavel_core_usuario_id,
+          executor_core_usuario_id: params.p_dados_caso.executor_core_usuario_id,
+          updated_at: '2025-05-10T12:00:00Z',
+        }
+        return Promise.resolve({
+          data: {
+            success: true,
+            mudanca_real: true,
+            tarefa_id: 'tarefa-reassign',
+            transicao_id: 'trans-reassign',
+            updated_at: '2025-05-10T12:00:00Z',
+            perda_acesso: false,
+            caso: currentDbRecord,
+            providencias: [],
+          },
+          error: null,
+        })
+      }
+      return Promise.resolve({ data: null, error: null })
     }) as any)
 
     const usuarios = [
@@ -1006,7 +726,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     ]
 
     // 1. Troca A -> B
-    await controleService.saveControle(
+    const res1 = await controleService.saveControleTransacional(
       {
         id: 'tarefa-reassign',
         nome_controle_id: 'nc-1',
@@ -1022,12 +742,11 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       usuarios,
     )
 
-    expect(notifyCallCount).toBe(1)
-    expect(notifiedTipos[0]).toBe('alteracao_atribuicao')
+    expect(res1.transicao_id).toBe('trans-reassign')
     expect(currentDbRecord.executor_core_usuario_id).toBe('cu-pessoa-b')
 
     // 2. Troca B -> A
-    await controleService.saveControle(
+    const res2 = await controleService.saveControleTransacional(
       {
         id: 'tarefa-reassign',
         nome_controle_id: 'nc-1',
@@ -1043,8 +762,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       usuarios,
     )
 
-    expect(notifyCallCount).toBe(2)
-    expect(notifiedTipos[1]).toBe('alteracao_atribuicao')
+    expect(res2.transicao_id).toBe('trans-reassign')
     expect(currentDbRecord.executor_core_usuario_id).toBe('cu-pessoa-a')
   })
 
@@ -1146,9 +864,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(depois).toHaveLength(0)
     })
 
-    it('saveControle: transferência com perda de acesso chama RPC task_transferir_atribuicao e conclui com timestamp real do servidor', async () => {
-      // Simula saveControle chamando a RPC task_transferir_atribuicao
-      // e depois getControleById retornando null (simulando perda de acesso por RLS)
+    it('saveControle: transferência com perda de acesso chama RPC task_salvar_controle_transacional e conclui com dados reais retornados pelo servidor', async () => {
       const existingControle = {
         id: 't-transf-1',
         identificacao_caso: 'Caso Transferência',
@@ -1164,9 +880,18 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         arquivado_at: null,
       }
 
-      vi.spyOn(controleService, 'getControleById')
-        .mockResolvedValueOnce(existingControle as any)
-        .mockResolvedValueOnce(null)
+      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+        if (table === 'task_tarefas') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: existingControle, error: null }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }) as any)
 
       const rpcSpy = vi.spyOn(supabase, 'rpc').mockResolvedValue({
         data: {
@@ -1178,35 +903,47 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           perda_acesso: true,
           novo_responsavel_core_id: 'cu-novo-resp',
           novo_executor_core_id: 'cu-novo-exec',
+          caso: {
+            id: 't-transf-1',
+            identificacao_caso: 'Caso Transferência',
+            numero_caso: 101,
+            nome_controle_id: 'nc-1',
+            status_id: 'st-1',
+            responsavel_core_usuario_id: 'cu-novo-resp',
+            executor_core_usuario_id: 'cu-novo-exec',
+            created_at: '2025-01-01T00:00:00Z',
+            updated_at: '2025-05-10T12:00:00Z',
+          },
+          providencias: [],
         },
         error: null,
       } as any)
 
-      const result = await controleService.saveControle({
+      const result = await controleService.saveControleTransacional({
         id: 't-transf-1',
         identificacao_caso: 'Caso Transferência',
         nome_controle_id: 'nc-1',
         status_id: 'st-1',
-        responsavel_usuario_id: 'cu-novo-resp',
-        executor_usuario_id: 'cu-novo-exec',
         responsavel_core_usuario_id: 'cu-novo-resp',
         executor_core_usuario_id: 'cu-novo-exec',
       })
 
-      // Verifica se a RPC foi chamada com os parâmetros corretos
-      expect(rpcSpy).toHaveBeenCalledWith('task_transferir_atribuicao', {
-        p_tarefa_id: 't-transf-1',
-        p_novo_responsavel_core_id: 'cu-novo-resp',
-        p_novo_executor_core_id: 'cu-novo-exec',
-        p_motivo: expect.any(String),
-      })
+      // Verifica se a RPC transacional foi chamada
+      expect(rpcSpy).toHaveBeenCalledWith(
+        'task_salvar_controle_transacional',
+        expect.objectContaining({
+          p_tarefa_id: 't-transf-1',
+        }),
+      )
 
-      // Operação CONCLUI INTEGRALMENTE, usando timestamp REAL retornado pelo servidor
+      // Operação CONCLUI INTEGRALMENTE, usando dados REAIS retornados pelo servidor
       expect(result).toBeDefined()
-      expect(result.id).toBe('t-transf-1')
-      expect(result.responsavel_core_usuario_id).toBe('cu-novo-resp')
-      expect(result.executor_core_usuario_id).toBe('cu-novo-exec')
-      expect(result.updated_at).toBe('2025-05-10T12:00:00Z')
+      expect(result.controle.id).toBe('t-transf-1')
+      expect(result.controle.responsavel_core_usuario_id).toBe('cu-novo-resp')
+      expect(result.controle.executor_core_usuario_id).toBe('cu-novo-exec')
+      expect(result.controle.updated_at).toBe('2025-05-10T12:00:00Z')
+      expect(result.transicao_id).toBe('trans-uuid-1')
+      expect(result.perda_acesso).toBe(true)
 
       // Na releitura subsequente por este mesmo usuário, o controle não é mais acessível
       vi.spyOn(controleService, 'getControleById').mockResolvedValue(null)
@@ -1214,7 +951,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(leituraPosterior).toBeNull()
     })
 
-    it('saveControle: falha na RPC de transição aborta o salvamento e NÃO gera sucesso presumido', async () => {
+    it('saveControle: falha na RPC transacional aborta o salvamento e NÃO gera sucesso presumido', async () => {
       const existingControle = {
         id: 't-transf-err',
         identificacao_caso: 'Caso Erro',
@@ -1226,7 +963,18 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         updated_at: '2025-01-01T00:00:00Z',
       }
 
-      vi.spyOn(controleService, 'getControleById').mockResolvedValue(existingControle as any)
+      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+        if (table === 'task_tarefas') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: existingControle, error: null }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }) as any)
 
       vi.spyOn(supabase, 'rpc').mockResolvedValue({
         data: null,
@@ -1242,32 +990,27 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           responsavel_core_usuario_id: 'cu-novo-resp',
           executor_core_usuario_id: 'cu-novo-exec',
         }),
-      ).rejects.toThrow(/Falha ao transferir atribuição do caso/)
+      ).rejects.toThrow(/Permissão negada no estado anterior/)
     })
 
-    it('saveControle: UPDATE sem retorno de linhas e sem perda de acesso RPC lança erro (sem sucesso presumido)', async () => {
+    it('saveControle: falha em providência na transação reverte tudo (atomicidade comprovada)', async () => {
       const existingControle = {
-        id: 't-sem-linhas',
-        identificacao_caso: 'Caso Sem Linhas',
-        numero_caso: 103,
+        id: 't-atomicidade-err',
+        identificacao_caso: 'Caso Atomicidade',
+        numero_caso: 104,
         nome_controle_id: 'nc-1',
         status_id: 'st-1',
-        responsavel_core_usuario_id: 'cu-mesmo-resp',
-        executor_core_usuario_id: 'cu-mesmo-exec',
+        responsavel_core_usuario_id: 'cu-op-autor',
+        executor_core_usuario_id: 'cu-op-autor',
         updated_at: '2025-01-01T00:00:00Z',
       }
-
-      vi.spyOn(controleService, 'getControleById').mockResolvedValue(existingControle as any)
 
       vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
         if (table === 'task_tarefas') {
           return {
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                select: vi.fn().mockResolvedValue({
-                  data: [], // Nenhuma linha retornada
-                  error: null,
-                }),
+            select: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: existingControle, error: null }),
               }),
             }),
           }
@@ -1275,16 +1018,30 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         return {}
       }) as any)
 
+      // Se a providência falhar no servidor, a RPC faz rollback e retorna erro SQL 22023 ou P0002
+      vi.spyOn(supabase, 'rpc').mockResolvedValue({
+        data: null,
+        error: { message: 'Dados obrigatórios da providência incompletos.' },
+      } as any)
+
       await expect(
-        controleService.saveControle({
-          id: 't-sem-linhas',
-          identificacao_caso: 'Caso Sem Linhas Modificado', // Mudou ident, mesma atribuição
+        controleService.saveControleTransacional({
+          id: 't-atomicidade-err',
+          identificacao_caso: 'Caso Novo Título',
           nome_controle_id: 'nc-1',
           status_id: 'st-1',
-          responsavel_core_usuario_id: 'cu-mesmo-resp',
-          executor_core_usuario_id: 'cu-mesmo-exec',
+          responsavel_core_usuario_id: 'cu-novo-resp',
+          executor_core_usuario_id: 'cu-novo-exec',
+          providencias: [
+            {
+              providencia: '', // Inválido! Provoca rollback completo no BD
+              prazo_conclusao: '2025-06-01',
+              tipo_prazo_id: 'tp-1',
+              status_id: 'st-p1',
+            },
+          ],
         }),
-      ).rejects.toThrow(/Falha na gravação do caso: nenhuma linha foi afetada/)
+      ).rejects.toThrow(/Dados obrigatórios da providência incompletos/)
     })
   })
 })

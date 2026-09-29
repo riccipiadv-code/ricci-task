@@ -11,6 +11,7 @@ import {
   SaveUsuarioInput,
   TaskProvidenciaRecord,
   SaveControleInput,
+  SaveControleResult,
   SaveProvidenciaInput,
   SaveNomeControleInput,
   ControleMetrics,
@@ -798,34 +799,34 @@ export const controleService = {
     }
   },
 
-  async saveControle(
+  /**
+   * PONTO 1 & PONTO 2: Salvamento Atômico e Eliminação Total de Sucesso Presumido.
+   * Realiza a gravação do caso, de sua atribuição e das providências em UMA ÚNICA TRANSAÇÃO no servidor
+   * autorizada pelo estado anterior do caso (task_salvar_controle_transacional).
+   * Se o editor perder o acesso após a transição, a transação conclui atomicamente e retorna os
+   * dados efetivamente gravados pelo banco (sem fabricar snapshot local e sem UPDATE de zero linhas).
+   */
+  async saveControleTransacional(
     input: SaveControleInput,
     usuariosParam?: TaskUsuarioAtivoRecord[],
-  ): Promise<TaskControleRecord> {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    const userId = user?.id || null
+  ): Promise<SaveControleResult> {
+    // Autoridade definitiva: IDs CENTRAIS (core_usuarios.id)
+    const targetRespCoreId = input.responsavel_core_usuario_id || input.responsavel_usuario_id
+    const targetExecCoreId = input.executor_core_usuario_id || input.executor_usuario_id
 
-    // Regra A: Verificar se o status recebido é finalizador (task_status.finaliza = true).
-    // Se for, preencher arquivado_at com a data/hora atual na mesma operação de salvamento.
-    // NÃO desarquivar automaticamente se o status voltar a não finalizador.
-    let statusFinaliza = false
-    try {
-      const { data: statusObj } = await supabase
-        .from('task_status')
-        .select('finaliza')
-        .eq('id', input.status_id)
-        .single()
-      if (statusObj?.finaliza) {
-        statusFinaliza = true
-      }
-    } catch (checkErr) {
-      console.error('Aviso ao verificar se status do controle finaliza:', checkErr)
+    if (!targetRespCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o Responsável selecionado não possui ID central válido no Gestor de Acessos.',
+      )
+    }
+    if (!targetExecCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o Executor selecionado não possui ID central válido no Gestor de Acessos.',
+      )
     }
 
     // Se for edição (input.id presente), consultamos o registro anterior primeiro (fail-closed)
-    // para detecção de alteração real antes de executar qualquer UPDATE.
+    // para detecção de alteração real antes de executar qualquer operação.
     let existingRecord: any = null
     if (input.id) {
       const { data: existingData, error: existingErr } = await supabase
@@ -862,282 +863,121 @@ export const controleService = {
       existingRecord = existingData
     }
 
-    // Autoridade definitiva: IDs CENTRAIS (core_usuarios.id)
-    const targetRespCoreId = input.responsavel_core_usuario_id || input.responsavel_usuario_id
-    const targetExecCoreId = input.executor_core_usuario_id || input.executor_usuario_id
+    // Monta dados do caso para a RPC
+    const dadosCaso: any = {
+      nome_controle_id: input.nome_controle_id,
+      identificacao_caso: input.identificacao_caso.trim(),
+      status_id: input.status_id,
+      data_autorizacao: input.data_autorizacao || null,
+      prazo_conclusao: input.prazo_conclusao || null,
+      responsavel_core_usuario_id: targetRespCoreId,
+      executor_core_usuario_id: targetExecCoreId,
+      responsavel_usuario_id: input.responsavel_usuario_id || null,
+      executor_usuario_id: input.executor_usuario_id || null,
+      pasta_cliente: input.pasta_cliente?.trim() || null,
+      pasta_ricci: input.pasta_ricci?.trim() || null,
+    }
 
-    if (!targetRespCoreId) {
+    // Lista de providências para envio à transação
+    const providenciasPayload = (input.providencias || []).map((p) => ({
+      id: p.id || null,
+      providencia: p.providencia.trim(),
+      prazo_conclusao: p.prazo_conclusao,
+      tipo_prazo_id: p.tipo_prazo_id,
+      status_id: p.status_id,
+      ordem: p.ordem ?? 0,
+      data_conclusao: p.data_conclusao || null,
+      email_alertas: p.email_alertas ?? false,
+      email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+      email_alerta_atraso: p.email_alerta_atraso ?? false,
+      email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
+    }))
+
+    // Chamada à RPC transacional única no servidor (all-or-nothing)
+    const { data: rpcRaw, error: rpcErr } = await (supabase.rpc as any)(
+      'task_salvar_controle_transacional',
+      {
+        p_tarefa_id: input.id || null,
+        p_dados_caso: dadosCaso,
+        p_providencias: providenciasPayload,
+        p_motivo: input.motivo_transicao || 'Salvar controle de caso',
+      },
+    )
+
+    if (rpcErr) {
+      console.error('Falha na RPC task_salvar_controle_transacional:', rpcErr)
       throw new Error(
-        'Gravação bloqueada: o Responsável selecionado não possui ID central válido no Gestor de Acessos.',
+        rpcErr.message ||
+          'Falha transacional ao salvar controle no banco de dados. Todas as alterações foram desfeitas.',
       )
     }
-    if (!targetExecCoreId) {
+
+    const rpcResult = typeof rpcRaw === 'string' ? JSON.parse(rpcRaw) : rpcRaw
+    if (!rpcResult || rpcResult.success !== true) {
+      throw new Error('Falha na confirmação do salvamento transacional pelo servidor.')
+    }
+
+    // Eliminação do sucesso presumido: os dados retornados DEVEM vir do banco
+    const savedCasoDb = rpcResult.caso
+    if (!savedCasoDb || !savedCasoDb.id || !savedCasoDb.updated_at) {
       throw new Error(
-        'Gravação bloqueada: o Executor selecionado não possui ID central válido no Gestor de Acessos.',
+        'Falha na confirmação do salvamento: o servidor não retornou os dados reais gravados do caso.',
       )
     }
 
-    // Resolução de IDs operacionais legados (Fase de Transição):
-    // Se o input já veio com um ID operacional legado explícito (ex.: edição de caso antigo não alterado ou usuário legado),
-    // preserva-o; se for nulo ou se for igual ao ID central, NUNCA colar o ID central nas colunas operacionais legadas
-    // (deve ser gravado como null, preparando a exclusão final da tabela task_usuarios).
-    let opRespId: string | null = null
-    if (input.responsavel_usuario_id && input.responsavel_usuario_id !== targetRespCoreId) {
-      opRespId = input.responsavel_usuario_id
+    const tarefaId = savedCasoDb.id
+    const transicaoId = rpcResult.transicao_id || null
+    const perdaAcesso = Boolean(rpcResult.perda_acesso)
+    const provsDb = rpcResult.providencias || []
+
+    // Notifica auto-arquivamento se status finalizou
+    if (savedCasoDb.arquivado_at && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ricci:controles-changed', {
+          detail: { action: 'auto-archive', controleId: tarefaId },
+        }),
+      )
     }
 
-    let opExecId: string | null = null
-    if (input.executor_usuario_id && input.executor_usuario_id !== targetExecCoreId) {
-      opExecId = input.executor_usuario_id
-    }
-
-    const nowIso = new Date().toISOString()
-
-    if (input.id && existingRecord) {
-      // Regra de Detecção de Mudança Real na Edição:
-      const cleanNewIdent = input.identificacao_caso.trim()
-      const cleanNewDataAut = input.data_autorizacao || null
-      const cleanNewPrazo = input.prazo_conclusao || null
-      const cleanNewPastaCliente = input.pasta_cliente?.trim() || null
-      const cleanNewPastaRicci = input.pasta_ricci?.trim() || null
-
-      const existingRespCore =
-        existingRecord.responsavel_core_usuario_id || existingRecord.responsavel_usuario_id
-      const existingExecCore =
-        existingRecord.executor_core_usuario_id || existingRecord.executor_usuario_id
-
-      const mudouNome = existingRecord.nome_controle_id !== input.nome_controle_id
-      const mudouIdent = (existingRecord.identificacao_caso || '').trim() !== cleanNewIdent
-      const mudouStatus = existingRecord.status_id !== input.status_id
-      const mudouDataAut =
-        (existingRecord.data_autorizacao ? existingRecord.data_autorizacao.split('T')[0] : null) !==
-        (cleanNewDataAut ? cleanNewDataAut.split('T')[0] : null)
-      const mudouPrazo =
-        (existingRecord.prazo_conclusao ? existingRecord.prazo_conclusao.split('T')[0] : null) !==
-        (cleanNewPrazo ? cleanNewPrazo.split('T')[0] : null)
-      const mudouResp = existingRespCore !== targetRespCoreId
-      const mudouExec = existingExecCore !== targetExecCoreId
-      const mudouPastaCli =
-        (existingRecord.pasta_cliente || '').trim() !== (cleanNewPastaCliente || '')
-      const mudouPastaRicci =
-        (existingRecord.pasta_ricci || '').trim() !== (cleanNewPastaRicci || '')
-      const mudouArquivado = Boolean(statusFinaliza && !existingRecord.arquivado_at)
-
-      const houveMudancaReal =
-        mudouNome ||
-        mudouIdent ||
-        mudouStatus ||
-        mudouDataAut ||
-        mudouPrazo ||
-        mudouResp ||
-        mudouExec ||
-        mudouPastaCli ||
-        mudouPastaRicci ||
-        mudouArquivado
-
-      // Regra: Quando a edição NÃO altera nenhum campo da tarefa, NÃO execute UPDATE em task_tarefas.
-      // Retorne o registro existente hidratado.
-      if (!houveMudancaReal) {
-        const loaded = await this.getControleById(existingRecord.id, usuariosParam)
-        return (loaded || existingRecord) as TaskControleRecord
-      }
-
-      // DETECÇÃO DE REATRIBUIÇÃO E COORDENAÇÃO SEGURA:
-      // Se houver alteração de responsável ou executor (mudouResp || mudouExec),
-      // a reatribuição DEVE ser executada primeiro via RPC autorizada no servidor (task_transferir_atribuicao),
-      // que bloqueia a linha (FOR UPDATE), valida a permissão no estado anterior, valida elegibilidade central
-      // e grava o registro de auditoria da transição.
-      let effectiveUpdatedAt: string | null = null
-      let perdaAcessoPorRpc = false
-
-      if (mudouResp || mudouExec) {
-        // Chamada à RPC autorizada de transição de atribuição
-        const { data: rpcData, error: rpcErr } = await (supabase.rpc as any)(
-          'task_transferir_atribuicao',
-          {
-            p_tarefa_id: input.id,
-            p_novo_responsavel_core_id: targetRespCoreId,
-            p_novo_executor_core_id: targetExecCoreId,
-            p_motivo: 'Reatribuição via edição de controle',
-          },
-        )
-
-        if (rpcErr) {
-          console.error('Falha na RPC task_transferir_atribuicao:', rpcErr)
-          throw new Error(
-            `Falha ao transferir atribuição do caso: ${rpcErr.message || 'Operação negada ou erro interno.'}`,
-          )
-        }
-
-        const parsedRpc = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData
-        if (!parsedRpc || parsedRpc.success !== true) {
-          throw new Error('A transição de atribuição não foi confirmada pelo servidor.')
-        }
-
-        effectiveUpdatedAt = parsedRpc.updated_at || null
-        perdaAcessoPorRpc = Boolean(parsedRpc.perda_acesso)
-      }
-
-      // Se houver outros campos alterados no caso (nome, identificação, status, datas, pastas, arquivado),
-      // atualizamos task_tarefas com os demais dados.
-      const outrosCamposMudaram =
-        mudouNome ||
-        mudouIdent ||
-        mudouStatus ||
-        mudouDataAut ||
-        mudouPrazo ||
-        mudouPastaCli ||
-        mudouPastaRicci ||
-        mudouArquivado
-
-      if (outrosCamposMudaram) {
-        const updatePayload: any = {
-          nome_controle_id: input.nome_controle_id,
-          identificacao_caso: cleanNewIdent,
-          status_id: input.status_id,
-          data_autorizacao: cleanNewDataAut,
-          prazo_conclusao: cleanNewPrazo,
-          pasta_cliente: cleanNewPastaCliente,
-          pasta_ricci: cleanNewPastaRicci,
-          updated_by: userId,
-        }
-
-        // Se NÃO passou pela RPC (atribuição não mudou), inclui os IDs e tokens
-        if (!mudouResp && !mudouExec) {
-          updatePayload.responsavel_usuario_id = opRespId
-          updatePayload.executor_usuario_id = opExecId
-          updatePayload.responsavel_core_usuario_id = targetRespCoreId
-          updatePayload.executor_core_usuario_id = targetExecCoreId
-        }
-
-        if (statusFinaliza) {
-          updatePayload.arquivado_at = existingRecord.arquivado_at || nowIso
-        }
-
-        const { data: updatedRows, error: updateErr } = await supabase
-          .from('task_tarefas')
-          .update(updatePayload)
-          .eq('id', input.id)
-          .select('id, updated_at')
-
-        if (updateErr) {
-          console.error('Erro ao atualizar dados complementares de task_tarefas:', updateErr)
-          throw updateErr
-        }
-
-        if (!updatedRows || updatedRows.length === 0) {
-          // Se não retornou linhas e não houve perda de acesso via RPC anterior, NUNCA presumir sucesso!
-          if (!perdaAcessoPorRpc) {
-            throw new Error(
-              'Falha na gravação do caso: nenhuma linha foi afetada no banco de dados Supabase.',
-            )
-          }
-        } else {
-          effectiveUpdatedAt = updatedRows[0].updated_at
-        }
-      }
-
-      // Validação estrita contra sucesso presumido:
-      // O timestamp atualizado DEVE ter vindo explicitamente do banco (RPC ou UPDATE returning)
-      if (!effectiveUpdatedAt) {
-        throw new Error(
-          'Falha na confirmação do salvamento: o servidor não retornou o timestamp de atualização.',
-        )
-      }
-
-      const updatedTimestamp = effectiveUpdatedAt
-
-      // Notifica alteração global caso tenha sido arquivado automaticamente
-      if (statusFinaliza && typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('ricci:controles-changed', {
-            detail: { action: 'auto-archive', controleId: input.id },
-          }),
-        )
-      }
-
-      // Releitura pós-update resiliente: se getControleById retornar null (por perda de acesso via RLS
-      // ou escopo), monta um snapshot local consistente para que o fluxo conclua sem quebrar.
-      let loaded: TaskControleRecord | null = null
+    // Tentativa de releitura hidratada completa (se o usuário ainda tiver acesso via RLS)
+    let fullyLoaded: TaskControleRecord | null = null
+    if (!perdaAcesso) {
       try {
-        loaded = await this.getControleById(input.id, usuariosParam)
+        fullyLoaded = await this.getControleById(tarefaId, usuariosParam)
       } catch (loadErr) {
-        console.warn('Aviso ao reler controle pós-update (possível perda de escopo):', loadErr)
+        console.warn('Aviso ao reler controle gravado:', loadErr)
       }
-
-      if (loaded) {
-        loaded.updated_at = updatedTimestamp
-        return loaded
-      }
-
-      // Snapshot local seguro caso a releitura não retorne o registro (ex.: perda de acesso)
-      const snapshot: TaskControleRecord = {
-        ...(existingRecord || {}),
-        id: input.id,
-        nome_controle_id: input.nome_controle_id,
-        numero_caso: Number(existingRecord?.numero_caso ?? 0),
-        identificacao_caso: cleanNewIdent,
-        status_id: input.status_id,
-        data_autorizacao: cleanNewDataAut,
-        prazo_conclusao: cleanNewPrazo,
-        responsavel_usuario_id: opRespId || targetRespCoreId,
-        executor_usuario_id: opExecId || targetExecCoreId,
-        responsavel_core_usuario_id: targetRespCoreId,
-        executor_core_usuario_id: targetExecCoreId,
-        pasta_cliente: cleanNewPastaCliente,
-        pasta_ricci: cleanNewPastaRicci,
-        created_at: existingRecord?.created_at || nowIso,
-        updated_at: updatedTimestamp,
-        updated_by: userId,
-        arquivado_at: statusFinaliza
-          ? existingRecord?.arquivado_at || nowIso
-          : existingRecord?.arquivado_at || null,
-        providencias: existingRecord?.providencias || [],
-      }
-      return snapshot
-    } else {
-      const insertPayload: any = {
-        nome_controle_id: input.nome_controle_id,
-        identificacao_caso: input.identificacao_caso.trim(),
-        status_id: input.status_id,
-        data_autorizacao: input.data_autorizacao || null,
-        prazo_conclusao: input.prazo_conclusao || null,
-        responsavel_usuario_id: opRespId,
-        executor_usuario_id: opExecId,
-        responsavel_core_usuario_id: targetRespCoreId,
-        executor_core_usuario_id: targetExecCoreId,
-        pasta_cliente: input.pasta_cliente?.trim() || null,
-        pasta_ricci: input.pasta_ricci?.trim() || null,
-        updated_at: nowIso,
-        created_by: userId || undefined,
-        updated_by: userId,
-      }
-      if (statusFinaliza) {
-        insertPayload.arquivado_at = nowIso
-      }
-
-      const { data, error } = await supabase
-        .from('task_tarefas')
-        .insert(insertPayload)
-        .select()
-        .single()
-
-      if (error) {
-        console.error('Erro ao criar task_tarefas:', error)
-        throw error
-      }
-
-      if (statusFinaliza && typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('ricci:controles-changed', {
-            detail: { action: 'auto-archive', controleId: data.id },
-          }),
-        )
-      }
-
-      const loaded = await this.getControleById(data.id, usuariosParam)
-      return (loaded || data) as TaskControleRecord
     }
+
+    // Se houve perda de acesso ou releitura não retornou, monta a estrutura a partir dos
+    // DADOS REAIS EFETIVAMENTE RETORNADOS PELO BANCO (nunca snapshot local fabricado)
+    let finalControle: TaskControleRecord
+    if (fullyLoaded) {
+      finalControle = fullyLoaded
+    } else {
+      // Hidrata com catálogos conhecidos mantendo os dados exatos do banco
+      const statusFinal = usuariosParam ? null : null
+      finalControle = {
+        ...savedCasoDb,
+        numero_caso: Number(savedCasoDb.numero_caso ?? 0),
+        providencias: provsDb,
+      } as TaskControleRecord
+    }
+
+    return {
+      controle: finalControle,
+      transicao_id: transicaoId,
+      perda_acesso: perdaAcesso,
+      providencias: provsDb,
+    }
+  },
+
+  async saveControle(
+    input: SaveControleInput,
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+  ): Promise<TaskControleRecord> {
+    const result = await this.saveControleTransacional(input, usuariosParam)
+    return result.controle
   },
 
   /**
@@ -1348,6 +1188,7 @@ export const controleService = {
   async notifyAssignment(
     tarefaId: string,
     tipo: 'nova_atribuicao' | 'alteracao_atribuicao' | 'atribuicao',
+    transicaoId?: string | null,
   ): Promise<{
     success: boolean
     sent?: boolean
@@ -1358,6 +1199,7 @@ export const controleService = {
     return this.invokeTaskEmailNotification({
       tarefa_id: tarefaId,
       tipo,
+      transicao_id: transicaoId || undefined,
     })
   },
 
@@ -1413,6 +1255,7 @@ export const controleService = {
       | 'atribuicao'
       | 'providencia_inclusao'
       | 'providencia_atualizacao'
+    transicao_id?: string
   }): Promise<{
     success: boolean
     sent?: boolean

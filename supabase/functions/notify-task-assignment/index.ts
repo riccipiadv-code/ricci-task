@@ -122,7 +122,7 @@ Deno.serve(async (req: Request) => {
 
     // 2. Extrair parâmetros
     const body = await req.json().catch(() => ({}))
-    const { tarefa_id, providencia_id, tipo } = body
+    const { tarefa_id, providencia_id, tipo, transicao_id } = body
 
     if (!tarefa_id) {
       return new Response(JSON.stringify({ error: 'Parâmetro tarefa_id é obrigatório.' }), {
@@ -280,15 +280,41 @@ Deno.serve(async (req: Request) => {
       // Se o chamador NÃO possui mais acesso ao escopo ATUAL da tarefa (ex.: transferiu o caso e perdeu acesso),
       // e o evento for de atribuição, verifica se existe um registro de transição correspondente
       // (autor_core_id = chamador, tarefa_id = caso, validado no servidor pela RPC).
+      let transitionObject: any = null
       if (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') {
         const transCheck = await checkTransitionNotificationAccess(
           supabase,
           callerCheck.coreUser.id,
-          tarefa,
+          {
+            transicaoId: transicao_id || null,
+            tipoEvento: dbTipoEvento,
+            tarefa: {
+              id: tarefa.id,
+              responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
+              executor_core_usuario_id: tarefa.executor_core_usuario_id,
+              updated_at: tarefa.updated_at,
+              created_at: tarefa.created_at,
+            },
+          },
         )
+
+        if (transCheck.status === 'technical_failure') {
+          return new Response(
+            JSON.stringify({
+              error:
+                transCheck.error ||
+                'Falha técnica de comunicação ao consultar transição no banco de dados.',
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
 
         if (transCheck.allowed) {
           authorizedByTransition = true
+          transitionObject = transCheck.transition
         }
       }
 
@@ -585,8 +611,13 @@ Deno.serve(async (req: Request) => {
         tarefa.responsavel_usuario_id,
         tarefa.responsavel_core_usuario_id,
       )
-      const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
-      eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${execToken}:${respToken}`
+      if (transicao_id || transitionObject?.id) {
+        const tid = transicao_id || transitionObject.id
+        eventKey = `atribuicao:${tarefa.id}:transicao:${tid}`
+      } else {
+        const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
+        eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${execToken}:${respToken}`
+      }
     } else if (dbTipoEvento === 'providencia_inclusao') {
       eventKey = `providencia_inclusao:${providenciaAlvo.id}`
     } else {

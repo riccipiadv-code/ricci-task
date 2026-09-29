@@ -5263,22 +5263,27 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
             }
           }
           if (table === 'task_transicoes_atribuicao') {
-            return {
-              select: () => ({
-                eq: (_col1: string, _val1: any) => ({
-                  eq: (_col2: string, _val2: any) =>
-                    Promise.resolve({
-                      data: [
-                        {
-                          id: 'trans-valid-1',
-                          tarefa_id: 'task-transf-ok',
-                          autor_core_id: 'cu-antigo-dono',
-                        },
-                      ],
-                      error: null,
-                    }),
+            const chain: any = {
+              eq: () => chain,
+              order: () => chain,
+              limit: () =>
+                Promise.resolve({
+                  data: [
+                    {
+                      id: 'trans-valid-1',
+                      tarefa_id: 'task-transf-ok',
+                      autor_core_id: 'cu-antigo-dono',
+                      novo_responsavel_core_id: 'cu-novo-resp',
+                      novo_executor_core_id: 'cu-novo-exec',
+                      versao_resultante_updated_at: '2025-05-10T15:00:00Z',
+                      created_at: '2025-05-10T15:00:00Z',
+                    },
+                  ],
+                  error: null,
                 }),
-              }),
+            }
+            return {
+              select: () => chain,
             }
           }
           if (table === 'task_email_eventos') {
@@ -5311,6 +5316,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
         body: JSON.stringify({
           tarefa_id: 'task-transf-ok',
           tipo: 'alteracao_atribuicao',
+          transicao_id: 'trans-valid-1',
         }),
       })
 

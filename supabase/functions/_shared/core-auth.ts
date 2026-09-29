@@ -632,27 +632,68 @@ export async function checkTaskAccessScope(
  *
  * Retorna { allowed: boolean; transition?: any; error?: string }
  */
+export interface CheckTransitionNotificationParams {
+  transicaoId?: string | null
+  tipoEvento: string
+  tarefa: {
+    id: string
+    responsavel_core_usuario_id?: string | null
+    executor_core_usuario_id?: string | null
+    updated_at?: string | null
+    created_at?: string | null
+  }
+}
+
+export type TransitionAccessStatus = 'ok' | 'denied' | 'technical_failure'
+
+/**
+ * Validação de autorização para notificação de reatribuição baseada no registro de transição:
+ * Valida estritamente:
+ * - autor da transição = chamador (callerCoreId);
+ * - caso da transição = caso do evento (tarefa.id);
+ * - tipo de evento corresponde (alteração de atribuição);
+ * - versão resultante da transição bate com o estado atual gravado do caso (updated_at);
+ * - atribuições da transição (novo_responsavel_core_id / novo_executor_core_id) correspondem às atuais da tarefa;
+ * - transição antiga NÃO pode autorizar envio referente ao estado atual de outra alteração.
+ * - Erro de consulta ao verificar a transição deve retornar erro técnico recuperável (fail-closed, retry possível).
+ */
 export async function checkTransitionNotificationAccess(
   supabase: SupabaseClient,
   callerCoreId: string,
-  tarefa: {
-    id: string
-    updated_at?: string | null
-    created_at?: string | null
-  },
-): Promise<{ allowed: boolean; transition?: any; error?: string }> {
-  if (!callerCoreId || !tarefa?.id) {
-    return { allowed: false, error: 'Identificadores incompletos para validação de transição.' }
+  params: CheckTransitionNotificationParams,
+): Promise<{ allowed: boolean; status: TransitionAccessStatus; transition?: any; error?: string }> {
+  if (!callerCoreId || !params?.tarefa?.id) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error: 'Identificadores incompletos para validação de transição.',
+    }
+  }
+
+  // Validação do tipo de evento: transição de atribuição só autoriza eventos de alteração de atribuição
+  const allowedEvents = ['alteracao_atribuicao', 'atribuicao']
+  if (!allowedEvents.includes(params.tipoEvento)) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error: 'A transição de atribuição não autoriza notificações deste tipo de evento.',
+    }
   }
 
   try {
-    const { data: transitions, error: transError } = await supabase
+    let query = supabase
       .from('task_transicoes_atribuicao')
       .select(
-        'id, tarefa_id, autor_core_id, versao_anterior_updated_at, perda_acesso_autor, created_at',
+        'id, tarefa_id, autor_core_id, novo_responsavel_core_id, novo_executor_core_id, versao_anterior_updated_at, versao_resultante_updated_at, perda_acesso_autor, created_at',
       )
-      .eq('tarefa_id', tarefa.id)
+      .eq('tarefa_id', params.tarefa.id)
       .eq('autor_core_id', callerCoreId)
+
+    if (params.transicaoId) {
+      query = query.eq('id', params.transicaoId)
+    }
+
+    const { data: transitions, error: transError } = await query
       .order('created_at', { ascending: false })
       .limit(5)
 
@@ -663,6 +704,7 @@ export async function checkTransitionNotificationAccess(
       )
       return {
         allowed: false,
+        status: 'technical_failure',
         error: 'Falha técnica ao verificar registro de transição no banco de dados.',
       }
     }
@@ -670,17 +712,61 @@ export async function checkTransitionNotificationAccess(
     if (!transitions || transitions.length === 0) {
       return {
         allowed: false,
+        status: 'denied',
         error: 'Nenhum registro de transição autorizado encontrado para este autor neste caso.',
       }
     }
 
-    // Se encontrou transição do mesmo autor para a mesma tarefa
-    const matchingTransition = transitions[0]
-    return { allowed: true, transition: matchingTransition }
+    // Encontrar transição que corresponda exatamente ao estado gravado atual da tarefa:
+    // 1. Autor = chamador (já filtrado pelo eq autor_core_id)
+    // 2. Tarefa = tarefa.id (já filtrado pelo eq tarefa_id)
+    // 3. Destinatários da transição batem com os destinatários atuais da tarefa
+    // 4. Se a transição possuir versao_resultante_updated_at gravada, deve bater com o updated_at da tarefa
+    //    (ou created_at em caso de transição mais recente sem updated_at novo)
+    const tarefaUpdatedStamp = params.tarefa.updated_at || params.tarefa.created_at || null
+    const tarefaRespCore = params.tarefa.responsavel_core_usuario_id || null
+    const tarefaExecCore = params.tarefa.executor_core_usuario_id || null
+
+    const matchingTransition = transitions.find((t: any) => {
+      // Se um transicaoId explícito foi solicitado, ele deve ser exatamente este
+      if (params.transicaoId && t.id !== params.transicaoId) {
+        return false
+      }
+
+      // Validar correspondência de atribuições da transição com a tarefa atual
+      const matchResp = t.novo_responsavel_core_id === tarefaRespCore
+      const matchExec = t.novo_executor_core_id === tarefaExecCore
+      if (!matchResp || !matchExec) {
+        return false
+      }
+
+      // Se possui versao_resultante_updated_at registrada, ela deve bater com a versão atual da tarefa
+      if (t.versao_resultante_updated_at && tarefaUpdatedStamp) {
+        const transResultStamp = new Date(t.versao_resultante_updated_at).getTime()
+        const currentStamp = new Date(tarefaUpdatedStamp).getTime()
+        if (transResultStamp !== currentStamp) {
+          return false
+        }
+      }
+
+      return true
+    })
+
+    if (!matchingTransition) {
+      return {
+        allowed: false,
+        status: 'denied',
+        error:
+          'A transição informada não corresponde ao estado atual gravado do caso (versão ou destinatários divergentes). Transições antigas não podem autorizar novas notificações.',
+      }
+    }
+
+    return { allowed: true, status: 'ok', transition: matchingTransition }
   } catch (err: any) {
-    console.error('[core-auth] Exceção ao verificar transição:', err)
+    console.error('[core-auth] Exceção técnica ao verificar transição:', err)
     return {
       allowed: false,
+      status: 'technical_failure',
       error: 'Exceção técnica ao verificar registro de transição.',
     }
   }

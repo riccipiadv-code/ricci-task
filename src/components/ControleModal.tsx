@@ -869,6 +869,81 @@ export function ControleModal({
         ? controleToEdit.executor_usuario_id
         : undefined
 
+    // Preparação de providências com sanitização de campos para envio na transação única
+    const provsToSave: any[] = []
+    const prevProvidenciasMap = new Map<
+      string,
+      {
+        providencia: string
+        prazo_conclusao: string | null
+        tipo_prazo_id: string | null
+        status_id: string | null
+      }
+    >()
+    if (controleToEdit?.providencias) {
+      for (const p of controleToEdit.providencias) {
+        if (p.id) {
+          prevProvidenciasMap.set(p.id, {
+            providencia: (p.providencia || '').trim(),
+            prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null,
+            tipo_prazo_id: p.tipo_prazo_id || null,
+            status_id: p.status_id || null,
+          })
+        }
+      }
+    }
+
+    const providenciasParaNotificarInclusao: string[] = []
+    const providenciasParaNotificarAtualizacao: string[] = []
+
+    for (const p of providencias) {
+      const st = statusProvLista.find((s) => s.id === p.status_id)
+      const cod = st?.codigo?.toLowerCase() || ''
+      const exigeData = cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
+      const dtConclusao = exigeData ? (p.data_conclusao ? p.data_conclusao.trim() : null) : null
+
+      const isNovaProvidencia = !p.id || !p.isPersisted
+      const pProvTrimmed = p.providencia.trim()
+      const pPrazoClean = p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null
+
+      provsToSave.push({
+        id: p.id || undefined,
+        providencia: pProvTrimmed,
+        prazo_conclusao: p.prazo_conclusao,
+        tipo_prazo_id: p.tipo_prazo_id,
+        status_id: p.status_id,
+        ordem: p.ordem ?? 0,
+        data_conclusao: dtConclusao,
+        email_alertas: p.email_alertas ?? false,
+        email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+        email_alerta_atraso: p.email_alerta_atraso ?? false,
+        email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
+      })
+
+      let houveMudancaReal = false
+      if (!isNovaProvidencia && p.id) {
+        const prev = prevProvidenciasMap.get(p.id)
+        if (prev) {
+          const mudouDesc = prev.providencia !== pProvTrimmed
+          const mudouPrazo = prev.prazo_conclusao !== pPrazoClean
+          const mudouTipo = prev.tipo_prazo_id !== p.tipo_prazo_id
+          const mudouStatus = prev.status_id !== p.status_id
+          houveMudancaReal = mudouDesc || mudouPrazo || mudouTipo || mudouStatus
+        }
+      }
+
+      if (isNovaProvidencia) {
+        if (p.email_alertas && p.email_alerta_inclusao) {
+          // Salva tempId ou desc para mapear pós gravação
+          providenciasParaNotificarInclusao.push(p.tempId || pProvTrimmed)
+        }
+      } else if (p.id) {
+        if (p.email_alertas && p.email_alerta_atualizacao && houveMudancaReal) {
+          providenciasParaNotificarAtualizacao.push(p.id)
+        }
+      }
+    }
+
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
       nome_controle_id: nomeControleId,
@@ -882,6 +957,7 @@ export function ControleModal({
       executor_core_usuario_id: execCoreId || null,
       pasta_cliente: pastaCliente.trim() || null,
       pasta_ricci: pastaRicci.trim() || null,
+      providencias: provsToSave,
     }
 
     // Detecção de alteração de atribuição (para disparar notificação): compara IDs CENTRAIS.
@@ -899,100 +975,24 @@ export function ControleModal({
 
     setSaving(true)
     try {
-      // 1. Mapa dos valores anteriores das providências existentes antes de salvar (para detecção de alteração real)
-      const prevProvidenciasMap = new Map<
-        string,
-        {
-          providencia: string
-          prazo_conclusao: string | null
-          tipo_prazo_id: string | null
-          status_id: string | null
-        }
-      >()
-      if (controleToEdit?.providencias) {
-        for (const p of controleToEdit.providencias) {
-          if (p.id) {
-            prevProvidenciasMap.set(p.id, {
-              providencia: (p.providencia || '').trim(),
-              prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null,
-              tipo_prazo_id: p.tipo_prazo_id || null,
-              status_id: p.status_id || null,
-            })
-          }
-        }
-      }
+      // PONTO 1: SALVAMENTO ATÔMICO EM UMA ÚNICA TRANSAÇÃO NO SERVIDOR
+      // Grava caso + atribuição + providências all-or-nothing
+      const saveResult = await controleService.saveControleTransacional(payload, usuariosLista)
+      const savedControle = saveResult.controle
+      const transicaoId = saveResult.transicao_id || null
 
-      // 2. Salva o controle principal em task_tarefas
-      const savedControle = await controleService.saveControle(payload, usuariosLista)
-
-      // 3. Salva as providências preservando rigorosamente a sequência (ordem) de cada uma e detecta eventos
-      const providenciasParaNotificarInclusao: string[] = []
-      const providenciasParaNotificarAtualizacao: string[] = []
-
-      if (providencias.length > 0) {
-        for (const p of providencias) {
-          const st = statusProvLista.find((s) => s.id === p.status_id)
-          const cod = st?.codigo?.toLowerCase() || ''
-          const exigeData = cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
-          const dtConclusao = exigeData ? (p.data_conclusao ? p.data_conclusao.trim() : null) : null
-
-          const isNovaProvidencia = !p.id || !p.isPersisted
-          const pProvTrimmed = p.providencia.trim()
-          const pPrazoClean = p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null
-
-          let houveMudancaReal = false
-          if (!isNovaProvidencia && p.id) {
-            const prev = prevProvidenciasMap.get(p.id)
-            if (prev) {
-              const mudouDesc = prev.providencia !== pProvTrimmed
-              const mudouPrazo = prev.prazo_conclusao !== pPrazoClean
-              const mudouTipo = prev.tipo_prazo_id !== p.tipo_prazo_id
-              const mudouStatus = prev.status_id !== p.status_id
-              houveMudancaReal = mudouDesc || mudouPrazo || mudouTipo || mudouStatus
-            }
-          }
-
-          const savedProv = await controleService.saveProvidencia({
-            id: p.id,
-            tarefa_id: savedControle.id,
-            providencia: pProvTrimmed,
-            prazo_conclusao: p.prazo_conclusao,
-            tipo_prazo_id: p.tipo_prazo_id,
-            status_id: p.status_id,
-            ordem: p.ordem ?? 0,
-            data_conclusao: dtConclusao,
-            email_alertas: p.email_alertas ?? false,
-            email_alerta_inclusao: p.email_alerta_inclusao ?? false,
-            email_alerta_atraso: p.email_alerta_atraso ?? false,
-            email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
-          })
-
-          // Avaliar se deve enfileirar alerta de e-mail para esta providência salva
-          if (isNovaProvidencia) {
-            if (savedProv.email_alertas && savedProv.email_alerta_inclusao) {
-              providenciasParaNotificarInclusao.push(savedProv.id)
-            }
-          } else {
-            if (savedProv.email_alertas && savedProv.email_alerta_atualizacao && houveMudancaReal) {
-              providenciasParaNotificarAtualizacao.push(savedProv.id)
-            }
-          }
-        }
-      }
-
-      // 4. Recarrega controle completo com relacionamentos hidratados
-      const fullyLoaded = await controleService.getControleById(savedControle.id, usuariosLista)
-      onSaved(fullyLoaded || savedControle)
+      onSaved(savedControle)
 
       // 5. Disparo de notificações por e-mail DEPOIS que controle e todas as providências foram salvos com sucesso
       let emailFalhou = false
 
-      // 5.1. Atribuição principal
+      // 5.1. Atribuição principal — PONTO 3: transporta o transicao_id retornado pelo servidor
       if (tipoNotificacao) {
         try {
           const notifResult = await controleService.notifyAssignment(
             savedControle.id,
             tipoNotificacao,
+            transicaoId,
           )
           if (!notifResult.success) {
             emailFalhou = true

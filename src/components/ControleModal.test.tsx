@@ -17,6 +17,7 @@ vi.mock('@/services/controleService', () => ({
     getUsuariosAtivos: vi.fn(),
     getTodosUsuarios: vi.fn(),
     saveControle: vi.fn(),
+    saveControleTransacional: vi.fn(),
     saveProvidencia: vi.fn(),
     getControleById: vi.fn(),
     notifyAssignment: vi.fn(),
@@ -175,7 +176,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     expect(salvarBtn).toBeDefined()
 
     salvarBtn.click()
-    expect(controleService.saveControle).not.toHaveBeenCalled()
+    expect(controleService.saveControleTransacional).not.toHaveBeenCalled()
   })
 
   it('permite seleção e salvamento de pessoa elegível central mesmo sem ponte operacional em task_usuarios', async () => {
@@ -219,7 +220,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     salvarBtn.click()
 
     // Campos obrigatórios de formulário vazio impedem saveControle, mas a pessoa sem ponte não gera erro prévio
-    expect(controleService.saveControle).not.toHaveBeenCalled()
+    expect(controleService.saveControleTransacional).not.toHaveBeenCalled()
   })
 
   it('bloqueia abertura e fecha modal quando caso está fora do escopo do usuário OPERACIONAL', async () => {
