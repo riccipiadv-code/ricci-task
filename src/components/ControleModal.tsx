@@ -274,11 +274,16 @@ export function ControleModal({
               (tu.id === respId || tu.id === execId) &&
               !listaCombinada.some((u) => u.id === tu.id)
             ) {
+              const matchedCoreId =
+                tu.id === respId
+                  ? controleToEdit?.responsavel_core_usuario_id || tu.core_usuario_id
+                  : controleToEdit?.executor_core_usuario_id || tu.core_usuario_id
               listaCombinada.push({
                 id: tu.id,
                 nome: tu.nome,
                 email: tu.email,
                 ativo: tu.ativo,
+                core_usuario_id: matchedCoreId || null,
               })
             }
           })
@@ -750,6 +755,24 @@ export function ControleModal({
       }
     }
 
+    // Resolve os vínculos centrais a partir da lista validada ou preservada:
+    // Se o usuário não alterou a pessoa na edição, preserva o core_usuario_id existente de controleToEdit
+    const isEditMode = Boolean(controleToEdit?.id)
+    const respNaoMudou =
+      isEditMode && responsavelUsuarioId === controleToEdit?.responsavel_usuario_id
+    const execNaoMudou = isEditMode && executorUsuarioId === controleToEdit?.executor_usuario_id
+
+    const selectedResp = usuariosLista.find((u) => u.id === responsavelUsuarioId)
+    const selectedExec = usuariosLista.find((u) => u.id === executorUsuarioId)
+
+    const respCoreId = respNaoMudou
+      ? controleToEdit?.responsavel_core_usuario_id || selectedResp?.core_usuario_id || null
+      : selectedResp?.core_usuario_id || null
+
+    const execCoreId = execNaoMudou
+      ? controleToEdit?.executor_core_usuario_id || selectedExec?.core_usuario_id || null
+      : selectedExec?.core_usuario_id || null
+
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
       nome_controle_id: nomeControleId,
@@ -759,6 +782,8 @@ export function ControleModal({
       prazo_conclusao: prazoConclusao || null,
       responsavel_usuario_id: responsavelUsuarioId,
       executor_usuario_id: executorUsuarioId,
+      responsavel_core_usuario_id: respCoreId,
+      executor_core_usuario_id: execCoreId,
       pasta_cliente: pastaCliente.trim() || null,
       pasta_ricci: pastaRicci.trim() || null,
     }

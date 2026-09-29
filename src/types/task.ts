@@ -57,6 +57,7 @@ export interface TaskUsuarioAtivoRecord {
   nome: string
   email?: string
   ativo?: boolean
+  core_usuario_id?: string | null
 }
 
 export interface TaskUsuarioRecord {
@@ -64,6 +65,7 @@ export interface TaskUsuarioRecord {
   nome: string
   email: string
   ativo: boolean
+  core_usuario_id?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -110,6 +112,8 @@ export interface TaskControleRecord {
   prazo_conclusao: string | null
   responsavel_usuario_id: string
   executor_usuario_id: string
+  responsavel_core_usuario_id?: string | null
+  executor_core_usuario_id?: string | null
   pasta_cliente: string | null
   pasta_ricci: string | null
   created_at: string
@@ -143,6 +147,8 @@ export interface SaveControleInput {
   prazo_conclusao?: string | null
   responsavel_usuario_id: string
   executor_usuario_id: string
+  responsavel_core_usuario_id?: string | null
+  executor_core_usuario_id?: string | null
   pasta_cliente?: string | null
   pasta_ricci?: string | null
 }
