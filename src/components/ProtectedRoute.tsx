@@ -2,14 +2,26 @@ import { useEffect, useRef, useState } from 'react'
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { SplashScreen } from './SplashScreen'
+import { AccessErrorScreen } from './AccessErrorScreen'
 import Layout from './Layout'
 
 /**
  * Protege rotas internas do sistema: se não houver usuário/sessão ativa, redireciona para /login.
  * Enquanto a autenticação estiver carregando a sessão inicial ou a autorização central, exibe o SplashScreen.
+ * Quando ocorrer erro técnico de comunicação com o Gestor de Acessos (accessStatus === 'error'),
+ * as rotas internas permanecem BLOQUEADAS e exibe-se a AccessErrorScreen com "Tentar novamente".
  */
 export function ProtectedLayout() {
-  const { session, loading, loadingAccess, hasSystemAccess, accessStatus, signOut } = useAuth()
+  const {
+    session,
+    loading,
+    loadingAccess,
+    hasSystemAccess,
+    accessStatus,
+    coreErrorMessage,
+    refreshAccess,
+    signOut,
+  } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const isSigningOutRef = useRef(false)
@@ -73,15 +85,18 @@ export function ProtectedLayout() {
   }
 
   // 5. Erro técnico comprovado na leitura das tabelas core_*
-  // Manter TEMPORARIAMENTE o comportamento legado baseado em sessão autenticada (fail-open)
+  // Etapa 1: Bloquear rotas internas (sem fail-open legado). Exibir tela de erro com "Tentar novamente" e "Sair".
   if (accessStatus === 'error') {
-    console.warn(
-      '[ProtectedLayout] Falha técnica ao consultar Gestor de Acessos. Aplicando fail-open temporário baseado em sessão.',
-    )
     return (
-      <Layout>
-        <Outlet />
-      </Layout>
+      <AccessErrorScreen
+        onRetry={refreshAccess}
+        onSignOut={async () => {
+          await signOut()
+          navigate('/login', { replace: true })
+        }}
+        isRetrying={loadingAccess}
+        errorMessage={coreErrorMessage}
+      />
     )
   }
 
@@ -101,20 +116,47 @@ export function ProtectedLayout() {
 /**
  * Rota pública de login: se já houver sessão ativa e autorizada, redireciona para "/"
  * Alinhada com ProtectedRoute: aguarda autenticação e resolução de acesso da sessão atual.
+ * Se houver sessão mas accessStatus === 'error', NÃO redireciona para "/" nem abre rota interna:
+ * exibe a AccessErrorScreen com "Tentar novamente" e opção de sair.
  */
 export function PublicRoute({ children }: { children: React.ReactNode }) {
-  const { session, loading, loadingAccess, hasSystemAccess, accessStatus } = useAuth()
+  const {
+    session,
+    loading,
+    loadingAccess,
+    hasSystemAccess,
+    accessStatus,
+    coreErrorMessage,
+    refreshAccess,
+    signOut,
+  } = useAuth()
+  const navigate = useNavigate()
 
   // 1. Aguarda resolução de auth e autorização da sessão atual
   if (loading || (session && loadingAccess)) {
     return <SplashScreen />
   }
 
-  // 2. Se tem sessão ativa e acesso autorizado (ou erro técnico fail-open), redireciona para o sistema
-  if (session && (hasSystemAccess || accessStatus === 'error')) {
+  // 2. Se tem sessão ativa com erro técnico na consulta central, NÃO redireciona para interna
+  if (session && accessStatus === 'error') {
+    return (
+      <AccessErrorScreen
+        onRetry={refreshAccess}
+        onSignOut={async () => {
+          await signOut()
+          navigate('/login', { replace: true })
+        }}
+        isRetrying={loadingAccess}
+        errorMessage={coreErrorMessage}
+      />
+    )
+  }
+
+  // 3. Se tem sessão ativa e acesso autorizado, redireciona para o sistema
+  if (session && hasSystemAccess) {
     return <Navigate to="/" replace />
   }
 
-  // 3. Se não tem sessão, ou sessão com no_access/disabled (que deve ver a tela de login), renderiza login
+  // 4. Se não tem sessão, ou sessão com no_access/disabled (que deve ver a tela de login), renderiza login
   return <>{children}</>
 }

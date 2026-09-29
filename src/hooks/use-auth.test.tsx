@@ -440,8 +440,8 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.accessStatus).toBe('ok')
   })
 
-  // 9. falha técnica -> accessStatus=error (fail-open); recuperação posterior via refreshAccess funciona
-  it('9. falha técnica -> accessStatus=error (fail-open); recuperação posterior via refreshAccess funciona', async () => {
+  // 9. falha técnica -> accessStatus=error (bloqueado na camada de rotas); recuperação posterior via refreshAccess funciona
+  it('9. falha técnica -> accessStatus=error (bloqueado na camada de rotas); recuperação posterior via refreshAccess funciona', async () => {
     vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockRejectedValueOnce(
       new Error('Erro de conexão ao banco'),
     )
