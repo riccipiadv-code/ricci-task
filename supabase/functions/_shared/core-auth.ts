@@ -350,13 +350,11 @@ export async function resolveValidatedRecipientByCoreId(
 }
 
 /**
- * Valida destinatário de caso a partir do seu ID em task_usuarios (com fallback quando core_usuario_id não vier gravado diretamente na tarefa):
- * 1. Consulta task_usuarios pelo ID gravado no caso (para obter core_usuario_id e nome histórico)
- * 2. Se não possuir core_usuario_id ou task_usuarios não for encontrado: vínculo inválido
- * 3. Valida no Gestor de Acessos Ricci via resolveValidatedRecipientByCoreId.
- *    IMPORTANTE: task_usuarios.ativo = false NÃO bloqueia mais a validação caso a pessoa esteja ativa no core.
- * 4. Diferencia FALHA TÉCNICA (erro de rede/leitura) de VÍNCULO INVALIDADO (inativo, sem vínculo).
- *    NUNCA faz fallback para o e-mail local antigo de task_usuarios.
+ * Valida destinatário de caso a partir de identificador (com compatibilidade de assinatura):
+ * Elimina qualquer consulta a task_usuarios.
+ * Resolve exclusivamente via resolveValidatedRecipientByCoreId no Gestor de Acessos Ricci.
+ * Valida: usuário central ativo, vínculo com RICCI_TASK ativo, sistema e perfil ativos.
+ * Diferencia FALHA TÉCNICA (500) de VÍNCULO INVALIDADO (invalid_link).
  */
 export async function resolveValidatedTaskUserEmailDetailed(
   supabase: SupabaseClient,
@@ -370,47 +368,9 @@ export async function resolveValidatedTaskUserEmailDetailed(
     }
   }
 
-  // 1. Obter registro de task_usuarios
-  let taskUserResult: any
-  try {
-    taskUserResult = await supabase
-      .from('task_usuarios')
-      .select('id, core_usuario_id, nome, email, ativo')
-      .eq('id', taskUsuarioId)
-      .maybeSingle()
-  } catch (err: any) {
-    console.error('[core-auth] Falha técnica ao consultar task_usuarios:', err)
-    return {
-      status: 'technical_failure',
-      recipient: null,
-      error: err?.message || 'Falha técnica de comunicação ao consultar task_usuarios',
-    }
-  }
-
-  const { data: taskUser, error: taskUserError } = taskUserResult
-
-  if (taskUserError) {
-    console.error('[core-auth] Erro ao consultar task_usuarios:', taskUserError)
-    return {
-      status: 'technical_failure',
-      recipient: null,
-      error: taskUserError.message || 'Falha de leitura em task_usuarios',
-    }
-  }
-
-  if (!taskUser || !taskUser.core_usuario_id) {
-    return {
-      status: 'invalid_link',
-      recipient: null,
-      error: !taskUser
-        ? 'Usuário operacional não encontrado'
-        : 'Usuário sem vínculo central (core_usuario_id ausente)',
-    }
-  }
-
-  // 2. Valida no Gestor de Acessos via core_usuario_id
-  // task_usuarios.ativo = false NÃO bloqueia uma pessoa válida no core!
-  const coreResolution = await resolveValidatedRecipientByCoreId(supabase, taskUser.core_usuario_id)
+  // No corte definitivo para IDs centrais, task_usuarios NÃO é consultada.
+  // Trata o identificador diretamente como core_usuario_id via resolveValidatedRecipientByCoreId.
+  const coreResolution = await resolveValidatedRecipientByCoreId(supabase, taskUsuarioId)
 
   if (coreResolution.status !== 'valid' || !coreResolution.recipient) {
     return coreResolution
@@ -419,9 +379,9 @@ export async function resolveValidatedTaskUserEmailDetailed(
   return {
     status: 'valid',
     recipient: {
-      taskUsuarioId: taskUser.id,
+      taskUsuarioId,
       coreUsuarioId: coreResolution.recipient.coreUsuarioId,
-      nome: coreResolution.recipient.nome || taskUser.nome,
+      nome: coreResolution.recipient.nome,
       email: coreResolution.recipient.email,
     },
   }

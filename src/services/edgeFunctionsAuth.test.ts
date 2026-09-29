@@ -29,122 +29,26 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
     })
   })
 
-  describe('resolveValidatedTaskUserEmailDetailed e resolveValidatedTaskUserEmail', () => {
-    it('retorna missing_user_id quando taskUsuarioId for vazio ou nulo', async () => {
+  describe('resolveValidatedRecipientByCoreId e compatibilidade de resolução', () => {
+    it('retorna missing_user_id quando coreUsuarioId for vazio ou nulo', async () => {
       const mockSupabase = {} as any
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, '')
+      const res = await resolveValidatedRecipientByCoreId(mockSupabase, '')
       expect(res.status).toBe('missing_user_id')
       expect(res.recipient).toBeNull()
+
+      const resDetailed = await resolveValidatedTaskUserEmailDetailed(mockSupabase, '')
+      expect(resDetailed.status).toBe('missing_user_id')
 
       const resLegacy = await resolveValidatedTaskUserEmail(mockSupabase, '')
       expect(resLegacy).toBeNull()
     })
 
-    it('retorna invalid_link se o usuário não existir em task_usuarios', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({
-                data: null,
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      } as any
-
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-inexistente')
-      expect(res.status).toBe('invalid_link')
-      expect(res.recipient).toBeNull()
-      expect(res.error).toContain('Usuário operacional não encontrado')
-    })
-
-    it('retorna invalid_link se o usuário não possuir core_usuario_id', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({
-                data: {
-                  id: 'tu-sem-core',
-                  core_usuario_id: null,
-                  nome: 'Sem Core',
-                  email: 'sem.core@legado.com',
-                  ativo: true,
-                },
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      } as any
-
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-sem-core')
-      expect(res.status).toBe('invalid_link')
-      expect(res.recipient).toBeNull()
-      expect(res.error).toContain('core_usuario_id ausente')
-    })
-
-    it('ponte local inativa com core ativo: resolve com sucesso e NÃO bloqueia pessoa válida no core', async () => {
+    it('resolveValidatedRecipientByCoreId: valida diretamente usuário ativo, vínculo com RICCI_TASK ativo, sistema e perfil ativos (SEM consultar task_usuarios)', async () => {
       const mockSupabase = {
         from: vi.fn().mockImplementation((table: string) => {
           if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: 'tu-inativo-local',
-                        core_usuario_id: 'cu-ativo-central',
-                        nome: 'Inativo Local mas Ativo Central',
-                        email: 'inativo.local@legado.com',
-                        ativo: false, // Inativo na ponte local!
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
+            throw new Error('task_usuarios NÃO deve ser consultada!')
           }
-          if (table === 'core_usuario_sistemas') {
-            const chain: any = {
-              eq: () => chain,
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: {
-                    id: 'link-ativo',
-                    ativo: true,
-                    core_usuarios: {
-                      id: 'cu-ativo-central',
-                      nome: 'Nome Atual Central',
-                      email: 'valido.central@riccipi.com.br',
-                      ativo: true,
-                    },
-                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
-                  },
-                  error: null,
-                }),
-            }
-            return { select: () => chain }
-          }
-          return {}
-        }),
-      } as any
-
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-inativo-local')
-      expect(res.status).toBe('valid')
-      expect(res.recipient).not.toBeNull()
-      expect(res.recipient?.email).toBe('valido.central@riccipi.com.br')
-      expect(res.recipient?.nome).toBe('Nome Atual Central')
-      expect(res.recipient?.coreUsuarioId).toBe('cu-ativo-central')
-    })
-
-    it('resolveValidatedRecipientByCoreId: valida diretamente usuário ativo, vínculo com RICCI_TASK ativo, sistema e perfil ativos', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockImplementation((table: string) => {
           if (table === 'core_usuario_sistemas') {
             const chain: any = {
               eq: () => chain,
@@ -176,6 +80,12 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
       expect(res.recipient?.email).toBe('direto@riccipi.com.br')
       expect(res.recipient?.coreUsuarioId).toBe('cu-direto')
       expect(res.recipient?.nome).toBe('Destinatário Direto')
+
+      // Wrapper resolveValidatedTaskUserEmailDetailed também opera sem consultar task_usuarios
+      const resWrapper = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'cu-direto')
+      expect(resWrapper.status).toBe('valid')
+      expect(resWrapper.recipient?.email).toBe('direto@riccipi.com.br')
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('task_usuarios')
     })
 
     it('resolveValidatedRecipientByCoreId: retorna invalid_link quando usuário central estiver inativo ou sem vínculo ativo', async () => {
@@ -226,151 +136,22 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
       expect(res.error).toBe('503 Service Unavailable')
     })
 
-    it('retorna technical_failure se houver erro ao consultar task_usuarios', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({
-                data: null,
-                error: { message: 'Database connection timeout' },
-              }),
-            }),
-          }),
-        }),
-      } as any
-
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-err')
-      expect(res.status).toBe('technical_failure')
-      expect(res.recipient).toBeNull()
-      expect(res.error).toBe('Database connection timeout')
-    })
-
-    it('retorna technical_failure se houver exceção disparada pelo client em task_usuarios', async () => {
+    it('resolveValidatedRecipientByCoreId: retorna technical_failure se houver exceção disparada pelo client', async () => {
       const mockSupabase = {
         from: vi.fn().mockImplementation(() => {
           throw new Error('Network failure')
         }),
       } as any
 
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-err')
+      const res = await resolveValidatedRecipientByCoreId(mockSupabase, 'cu-err')
       expect(res.status).toBe('technical_failure')
       expect(res.recipient).toBeNull()
       expect(res.error).toBe('Network failure')
     })
 
-    it('retorna technical_failure se houver erro de banco na consulta de core_usuario_sistemas', async () => {
+    it('sucesso: sanitiza e-mail central em minúsculas e remove espaços', async () => {
       const mockSupabase = {
         from: vi.fn().mockImplementation((table: string) => {
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: 'tu-1',
-                        core_usuario_id: 'cu-1',
-                        nome: 'João Operacional',
-                        email: 'joao.antigo@provedor.com',
-                        ativo: true,
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
-          if (table === 'core_usuario_sistemas') {
-            const chain: any = {
-              eq: () => chain,
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: null,
-                  error: { message: 'PostgREST 504 Gateway Timeout' },
-                }),
-            }
-            return {
-              select: () => chain,
-            }
-          }
-          return {}
-        }),
-      } as any
-
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-1')
-      expect(res.status).toBe('technical_failure')
-      expect(res.recipient).toBeNull()
-      expect(res.error).toBe('PostgREST 504 Gateway Timeout')
-    })
-
-    it('retorna invalid_link se o usuário não tiver vínculo central ativo no RICCI_TASK', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockImplementation((table: string) => {
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: 'tu-1',
-                        core_usuario_id: 'cu-1',
-                        nome: 'João Operacional',
-                        email: 'joao.antigo@provedor.com',
-                        ativo: true,
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
-          if (table === 'core_usuario_sistemas') {
-            const chain: any = {
-              eq: () => chain,
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: null, // sem vínculo ativo com RICCI_TASK
-                  error: null,
-                }),
-            }
-            return {
-              select: () => chain,
-            }
-          }
-          return {}
-        }),
-      } as any
-
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-1')
-      expect(res.status).toBe('invalid_link')
-      expect(res.recipient).toBeNull()
-      expect(res.error).toContain('Vínculo central ausente ou inativo')
-    })
-
-    it('sucesso: resolve e-mail central alterado e ignora e-mail local antigo (NUNCA fallback)', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockImplementation((table: string) => {
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: 'tu-1',
-                        core_usuario_id: 'cu-1',
-                        nome: 'João Operacional',
-                        email: 'joao.antigo@provedor.com', // e-mail antigo desatualizado
-                        ativo: true,
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
           if (table === 'core_usuario_sistemas') {
             const chain: any = {
               eq: () => chain,
@@ -382,7 +163,7 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
                     core_usuarios: {
                       id: 'cu-1',
                       nome: 'João Carlos da Silva',
-                      email: 'Joao.Silva@RICCIPI.COM.BR ', // novo e-mail corporativo central
+                      email: 'Joao.Silva@RICCIPI.COM.BR ',
                       ativo: true,
                     },
                     core_sistemas: {
@@ -407,16 +188,15 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
         }),
       } as any
 
-      const res = await resolveValidatedTaskUserEmailDetailed(mockSupabase, 'tu-1')
+      const res = await resolveValidatedRecipientByCoreId(mockSupabase, 'cu-1')
       expect(res.status).toBe('valid')
       expect(res.recipient).not.toBeNull()
-      expect(res.recipient?.email).toBe('joao.silva@riccipi.com.br') // sanitizado em minúsculas
+      expect(res.recipient?.email).toBe('joao.silva@riccipi.com.br')
       expect(res.recipient?.nome).toBe('João Carlos da Silva')
-      expect(res.recipient?.taskUsuarioId).toBe('tu-1')
       expect(res.recipient?.coreUsuarioId).toBe('cu-1')
 
       // E a função legada retorna o recipient diretamente
-      const resLegacy = await resolveValidatedTaskUserEmail(mockSupabase, 'tu-1')
+      const resLegacy = await resolveValidatedTaskUserEmail(mockSupabase, 'cu-1')
       expect(resLegacy?.email).toBe('joao.silva@riccipi.com.br')
     })
   })
@@ -912,6 +692,433 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
       expect(res.coreUser?.id).toBe('cu-admin')
       expect(res.coreUser?.email).toBe('admin@riccipi.com.br')
     })
+    describe('Cenários Críticos da Versão 0.0.70 (Regressão e Idempotência Estrita)', () => {
+      it('preserva chave de evento existente em task_email_eventos sem alterar formato/valores históricos (retorna already_sent)', async () => {
+        const historicalExecId = 'd82fbcf7-1234-4567-89ab-cdef01234567'
+        const historicalRespId = 'e93acad8-5678-4321-ba98-fedcba987654'
+        const historicalStamp = '2024-01-15T10:00:00Z'
+        const expectedEventKey = `atribuicao:tarefa-historica:${historicalStamp}:${historicalExecId}:${historicalRespId}`
+
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-historica',
+                          numero_caso: 1001,
+                          executor_usuario_id: historicalExecId,
+                          responsavel_usuario_id: historicalRespId,
+                          executor_core_usuario_id: 'cu-exec-novo',
+                          responsavel_core_usuario_id: 'cu-resp-novo',
+                          updated_at: historicalStamp,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: () => chain,
+                    in: () => chain,
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'link-ok',
+                          ativo: true,
+                          core_usuarios: {
+                            id: 'cu-exec-novo',
+                            nome: 'Executor Central',
+                            email: 'exec@riccipi.com.br',
+                            ativo: true,
+                          },
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                        error: null,
+                      }),
+                    then: (resolve: any) =>
+                      resolve({
+                        data: [
+                          {
+                            id: 'link-caller',
+                            ativo: true,
+                            core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                            core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                          },
+                        ],
+                        error: null,
+                      }),
+                  }
+                  return chain
+                },
+              }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => ({
+                  eq: (_col: string, keyVal: string) => {
+                    expect(keyVal).toBe(expectedEventKey)
+                    return {
+                      maybeSingle: () =>
+                        Promise.resolve({
+                          data: {
+                            id: 'evt-hist-1',
+                            status: 'success',
+                            event_key: expectedEventKey,
+                          },
+                          error: null,
+                        }),
+                    }
+                  },
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-historica',
+            tipo: 'atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.triggered).toBe(true)
+        expect(body.sent).toBe(false)
+        expect(body.reason).toBe('already_sent')
+        expect(body.event_key).toBe(expectedEventKey)
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('para casos novos sem tokens operacionais, compõe chave estável com IDs centrais', async () => {
+        const coreExecId = 'cu-novo-exec-111'
+        const coreRespId = 'cu-novo-resp-222'
+        const newStamp = '2025-05-10T18:00:00Z'
+        const expectedEventKey = `atribuicao:tarefa-nova:${newStamp}:${coreExecId}:${coreRespId}`
+
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-nova',
+                          numero_caso: 2002,
+                          executor_usuario_id: null,
+                          responsavel_usuario_id: null,
+                          executor_core_usuario_id: coreExecId,
+                          responsavel_core_usuario_id: coreRespId,
+                          updated_at: newStamp,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: (_col: string, val: string) => {
+                      chain._targetId = val
+                      return chain
+                    },
+                    in: () => chain,
+                    maybeSingle: () => {
+                      const isExec = chain._targetId === coreExecId
+                      return Promise.resolve({
+                        data: {
+                          id: isExec ? 'link-exec' : 'link-resp',
+                          ativo: true,
+                          core_usuarios: {
+                            id: chain._targetId,
+                            nome: isExec ? 'Exec Novo' : 'Resp Novo',
+                            email: isExec ? 'exec.novo@riccipi.com.br' : 'resp.novo@riccipi.com.br',
+                            ativo: true,
+                          },
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                        error: null,
+                      })
+                    },
+                    then: (resolve: any) =>
+                      resolve({
+                        data: [
+                          {
+                            id: 'link-caller',
+                            ativo: true,
+                            core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                            core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                          },
+                        ],
+                        error: null,
+                      }),
+                  }
+                  return chain
+                },
+              }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => ({
+                  eq: (_col: string, keyVal: string) => {
+                    expect(keyVal).toBe(expectedEventKey)
+                    return {
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }
+                  },
+                }),
+                insert: (record: any) => {
+                  expect(record.event_key).toBe(expectedEventKey)
+                  expect(record.to_email).toBe('exec.novo@riccipi.com.br')
+                  expect(record.cc_email).toBe('resp.novo@riccipi.com.br')
+                  return {
+                    select: () => ({
+                      maybeSingle: () =>
+                        Promise.resolve({ data: { id: 'evt-novo-1' }, error: null }),
+                    }),
+                  }
+                },
+                update: () => ({
+                  eq: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-nova',
+            tipo: 'atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.success).toBe(true)
+        expect(body.sent).toBe(true)
+        expect(body.event_key).toBe(expectedEventKey)
+        expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
+      })
+
+      it('quando mesma pessoa ocupa executor e responsável: envia TO único e CC vazio (sem auto-cópia)', async () => {
+        const sameCoreId = 'cu-mesma-pessoa'
+        const stamp = '2025-05-10T19:00:00Z'
+
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-mesma-pessoa',
+                          numero_caso: 3003,
+                          executor_core_usuario_id: sameCoreId,
+                          responsavel_core_usuario_id: sameCoreId,
+                          updated_at: stamp,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: () => chain,
+                    in: () => chain,
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'link-same',
+                          ativo: true,
+                          core_usuarios: {
+                            id: sameCoreId,
+                            nome: 'Pessoa Única',
+                            email: 'mesma.pessoa@riccipi.com.br',
+                            ativo: true,
+                          },
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                        error: null,
+                      }),
+                    then: (resolve: any) =>
+                      resolve({
+                        data: [
+                          {
+                            id: 'link-caller',
+                            ativo: true,
+                            core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                            core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                          },
+                        ],
+                        error: null,
+                      }),
+                  }
+                  return chain
+                },
+              }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }),
+                }),
+                insert: (record: any) => {
+                  expect(record.to_email).toBe('mesma.pessoa@riccipi.com.br')
+                  expect(record.cc_email).toBeNull()
+                  return {
+                    select: () => ({
+                      maybeSingle: () =>
+                        Promise.resolve({ data: { id: 'evt-same-1' }, error: null }),
+                    }),
+                  }
+                },
+                update: () => ({
+                  eq: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-mesma-pessoa',
+            tipo: 'atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.success).toBe(true)
+        expect(body.sent).toBe(true)
+        expect(body.to).toBe('mesma.pessoa@riccipi.com.br')
+        expect(body.cc).toBeNull()
+        expect(ctx.transporter.sentMails[0].to).toBe('mesma.pessoa@riccipi.com.br')
+        expect(ctx.transporter.sentMails[0].cc).toBeUndefined()
+      })
+    })
   })
 })
 
@@ -1069,17 +1276,15 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     )
   }
 
-  const hasExecutor = Boolean(tarefa.executor_core_usuario_id || tarefa.executor_usuario_id)
-  if (!hasExecutor) {
+  const execTargetId = tarefa.executor_core_usuario_id || tarefa.executor_usuario_id
+  if (!execTargetId) {
     return new Response(
       JSON.stringify({ triggered: true, sent: false, reason: 'executor_ausente' }),
       { status: 200, headers: corsHeaders },
     )
   }
 
-  const execResolution = tarefa.executor_core_usuario_id
-    ? await resolveValidatedRecipientByCoreId(ctx.supabase, tarefa.executor_core_usuario_id)
-    : await resolveValidatedTaskUserEmailDetailed(ctx.supabase, tarefa.executor_usuario_id!)
+  const execResolution = await resolveValidatedRecipientByCoreId(ctx.supabase, execTargetId)
 
   if (execResolution.status === 'technical_failure') {
     return new Response(
@@ -1108,10 +1313,9 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
   const toEmail = execResolution.recipient.email.trim().toLowerCase()
 
   let ccEmail: string | null = null
-  if (tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id) {
-    const respResolution = tarefa.responsavel_core_usuario_id
-      ? await resolveValidatedRecipientByCoreId(ctx.supabase, tarefa.responsavel_core_usuario_id)
-      : await resolveValidatedTaskUserEmailDetailed(ctx.supabase, tarefa.responsavel_usuario_id!)
+  const respTargetId = tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id
+  if (respTargetId) {
+    const respResolution = await resolveValidatedRecipientByCoreId(ctx.supabase, respTargetId)
     if (respResolution.status === 'technical_failure') {
       return new Response(
         JSON.stringify({
@@ -1131,9 +1335,11 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
   }
 
   const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_stamp'
-  const currentExecId = tarefa.executor_usuario_id || 'sem_exec'
-  const currentRespId = tarefa.responsavel_usuario_id || 'sem_resp'
-  const eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecId}:${currentRespId}`
+  const currentExecToken =
+    tarefa.executor_usuario_id || tarefa.executor_core_usuario_id || 'sem_exec'
+  const currentRespToken =
+    tarefa.responsavel_usuario_id || tarefa.responsavel_core_usuario_id || 'sem_resp'
+  const eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecToken}:${currentRespToken}`
 
   // Verificar idempotência
   const { data: existingEvent } = await ctx.supabase
@@ -1331,9 +1537,10 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
       continue
     }
 
-    const execResolution = tarefa.executor_core_usuario_id
-      ? await resolveValidatedRecipientByCoreId(ctx.supabase, tarefa.executor_core_usuario_id)
-      : await resolveValidatedTaskUserEmailDetailed(ctx.supabase, tarefa.executor_usuario_id!)
+    const execTargetId = tarefa.executor_core_usuario_id || tarefa.executor_usuario_id
+    const execResolution = execTargetId
+      ? await resolveValidatedRecipientByCoreId(ctx.supabase, execTargetId)
+      : { status: 'missing_user_id', recipient: null }
 
     if (execResolution.status === 'technical_failure') {
       if (!existingEvent) {
@@ -1379,10 +1586,9 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
     const toEmail = execResolution.recipient.email.trim().toLowerCase()
     let ccEmail: string | null = null
 
-    if (tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id) {
-      const respResolution = tarefa.responsavel_core_usuario_id
-        ? await resolveValidatedRecipientByCoreId(ctx.supabase, tarefa.responsavel_core_usuario_id)
-        : await resolveValidatedTaskUserEmailDetailed(ctx.supabase, tarefa.responsavel_usuario_id!)
+    const respTargetId = tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id
+    if (respTargetId) {
+      const respResolution = await resolveValidatedRecipientByCoreId(ctx.supabase, respTargetId)
       if (respResolution.status === 'technical_failure') {
         if (!existingEvent) {
           await ctx.supabase.from('task_email_eventos').insert({
@@ -2100,24 +2306,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               }),
             }
           }
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: 'tu-local-inativo',
-                        core_usuario_id: 'cu-core-ativo',
-                        nome: 'Nome Histórico Local',
-                        ativo: false, // Inativo na ponte local!
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
+
           if (table === 'core_usuario_sistemas') {
             return {
               select: () => {
@@ -2352,24 +2541,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               }),
             }
           }
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: (col: string, val: string) => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: val,
-                        core_usuario_id: val === 'tu-exec-2' ? 'cu-exec-2' : 'cu-resp-2',
-                        nome: val === 'tu-exec-2' ? 'Executor Dois' : 'Responsável Dois',
-                        ativo: true,
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
+
           if (table === 'core_usuario_sistemas') {
             return {
               select: () => {
@@ -2519,23 +2691,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               }),
             }
           }
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: {
-                        id: 'tu-exec-timeout',
-                        core_usuario_id: 'cu-timeout',
-                        ativo: true,
-                      },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
+
           if (table === 'core_usuario_sistemas') {
             return {
               select: () => {
@@ -2640,19 +2796,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               }),
             }
           }
-          if (table === 'task_usuarios') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: { id: 'tu-exec-4', core_usuario_id: 'cu-4', ativo: true },
-                      error: null,
-                    }),
-                }),
-              }),
-            }
-          }
+
           if (table === 'core_usuario_sistemas') {
             return {
               select: () => {
@@ -2930,8 +3074,9 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                       data: {
                         id: val,
                         numero_caso: val === 'tarefa-falha' ? 201 : 202,
-                        executor_usuario_id:
-                          val === 'tarefa-falha' ? 'tu-exec-falha' : 'tu-exec-sucesso',
+                        executor_core_usuario_id:
+                          val === 'tarefa-falha' ? 'cu-exec-falha' : 'cu-sucesso',
+                        executor_usuario_id: null,
                         responsavel_usuario_id: null,
                       },
                       error: null,
@@ -2940,39 +3085,22 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               }),
             }
           }
-          if (table === 'task_usuarios') {
+          if (table === 'core_usuario_sistemas') {
             return {
-              select: () => ({
-                eq: (col: string, val: string) => ({
+              select: () => {
+                const chain: any = {
+                  eq: (_col: string, val: string) => {
+                    chain._targetId = val
+                    return chain
+                  },
                   maybeSingle: () => {
-                    if (val === 'tu-exec-falha') {
-                      // Dispara falha técnica
+                    if (chain._targetId === 'cu-exec-falha') {
                       return Promise.resolve({
                         data: null,
                         error: { message: 'Connection pool exhausted' },
                       })
                     }
                     return Promise.resolve({
-                      data: {
-                        id: 'tu-exec-sucesso',
-                        core_usuario_id: 'cu-sucesso',
-                        nome: 'Sucesso',
-                        ativo: true,
-                      },
-                      error: null,
-                    })
-                  },
-                }),
-              }),
-            }
-          }
-          if (table === 'core_usuario_sistemas') {
-            return {
-              select: () => {
-                const chain: any = {
-                  eq: () => chain,
-                  maybeSingle: () =>
-                    Promise.resolve({
                       data: {
                         id: 'link-ok',
                         ativo: true,
@@ -2983,10 +3111,11 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                           ativo: true,
                         },
                         core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                        core_perfis: { codigo: 'COLABORADOR', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
                       },
                       error: null,
-                    }),
+                    })
+                  },
                 }
                 return chain
               },

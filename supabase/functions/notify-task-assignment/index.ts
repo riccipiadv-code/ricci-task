@@ -5,11 +5,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
-import {
-  resolveValidatedRecipientByCoreId,
-  resolveValidatedTaskUserEmailDetailed,
-  verifyRicciTaskCaller,
-} from '../_shared/core-auth.ts'
+import { resolveValidatedRecipientByCoreId, verifyRicciTaskCaller } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -346,12 +342,13 @@ Deno.serve(async (req: Request) => {
     }
 
     // 4. Buscar Executor e Responsável validados centralmente no Gestor de Acessos:
-    // Autoridade central: usa prioritariamente executor_core_usuario_id e responsavel_core_usuario_id
-    // gravados na tarefa. Se ausentes, resolve via ID operacional com fallback.
+    // Autoridade central: usa exclusivamente os IDs centrais gravados em task_tarefas
+    // (executor_core_usuario_id e responsavel_core_usuario_id).
+    // Suporta fallback para executor_usuario_id apenas se executor_core_usuario_id for nulo,
+    // resolvendo diretamente via core_usuarios (sem consultar task_usuarios).
     // Valida: core_usuarios.ativo = true, core_usuario_sistemas.ativo = true, core_sistemas.ativo = true e core_perfis.ativo = true.
-    // task_usuarios.ativo = false NÃO bloqueia pessoa válida no core.
-    const hasExecutor = Boolean(tarefa.executor_core_usuario_id || tarefa.executor_usuario_id)
-    if (!hasExecutor) {
+    const execTargetId = tarefa.executor_core_usuario_id || tarefa.executor_usuario_id
+    if (!execTargetId) {
       return new Response(
         JSON.stringify({
           triggered: true,
@@ -366,9 +363,7 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    const execResolution = tarefa.executor_core_usuario_id
-      ? await resolveValidatedRecipientByCoreId(supabase, tarefa.executor_core_usuario_id)
-      : await resolveValidatedTaskUserEmailDetailed(supabase, tarefa.executor_usuario_id!)
+    const execResolution = await resolveValidatedRecipientByCoreId(supabase, execTargetId)
 
     // Se houve falha técnica de consulta central para o executor, retorna erro 500 (recuperável/retry)
     if (execResolution.status === 'technical_failure') {
@@ -431,10 +426,9 @@ Deno.serve(async (req: Request) => {
       email: string
     } | null = null
 
-    if (tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id) {
-      const respResolution = tarefa.responsavel_core_usuario_id
-        ? await resolveValidatedRecipientByCoreId(supabase, tarefa.responsavel_core_usuario_id)
-        : await resolveValidatedTaskUserEmailDetailed(supabase, tarefa.responsavel_usuario_id!)
+    const respTargetId = tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id
+    if (respTargetId) {
+      const respResolution = await resolveValidatedRecipientByCoreId(supabase, respTargetId)
 
       if (respResolution.status === 'technical_failure') {
         console.error('Falha técnica na consulta central do Responsável:', respResolution.error, {
@@ -469,18 +463,21 @@ Deno.serve(async (req: Request) => {
     // 5. Chave de idempotência (event_key)
     // - Atribuição: ocorrência específica da alteração via timestamp estável de salvamento no Supabase (updated_at ou created_at)
     //   combinado com tarefa e destinatários (executor e responsável).
-    //   Formato: atribuicao:{tarefa.id}:{tarefa.updated_at}:{currentExecId}:{currentRespId}
-    //   Permite que retorno a combinações anteriores gere novo envio, enquanto saves sem alteração
-    //   de destinatários e retries preservam a idempotência.
-    // - Inclusão: ID único da providência
-    // - Atualização: ID da providência + timestamp de updated_at
+    //   Formato: atribuicao:{tarefa.id}:{tarefa.updated_at}:{currentExecToken}:{currentRespToken}
+    //   REGRA CRÍTICA DE IDEMPOTÊNCIA:
+    //   A chave de um evento EXISTENTE em task_email_eventos NÃO PODE mudar.
+    //   UUIDs operacionais remanescentes (executor_usuario_id / responsavel_usuario_id) servem APENAS como
+    //   tokens históricos de idempotência para tarefas pré-existentes.
+    //   Para casos novos (sem IDs operacionais), os IDs centrais entram na composição da chave mantendo o formato estável.
     let eventKey = ''
-    const currentExecId = tarefa.executor_usuario_id || 'sem_exec'
-    const currentRespId = tarefa.responsavel_usuario_id || 'sem_resp'
+    const currentExecToken =
+      tarefa.executor_usuario_id || tarefa.executor_core_usuario_id || 'sem_exec'
+    const currentRespToken =
+      tarefa.responsavel_usuario_id || tarefa.responsavel_core_usuario_id || 'sem_resp'
 
     if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
       const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
-      eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecId}:${currentRespId}`
+      eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecToken}:${currentRespToken}`
     } else if (dbTipoEvento === 'providencia_inclusao') {
       eventKey = `providencia_inclusao:${providenciaAlvo.id}`
     } else {
@@ -576,31 +573,11 @@ Deno.serve(async (req: Request) => {
     }
 
     // 7. Preparar conteúdo de e-mail de acordo com o tipo
-    // Dados gerais
-    // Busca nomes para exibição: prioriza nome central validado; fallback para nome histórico em task_usuarios
-    let execNomeLocal = ''
-    let respNomeLocal = ''
-    try {
-      const idsParaNomes = [tarefa.executor_usuario_id, tarefa.responsavel_usuario_id].filter(
-        Boolean,
-      )
-      if (idsParaNomes.length > 0) {
-        const { data: usersNames } = await supabase
-          .from('task_usuarios')
-          .select('id, nome')
-          .in('id', idsParaNomes)
-        for (const u of usersNames || []) {
-          if (u.id === tarefa.executor_usuario_id) execNomeLocal = u.nome || ''
-          if (u.id === tarefa.responsavel_usuario_id) respNomeLocal = u.nome || ''
-        }
-      }
-    } catch {
-      // noop
-    }
-
-    const execNomeFull = (validatedExecutor.nome || execNomeLocal || '').trim()
+    // Dados gerais: resolução exclusiva a partir dos registros validados no Gestor de Acessos (core_usuarios)
+    // SEM qualquer consulta a task_usuarios.
+    const execNomeFull = (validatedExecutor.nome || '').trim()
     const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
-    const respNomeFull = (validatedResponsavel?.nome || respNomeLocal || '').trim()
+    const respNomeFull = (validatedResponsavel?.nome || '').trim()
     const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
 
     let subject = ''

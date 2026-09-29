@@ -748,70 +748,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     expect(result.updated_at).toBe(originalUpdatedAt)
   })
 
-  it('bloqueia gravação se responsável ou executor não possuir vínculo central válido', async () => {
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [{ id: 'tu-sem-core', core_usuario_id: null }],
-                error: null,
-              }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
-
-    await expect(
-      controleService.saveControle(
-        {
-          nome_controle_id: 'nc-1',
-          identificacao_caso: 'Caso Sem Vínculo',
-          status_id: 'st-aberto',
-          responsavel_usuario_id: 'tu-sem-core',
-          executor_usuario_id: 'tu-sem-core',
-        },
-        [],
-      ),
-    ).rejects.toThrow('Gravação bloqueada: o Responsável selecionado não possui vínculo central')
-  })
-
-  it('bloqueia gravação se a pessoa elegível do core NÃO possuir ponte operacional em task_usuarios (sem fallback e sem criação local)', async () => {
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [], // não existe em task_usuarios!
-                error: null,
-              }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
-
+  it('permite atribuição direta a usuário central sem ponte em task_usuarios', async () => {
     const usuariosListaComPessoaSemPonte = [
       {
         id: 'cu-sem-ponte',
@@ -821,27 +758,187 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         task_usuario_id: null,
       },
       {
-        id: 'tu-exec',
-        nome: 'Executor Válido',
+        id: 'cu-exec',
+        nome: 'Executor Central',
         email: 'exec@riccipi.com.br',
         core_usuario_id: 'cu-exec',
-        task_usuario_id: 'tu-exec',
+        task_usuario_id: null,
       },
     ]
 
-    await expect(
-      controleService.saveControle(
-        {
-          nome_controle_id: 'nc-1',
-          identificacao_caso: 'Caso Bloqueado Ponte',
-          status_id: 'st-aberto',
-          responsavel_usuario_id: 'cu-sem-ponte',
-          executor_usuario_id: 'tu-exec',
-        },
-        usuariosListaComPessoaSemPonte,
-      ),
-    ).rejects.toThrow(
-      'Gravação bloqueada: a pessoa selecionada como Responsável (Maria Sem Ponte) não possui registro operacional (ponte) no Ricci Task.',
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_tarefas') {
+        return {
+          insert: (payload: any) => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'tarefa-novo-core',
+                    ...payload,
+                    updated_at: '2025-05-10T12:00:00Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_providencias') {
+        return {
+          select: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => ({
+                  order: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    const result = await controleService.saveControle(
+      {
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Caso Sem Ponte Permitido',
+        status_id: 'st-aberto',
+        responsavel_usuario_id: 'cu-sem-ponte',
+        executor_usuario_id: 'cu-exec',
+      },
+      usuariosListaComPessoaSemPonte,
     )
+
+    expect(result.responsavel_core_usuario_id).toBe('cu-sem-ponte')
+    expect(result.executor_core_usuario_id).toBe('cu-exec')
+  })
+
+  it('detecta reatribuição A -> B -> A comparando os IDs centrais e disparando notificações adequadamente', async () => {
+    let notifyCallCount = 0
+    const notifiedTipos: string[] = []
+
+    vi.spyOn(controleService, 'notifyTaskAssignment').mockImplementation((_tarefaId, tipo) => {
+      notifyCallCount++
+      notifiedTipos.push(tipo)
+      return Promise.resolve({ success: true, triggered: true, sent: true } as any)
+    })
+
+    let currentDbRecord: any = {
+      id: 'tarefa-reassign',
+      nome_controle_id: 'nc-1',
+      identificacao_caso: 'Processo Reatribuicao',
+      status_id: 'st-aberto',
+      data_autorizacao: '2025-01-10',
+      prazo_conclusao: '2025-02-10',
+      responsavel_core_usuario_id: 'cu-pessoa-a',
+      executor_core_usuario_id: 'cu-pessoa-a',
+      updated_at: '2025-01-10T10:00:00Z',
+    }
+
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_tarefas') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: currentDbRecord, error: null }),
+            }),
+          }),
+          update: (payload: any) => ({
+            eq: () => ({
+              select: () => ({
+                single: () => {
+                  currentDbRecord = {
+                    ...currentDbRecord,
+                    ...payload,
+                    updated_at: new Date().toISOString(),
+                  }
+                  return Promise.resolve({
+                    data: currentDbRecord,
+                    error: null,
+                  })
+                },
+              }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_providencias') {
+        return {
+          select: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => ({
+                  order: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    const usuarios = [
+      { id: 'cu-pessoa-a', nome: 'A', email: 'a@r.com', core_usuario_id: 'cu-pessoa-a' },
+      { id: 'cu-pessoa-b', nome: 'B', email: 'b@r.com', core_usuario_id: 'cu-pessoa-b' },
+    ]
+
+    // 1. Troca A -> B
+    await controleService.saveControle(
+      {
+        id: 'tarefa-reassign',
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Processo Reatribuicao',
+        status_id: 'st-aberto',
+        data_autorizacao: '2025-01-10',
+        prazo_conclusao: '2025-02-10',
+        responsavel_usuario_id: 'cu-pessoa-b',
+        executor_usuario_id: 'cu-pessoa-b',
+      },
+      usuarios,
+    )
+
+    expect(notifyCallCount).toBe(1)
+    expect(notifiedTipos[0]).toBe('alteracao_atribuicao')
+    expect(currentDbRecord.executor_core_usuario_id).toBe('cu-pessoa-b')
+
+    // 2. Troca B -> A
+    await controleService.saveControle(
+      {
+        id: 'tarefa-reassign',
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Processo Reatribuicao',
+        status_id: 'st-aberto',
+        data_autorizacao: '2025-01-10',
+        prazo_conclusao: '2025-02-10',
+        responsavel_usuario_id: 'cu-pessoa-a',
+        executor_usuario_id: 'cu-pessoa-a',
+      },
+      usuarios,
+    )
+
+    expect(notifyCallCount).toBe(2)
+    expect(notifiedTipos[1]).toBe('alteracao_atribuicao')
+    expect(currentDbRecord.executor_core_usuario_id).toBe('cu-pessoa-a')
   })
 })

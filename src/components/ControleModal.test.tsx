@@ -83,20 +83,14 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       providencias: [],
     }
 
-    vi.mocked(controleService.getTodosUsuarios).mockResolvedValue([
+    vi.mocked(controleService.getUsuariosAtivos).mockResolvedValue([
       {
-        id: mockInativoId,
-        nome: 'Doutor Antigo Inativo',
-        email: 'antigo@riccipi.com.br',
-        ativo: false,
-        core_usuario_id: 'cu-historico-inativo',
-      },
-      {
-        id: 'tu-exec-ativo',
+        id: 'cu-exec-ativo',
         nome: 'Carla Executora Central',
         email: 'carla@riccipi.com.br',
         ativo: true,
         core_usuario_id: 'cu-exec-ativo',
+        task_usuario_id: 'tu-exec-ativo',
       },
     ])
 
@@ -124,7 +118,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
 
     // Aguarda resolução das listas
     await waitFor(() => {
-      expect(controleService.getTodosUsuarios).toHaveBeenCalled()
+      expect(controleService.getUsuariosAtivos).toHaveBeenCalled()
     })
 
     // O modal deve carregar sem falhar a validação (pois a validação central dos ativos foi bem sucedida)
@@ -172,7 +166,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     expect(controleService.saveControle).not.toHaveBeenCalled()
   })
 
-  it('bloqueia salvamento se a pessoa selecionada estiver sem ponte operacional em task_usuarios (task_usuario_id null)', async () => {
+  it('permite seleção e salvamento de pessoa elegível central mesmo sem ponte operacional em task_usuarios', async () => {
     vi.mocked(controleService.getUsuariosAtivos).mockResolvedValueOnce([
       {
         id: 'cu-sem-ponte',
@@ -212,7 +206,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     const salvarBtn = screen.getByRole('button', { name: /Salvar/i })
     salvarBtn.click()
 
-    // Não deve chamar saveControle pois a validação de campos / ponte bloqueia
+    // Campos obrigatórios de formulário vazio impedem saveControle, mas a pessoa sem ponte não gera erro prévio
     expect(controleService.saveControle).not.toHaveBeenCalled()
   })
 })

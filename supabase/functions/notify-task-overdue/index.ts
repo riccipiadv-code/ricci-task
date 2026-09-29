@@ -4,7 +4,6 @@ import nodemailer from 'npm:nodemailer'
 import {
   verifyRicciTaskAdmin,
   resolveValidatedRecipientByCoreId,
-  resolveValidatedTaskUserEmailDetailed,
   RecipientResolutionResult,
 } from '../_shared/core-auth.ts'
 
@@ -106,7 +105,7 @@ Deno.serve(async (req: Request) => {
     //    Comparada exclusivamente com TASK_OVERDUE_CRON_SECRET (deve estar configurado).
     // B) Execução manual de teste:
     //    Permitida somente para usuário autenticado com perfil administrativo
-    //    validado no backend (tabela profiles / task_usuarios perfil admin). Usuário comum autenticado recebe 403.
+    //    validado no backend (core_usuarios e vínculo RICCI_TASK com perfil ADMINISTRADOR). Usuário comum autenticado recebe 403.
     const cronSecretHeader = req.headers.get('x-task-cron-secret')
     const authHeader = req.headers.get('Authorization')
 
@@ -345,53 +344,24 @@ Deno.serve(async (req: Request) => {
     }
 
     // 6. Cache de resoluções de destinatários no Gestor de Acessos para otimizar chamadas
-    // Prioriza core_usuario_id (autoridade central). Usa cache com prefixo 'core:' ou 'task:'.
+    // Resolução ocorre exclusivamente via core_usuarios (sem consultar task_usuarios).
     const recipientResolutionCache = new Map<string, RecipientResolutionResult>()
 
     const getRecipientResolution = async (
       coreUsuarioId?: string | null,
-      taskUsuarioId?: string | null,
+      fallbackId?: string | null,
     ): Promise<RecipientResolutionResult> => {
-      if (coreUsuarioId) {
-        const cacheKey = `core:${coreUsuarioId}`
-        if (recipientResolutionCache.has(cacheKey)) {
-          return recipientResolutionCache.get(cacheKey)!
+      const targetId = coreUsuarioId || fallbackId
+      if (targetId) {
+        if (recipientResolutionCache.has(targetId)) {
+          return recipientResolutionCache.get(targetId)!
         }
-        const resolved = await resolveValidatedRecipientByCoreId(supabase, coreUsuarioId)
-        recipientResolutionCache.set(cacheKey, resolved)
-        return resolved
-      }
-
-      if (taskUsuarioId) {
-        const cacheKey = `task:${taskUsuarioId}`
-        if (recipientResolutionCache.has(cacheKey)) {
-          return recipientResolutionCache.get(cacheKey)!
-        }
-        const resolved = await resolveValidatedTaskUserEmailDetailed(supabase, taskUsuarioId)
-        recipientResolutionCache.set(cacheKey, resolved)
+        const resolved = await resolveValidatedRecipientByCoreId(supabase, targetId)
+        recipientResolutionCache.set(targetId, resolved)
         return resolved
       }
 
       return { status: 'missing_user_id', recipient: null }
-    }
-
-    // Mapa de nomes locais para fallback na montagem do e-mail (caso histórico)
-    const userIdsSet = new Set<string>()
-    for (const t of tarefasList || []) {
-      if (t.executor_usuario_id) userIdsSet.add(t.executor_usuario_id)
-      if (t.responsavel_usuario_id) userIdsSet.add(t.responsavel_usuario_id)
-    }
-
-    const localNamesMap = new Map<string, string>()
-    if (userIdsSet.size > 0) {
-      const { data: usersList } = await supabase
-        .from('task_usuarios')
-        .select('id, nome')
-        .in('id', Array.from(userIdsSet))
-
-      for (const u of usersList || []) {
-        if (u.nome) localNamesMap.set(u.id, u.nome)
-      }
     }
 
     // 7. Processar cada providência atrasada
@@ -656,16 +626,11 @@ Deno.serve(async (req: Request) => {
         nomeControle = (ncData?.nome || '').trim()
       }
 
-      // Montar conteúdo do e-mail (prioriza nome central; fallback para nome histórico local)
-      const execLocalName = tarefa.executor_usuario_id
-        ? localNamesMap.get(tarefa.executor_usuario_id)
-        : ''
-      const respLocalName = tarefa.responsavel_usuario_id
-        ? localNamesMap.get(tarefa.responsavel_usuario_id)
-        : ''
-      const execNomeFull = (validatedExec.nome || execLocalName || '').trim()
+      // Montar conteúdo do e-mail: resolução exclusiva a partir dos registros validados no Gestor de Acessos (core_usuarios)
+      // SEM qualquer consulta a task_usuarios.
+      const execNomeFull = (validatedExec.nome || '').trim()
       const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
-      const respNomeFull = (validatedResp?.nome || respLocalName || '').trim()
+      const respNomeFull = (validatedResp?.nome || '').trim()
       const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
       const identificacaoCasoStr = (tarefa.identificacao_caso || '').trim()
       const provDescricao = (prov.providencia || '').trim()
