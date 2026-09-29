@@ -756,25 +756,18 @@ export const controleService = {
       )
     }
 
-    // Resolver retrocompatibilidade de IDs operacionais legados (para não violar FKs caso o banco ainda exija NOT NULL antes da Fase 1)
-    let opRespId = input.responsavel_usuario_id || targetRespCoreId
-    let opExecId = input.executor_usuario_id || targetExecCoreId
+    // Resolução de IDs operacionais legados (Fase de Transição):
+    // Se o input já veio com um ID operacional legado explícito (ex.: edição de caso antigo não alterado ou usuário legado),
+    // preserva-o; se for nulo ou se for igual ao ID central, NUNCA colar o ID central nas colunas operacionais legadas
+    // (deve ser gravado como null, preparando a exclusão final da tabela task_usuarios).
+    let opRespId: string | null = null
+    if (input.responsavel_usuario_id && input.responsavel_usuario_id !== targetRespCoreId) {
+      opRespId = input.responsavel_usuario_id
+    }
 
-    // Se opRespId ou opExecId for o ID central, podemos verificar se existe ponte em task_usuarios sem bloquear caso não exista
-    try {
-      const { data: bridges } = await supabase
-        .from('task_usuarios')
-        .select('id, core_usuario_id')
-        .in('core_usuario_id', [targetRespCoreId, targetExecCoreId])
-
-      if (bridges && bridges.length > 0) {
-        for (const b of bridges) {
-          if (b.core_usuario_id === targetRespCoreId) opRespId = b.id
-          if (b.core_usuario_id === targetExecCoreId) opExecId = b.id
-        }
-      }
-    } catch {
-      // Ignora falha de consulta em task_usuarios (corte definitivo ativo)
+    let opExecId: string | null = null
+    if (input.executor_usuario_id && input.executor_usuario_id !== targetExecCoreId) {
+      opExecId = input.executor_usuario_id
     }
 
     const nowIso = new Date().toISOString()
