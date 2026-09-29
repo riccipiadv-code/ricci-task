@@ -180,6 +180,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // 3. Buscar dados de task_tarefas com nome do controle e updated_at estável
+    // NOTA DE MIGRAÇÃO: Preparado para funcionar após o DROP das colunas legadas executor_usuario_id / responsavel_usuario_id.
+    // Nenhuma consulta (SELECT) ou gravação referencia essas colunas.
     const { data: tarefa, error: tarefaError } = await supabase
       .from('task_tarefas')
       .select(`
@@ -187,8 +189,6 @@ Deno.serve(async (req: Request) => {
         numero_caso,
         identificacao_caso,
         nome_controle_id,
-        executor_usuario_id,
-        responsavel_usuario_id,
         executor_core_usuario_id,
         responsavel_core_usuario_id,
         created_at,
@@ -344,10 +344,8 @@ Deno.serve(async (req: Request) => {
     // 4. Buscar Executor e Responsável validados centralmente no Gestor de Acessos:
     // Autoridade central: usa exclusivamente os IDs centrais gravados em task_tarefas
     // (executor_core_usuario_id e responsavel_core_usuario_id).
-    // Suporta fallback para executor_usuario_id apenas se executor_core_usuario_id for nulo,
-    // resolvendo diretamente via core_usuarios (sem consultar task_usuarios).
     // Valida: core_usuarios.ativo = true, core_usuario_sistemas.ativo = true, core_sistemas.ativo = true e core_perfis.ativo = true.
-    const execTargetId = tarefa.executor_core_usuario_id || tarefa.executor_usuario_id
+    const execTargetId = tarefa.executor_core_usuario_id
     if (!execTargetId) {
       return new Response(
         JSON.stringify({
@@ -370,7 +368,6 @@ Deno.serve(async (req: Request) => {
       console.error('Falha técnica na consulta central do Executor:', execResolution.error, {
         tarefa_id,
         executor_core_usuario_id: tarefa.executor_core_usuario_id,
-        executor_usuario_id: tarefa.executor_usuario_id,
       })
       return new Response(
         JSON.stringify({
@@ -398,7 +395,6 @@ Deno.serve(async (req: Request) => {
         {
           tarefa_id,
           executor_core_usuario_id: tarefa.executor_core_usuario_id,
-          executor_usuario_id: tarefa.executor_usuario_id,
           reason: execResolution.error,
         },
       )
@@ -426,7 +422,7 @@ Deno.serve(async (req: Request) => {
       email: string
     } | null = null
 
-    const respTargetId = tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id
+    const respTargetId = tarefa.responsavel_core_usuario_id
     if (respTargetId) {
       const respResolution = await resolveValidatedRecipientByCoreId(supabase, respTargetId)
 
@@ -434,7 +430,6 @@ Deno.serve(async (req: Request) => {
         console.error('Falha técnica na consulta central do Responsável:', respResolution.error, {
           tarefa_id,
           responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
-          responsavel_usuario_id: tarefa.responsavel_usuario_id,
         })
         return new Response(
           JSON.stringify({
@@ -465,17 +460,42 @@ Deno.serve(async (req: Request) => {
     //   combinado com tarefa e destinatários (executor e responsável).
     //   Formato: atribuicao:{tarefa.id}:{tarefa.updated_at}:{currentExecToken}:{currentRespToken}
     //   REGRA CRÍTICA DE IDEMPOTÊNCIA:
-    //   A chave de um evento EXISTENTE em task_email_eventos NÃO PODE mudar.
-    //   UUIDs operacionais remanescentes (executor_usuario_id / responsavel_usuario_id) servem APENAS como
-    //   tokens históricos de idempotência para tarefas pré-existentes.
-    //   Para casos novos (sem IDs operacionais), os IDs centrais entram na composição da chave mantendo o formato estável.
-    let eventKey = ''
-    const currentExecToken =
-      tarefa.executor_usuario_id || tarefa.executor_core_usuario_id || 'sem_exec'
-    const currentRespToken =
-      tarefa.responsavel_usuario_id || tarefa.responsavel_core_usuario_id || 'sem_resp'
+    //   A chave de um evento EXISTENTE em task_email_eventos NÃO PODE mudar:
+    //   Para os casos históricos já gravados no banco antes da remoção das colunas operacionais,
+    //   o mapa determinístico mapeia o ID central para o token operacional histórico exato.
+    //   Para casos novos ou IDs que não constem do mapa histórico, usa diretamente o ID central.
+    //   Nenhuma consulta à tabela task_tarefas lê colunas legadas.
+    const HISTORICAL_BRIDGE_MAP: Record<string, string> = {
+      '38cb3c4d-7198-40a3-8815-a8881a9f506b': 'c9eb08b8-f534-450c-90ac-17c290dadd93', // Antonio Ricci
+      '9f8f9118-1f38-4284-bd04-59f2dfb2cca8': '2233e740-8b6e-4bf0-acf7-8afb0fcc85ac', // Caio Franco
+      '402b0f6f-3aff-4548-b4f7-3d96d35a134f': '7f712bf9-d3b5-4c9a-a3e9-3118723ea59a', // Daniel Adensohn
+      'cc1b0976-0a93-4b18-8a20-5ce4f8593f6b': 'b62a68b8-f283-4da2-b76a-2979007d8b0a', // Helcio Ricci
+      'c85dc05c-c780-4e8e-b673-2c5ea671eca0': '315b7a5a-c295-40f9-82cd-e3cb69615c3b', // Igor Graciano
+      '849a6645-2e4a-4e5b-aa95-efe9aace6a3c': '47de3b32-e341-4944-912a-e9e15680d39c', // Juliano Silva
+      'a8809366-cce8-436a-844f-7dd95a3ffe2b': 'a0c0a4f9-c147-4523-a78c-68ee2a33f97b', // Leina Kiryu
+      'a9b4149f-2372-4d28-92b1-2a1607dda10f': '35151f76-07e5-4a17-8628-b430145f0189', // Marina Morelis
+      'a708a3de-b2ed-4102-b7df-a64942bafc4f': '24484e4b-303a-4662-b73a-73f2598d3d20', // Pedro Formaggio
+      '17e5e971-4719-4df0-a9c5-e6a3ddfdc50d': 'e3aabf3f-5aad-4872-aa4e-96ee780890d6', // Renata Sebalos
+      '9fa332d8-03c6-48cd-801d-4573306c27eb': '16c14420-26dc-4149-90ee-89828bfd2ad5', // Samara Souto
+      '73e4f369-8d70-4831-8ab9-8aed3e348242': '71ca101c-35cc-46e3-b6c2-a095498194a5', // Vinicius Olivieri
+      'f434dcaf-713f-4987-9a82-20b6aa816880': '8c8cd134-af05-4c49-a3e3-c99495f7d58e', // Brenda Ozaki
+      '42c90a9b-caa8-4b87-b2a6-5d3088b54c5f': '065b5a4a-3fa3-408c-ba05-822640ffc16e', // Dannilo Alves
+      'ca24bdb5-7d0b-4290-807d-77a72bfd9f1b': 'ab6c3eb6-9ddd-487c-b51c-87ca80360464', // Gustavo Oliveira
+      '40df873e-6202-490e-8f25-649717d9d342': '96117505-a559-4a4a-b81c-fc2a46e58c54', // Manuella Maccari
+      '2be0a56f-12b2-469e-a94c-ccaec4eb24ba': '7c5dff4d-854b-4ad3-a36f-4b882b89c545', // Rafael Pessoa
+      '2eb3957b-0cac-4028-a3e3-6ccc1ec28679': '641ef1ff-a5ae-4d29-906c-968bdea61010', // *Teste
+      '74ef237f-b2f9-4e81-b3a2-e4ef45c7c327': 'f2170392-0f9d-4aa5-a3eb-496e5c0385ed', // Ana Santos
+    }
 
+    const resolveEventKeyToken = (coreId?: string | null): string => {
+      if (!coreId) return 'sem_token'
+      return HISTORICAL_BRIDGE_MAP[coreId] || coreId
+    }
+
+    let eventKey = ''
     if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
+      const currentExecToken = resolveEventKeyToken(tarefa.executor_core_usuario_id)
+      const currentRespToken = resolveEventKeyToken(tarefa.responsavel_core_usuario_id)
       const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
       eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecToken}:${currentRespToken}`
     } else if (dbTipoEvento === 'providencia_inclusao') {

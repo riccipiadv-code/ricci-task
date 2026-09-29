@@ -793,6 +793,20 @@ export function ControleModal({
       ? prevExecCore || selectedExec?.core_usuario_id || executorUsuarioId
       : selectedExec?.core_usuario_id || executorUsuarioId
 
+    // Preservação do par operacional histórico:
+    // Apenas quando for edição e a atribuição histórica do papel correspondente NÃO tiver mudado.
+    // Na criação ou na edição com troca de atribuição, NÃO colar o ID central nas colunas operacionais
+    // (deve ser undefined/null, central-only quando não há ponte ou quando houver nova atribuição).
+    const opRespPreservado =
+      respNaoMudou && controleToEdit?.responsavel_usuario_id && controleToEdit.responsavel_usuario_id !== respCoreId
+        ? controleToEdit.responsavel_usuario_id
+        : undefined
+
+    const opExecPreservado =
+      execNaoMudou && controleToEdit?.executor_usuario_id && controleToEdit.executor_usuario_id !== execCoreId
+        ? controleToEdit.executor_usuario_id
+        : undefined
+
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
       nome_controle_id: nomeControleId,
@@ -800,8 +814,8 @@ export function ControleModal({
       status_id: statusId,
       data_autorizacao: dataAutorizacao || null,
       prazo_conclusao: prazoConclusao || null,
-      responsavel_usuario_id: controleToEdit?.responsavel_usuario_id || respCoreId,
-      executor_usuario_id: controleToEdit?.executor_usuario_id || execCoreId,
+      responsavel_usuario_id: opRespPreservado,
+      executor_usuario_id: opExecPreservado,
       responsavel_core_usuario_id: respCoreId,
       executor_core_usuario_id: execCoreId,
       pasta_cliente: pastaCliente.trim() || null,

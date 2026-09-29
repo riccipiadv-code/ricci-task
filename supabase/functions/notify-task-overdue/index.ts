@@ -315,6 +315,8 @@ Deno.serve(async (req: Request) => {
     const senderName = 'Ricci Task'
 
     // 5. Coletar IDs de tarefas únicas para buscar dados dos casos
+    // NOTA DE MIGRAÇÃO: Preparado para funcionar após o DROP das colunas legadas executor_usuario_id / responsavel_usuario_id.
+    // Nenhuma consulta (SELECT) ou gravação referencia essas colunas.
     const tarefaIds = Array.from(new Set(providenciasAbertas.map((p) => p.tarefa_id)))
 
     const { data: tarefasList, error: tarefasError } = await supabase
@@ -324,8 +326,6 @@ Deno.serve(async (req: Request) => {
         numero_caso,
         identificacao_caso,
         nome_controle_id,
-        executor_usuario_id,
-        responsavel_usuario_id,
         executor_core_usuario_id,
         responsavel_core_usuario_id,
         deleted_at,
@@ -349,15 +349,13 @@ Deno.serve(async (req: Request) => {
 
     const getRecipientResolution = async (
       coreUsuarioId?: string | null,
-      fallbackId?: string | null,
     ): Promise<RecipientResolutionResult> => {
-      const targetId = coreUsuarioId || fallbackId
-      if (targetId) {
-        if (recipientResolutionCache.has(targetId)) {
-          return recipientResolutionCache.get(targetId)!
+      if (coreUsuarioId) {
+        if (recipientResolutionCache.has(coreUsuarioId)) {
+          return recipientResolutionCache.get(coreUsuarioId)!
         }
-        const resolved = await resolveValidatedRecipientByCoreId(supabase, targetId)
-        recipientResolutionCache.set(targetId, resolved)
+        const resolved = await resolveValidatedRecipientByCoreId(supabase, coreUsuarioId)
+        recipientResolutionCache.set(coreUsuarioId, resolved)
         return resolved
       }
 
@@ -414,12 +412,11 @@ Deno.serve(async (req: Request) => {
       }
 
       // Obter resolução do Executor validada no Gestor de Acessos
-      // Autoridade central: prioriza executor_core_usuario_id gravado na tarefa; fallback para executor_usuario_id
+      // Autoridade central: usa exclusivamente o executor_core_usuario_id gravado na tarefa.
       // Validando usuário, vínculo com RICCI_TASK, sistema e perfil ativos.
       // Diferenciação estrita: falha técnica vs vínculo comprovadamente inválido.
       const execResolution = await getRecipientResolution(
         tarefa.executor_core_usuario_id,
-        tarefa.executor_usuario_id,
       )
 
       // Se falhou tecnicamente na consulta central do Executor:
@@ -505,10 +502,9 @@ Deno.serve(async (req: Request) => {
       const toEmail = validatedExec.email.trim().toLowerCase()
 
       // Obter dados do Responsável validados centralmente
-      // Autoridade central: prioriza responsavel_core_usuario_id gravado na tarefa; fallback para responsavel_usuario_id
+      // Autoridade central: usa exclusivamente o responsavel_core_usuario_id gravado na tarefa.
       const respResolution = await getRecipientResolution(
         tarefa.responsavel_core_usuario_id,
-        tarefa.responsavel_usuario_id,
       )
 
       // Se falhou tecnicamente na consulta do Responsável:
