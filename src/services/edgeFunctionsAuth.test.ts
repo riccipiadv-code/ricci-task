@@ -455,8 +455,21 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
   })
 })
 
-// Helpers para testes dos caminhos REAIS das Edge Functions
-// Simulam o pipeline exato executado no Deno handler das duas funções com Supabase e SMTP mockados
+/**
+ * LIMITAÇÃO TÉCNICA DO AMBIENTE (Vitest / Node.js vs Deno Runtime):
+ * Os arquivos `supabase/functions/notify-task-assignment/index.ts` e
+ * `supabase/functions/notify-task-overdue/index.ts` utilizam o runtime Deno e APIs específicas
+ * (`Deno.serve`, `jsr:@supabase/functions-js/edge-runtime.d.ts`, `npm:nodemailer`, `npm:@supabase/supabase-js@2`),
+ * incompatíveis com importação estática direta pelo runner Vitest em Node.js.
+ *
+ * Por essa razão, conforme estipulado nos requisitos da tarefa:
+ * 1. O módulo real compartilhado `supabase/functions/_shared/core-auth.ts` é IMPORTADO E TESTADO DIRETAMENTE no topo.
+ * 2. Abaixo é executada uma suíte com handlers de pipeline fiel/equivalente à lógica das Edge Functions
+ *    (mesmas etapas de autenticação, resolução central, idempotência via task_email_eventos, TO/CC e status HTTP).
+ * 3. As descrições dos testes foram corrigidas para DECLARAR EXPRESSAMENTE que testam o módulo real core-auth
+ *    e a lógica de pipeline das Edge Functions (simulada em Node com Supabase e SMTP mockados), sem alegar
+ *    acionamento nativo do processo Deno das Edge Functions.
+ */
 const timingSafeEqual = (a: string, b: string): boolean => {
   if (a.length !== b.length) return false
   let diff = 0
@@ -1000,7 +1013,7 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
   )
 }
 
-describe('Testes de Caminhos REAIS das Edge Functions (notify-task-assignment & notify-task-overdue)', () => {
+describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-task-assignment & notify-task-overdue)', () => {
   let ctx: MockEdgeContext
 
   beforeEach(() => {
@@ -1008,7 +1021,7 @@ describe('Testes de Caminhos REAIS das Edge Functions (notify-task-assignment & 
     ctx = createMockEdgeContext()
   })
 
-  describe('Edge Function notify-task-assignment (Atribuição)', () => {
+  describe('Pipeline notify-task-assignment (Atribuição com módulo real core-auth)', () => {
     it('1. Deduplicação TO/CC: quando Executor e Responsável têm o mesmo e-mail, TO recebe e CC fica vazio', async () => {
       // Configura mock do Supabase
       ctx.supabase = {
@@ -1444,7 +1457,7 @@ describe('Testes de Caminhos REAIS das Edge Functions (notify-task-assignment & 
     })
   })
 
-  describe('Edge Function notify-task-overdue (Rotina de Atrasos)', () => {
+  describe('Pipeline notify-task-overdue (Rotina de Atrasos com módulo real core-auth)', () => {
     it('5. Autenticação via segredo cron real (x-task-cron-secret): segredo válido processa, ausente/inválido rejeita com 401', async () => {
       // 5.1. Segredo válido
       const reqValido = new Request('https://edge.local/notify-task-overdue', {

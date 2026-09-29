@@ -101,6 +101,10 @@ export function ControleModal({
   const [statusProvLista, setStatusProvLista] =
     useState<TaskStatusProvidenciaRecord[]>(statusProvidenciaList)
   const [loadingListas, setLoadingListas] = useState(false)
+  const [erroListasAuxiliares, setErroListasAuxiliares] = useState<string | null>(null)
+
+  // Controle de versão sequencial de requisição para evitar race conditions em respostas assíncronas concorrentes
+  const activeRequestIdRef = useRef<number>(0)
 
   // Modal de cadastro rápido (+) exclusivo para Nome do Controle
   const [quickNomeModalOpen, setQuickNomeModalOpen] = useState(false)
@@ -177,28 +181,59 @@ export function ControleModal({
   >('carregando')
   const [erroUsuariosCentrais, setErroUsuariosCentrais] = useState<string | null>(null)
 
-  // Carrega listas auxiliares
+  // Carrega listas auxiliares e validação central com versionamento por requestId
   const carregarListasAuxiliares = useCallback(async () => {
+    const requestId = ++activeRequestIdRef.current
     setLoadingListas(true)
     setValidacaoUsuariosStatus('carregando')
     setErroUsuariosCentrais(null)
+    setErroListasAuxiliares(null)
+
     try {
       let fetchUsersError: Error | null = null
+      let fetchAuxError: Error | null = null
       let usersValidados: TaskUsuarioAtivoRecord[] = []
-      const [nomes, stProv] = await Promise.all([
-        controleService.getNomesControle({ incluirInativos: true }),
-        statusProvidenciaList.length > 0
-          ? Promise.resolve(statusProvidenciaList)
-          : controleService.getStatusProvidencia(),
-      ])
+      let nomes: TaskNomeControleRecord[] = []
+      let stProv: TaskStatusProvidenciaRecord[] = []
 
+      // 1. Carregar listas auxiliares (nomes de controle e status de providência)
+      try {
+        const [nomesRes, stProvRes] = await Promise.all([
+          controleService.getNomesControle({ incluirInativos: true }),
+          statusProvidenciaList.length > 0
+            ? Promise.resolve(statusProvidenciaList)
+            : controleService.getStatusProvidencia(),
+        ])
+        nomes = nomesRes
+        stProv = stProvRes
+      } catch (auxErr: any) {
+        console.error('Falha ao carregar listas auxiliares no ControleModal:', auxErr)
+        fetchAuxError = auxErr
+      }
+
+      // 2. Carregar validação central de usuários
       try {
         usersValidados = await controleService.getUsuariosAtivos()
-        setValidacaoUsuariosStatus('válida')
       } catch (fetchErr: any) {
         console.error('Falha ao carregar usuários elegíveis com dados centrais:', fetchErr)
         fetchUsersError = fetchErr
-        setValidacaoUsuariosStatus('falhou')
+      }
+
+      // Ignora respostas obsoletas de carregamentos simultâneos anteriores
+      if (requestId !== activeRequestIdRef.current) {
+        return
+      }
+
+      if (fetchAuxError) {
+        const msgAux =
+          (fetchAuxError as any)?.message ||
+          'Falha técnica ao carregar listas auxiliares do controle.'
+        setErroListasAuxiliares(msgAux)
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao carregar listas auxiliares',
+          description: msgAux,
+        })
       }
 
       if (fetchUsersError) {
@@ -206,16 +241,22 @@ export function ControleModal({
           (fetchUsersError as any)?.message ||
           'Falha técnica ao consultar dados centrais no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.'
         setErroUsuariosCentrais(errorMsg)
+        setValidacaoUsuariosStatus('falhou')
         toast({
           variant: 'destructive',
           title: 'Erro ao carregar usuários elegíveis',
           description: errorMsg,
         })
+      } else if (fetchAuxError) {
+        // Se a lista auxiliar falhou, também marcamos falha para bloquear novas ações
+        setValidacaoUsuariosStatus('falhou')
+      } else {
+        setValidacaoUsuariosStatus('válida')
       }
 
-      // Fail-closed: se a leitura central falhar ou estiver carregando,
-      // preservamos EXCLUSIVAMENTE os responsáveis e executores históricos já gravados na edição.
-      // Novos candidatos NÃO são oferecidos até que o estado se torne 'válida'.
+      // Fail-closed & Preservação Histórica:
+      // Preserva sempre os responsáveis e executores históricos já gravados no caso em todos os estados
+      // (carregando, falhou, válida), nunca deixando o histórico desaparecer do modal.
       let listaCombinada = [...usersValidados]
       const respId = controleToEdit?.responsavel_usuario_id
       const execId = controleToEdit?.executor_usuario_id
@@ -225,6 +266,9 @@ export function ControleModal({
       if (respFalta || execFalta) {
         try {
           const todos = await controleService.getTodosUsuarios()
+          // Verifica novamente se a requisição ainda é a atual após busca de todos os usuários
+          if (requestId !== activeRequestIdRef.current) return
+
           todos.forEach((tu) => {
             if (
               (tu.id === respId || tu.id === execId) &&
@@ -243,13 +287,25 @@ export function ControleModal({
         }
       }
 
-      setNomesLista(nomes)
+      if (requestId !== activeRequestIdRef.current) return
+
+      if (nomes.length > 0) {
+        setNomesLista(nomes)
+      }
       setUsuariosLista(listaCombinada)
-      setStatusProvLista(stProv)
-    } catch (err) {
-      console.error('Erro ao carregar listas auxiliares no ControleModal:', err)
+      if (stProv.length > 0) {
+        setStatusProvLista(stProv)
+      }
+    } catch (err: any) {
+      if (requestId === activeRequestIdRef.current) {
+        console.error('Erro geral ao carregar dados no ControleModal:', err)
+        setValidacaoUsuariosStatus('falhou')
+        setErroListasAuxiliares(err?.message || 'Falha ao sincronizar dados do formulário.')
+      }
     } finally {
-      setLoadingListas(false)
+      if (requestId === activeRequestIdRef.current) {
+        setLoadingListas(false)
+      }
     }
   }, [statusProvidenciaList, toast, controleToEdit])
 
@@ -615,8 +671,8 @@ export function ControleModal({
     if (!responsavelUsuarioId) {
       setResponsavelError(true)
       hasError = true
-    } else if (validacaoUsuariosStatus !== 'válida') {
-      // Bloqueia nova atribuição tanto durante 'carregando' quanto durante 'falhou'
+    } else if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
+      // Bloqueia nova atribuição enquanto carregando ou falhou
       const isHistoricoPreservado =
         controleToEdit && responsavelUsuarioId === controleToEdit.responsavel_usuario_id
       if (!isHistoricoPreservado) {
@@ -626,9 +682,9 @@ export function ControleModal({
           variant: 'destructive',
           title: 'Atribuição bloqueada',
           description:
-            validacaoUsuariosStatus === 'carregando'
-              ? 'A validação central de usuários está em andamento. Aguarde a validação completa para salvar novas atribuições.'
-              : 'A validação central de usuários falhou ou está indisponível. Não é possível alterar ou atribuir novo responsável.',
+            validacaoUsuariosStatus === 'carregando' || loadingListas
+              ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
+              : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo responsável.',
         })
       }
     }
@@ -636,8 +692,8 @@ export function ControleModal({
     if (!executorUsuarioId) {
       setExecutorError(true)
       hasError = true
-    } else if (validacaoUsuariosStatus !== 'válida') {
-      // Bloqueia nova atribuição tanto durante 'carregando' quanto durante 'falhou'
+    } else if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
+      // Bloqueia nova atribuição enquanto carregando ou falhou
       const isHistoricoPreservado =
         controleToEdit && executorUsuarioId === controleToEdit.executor_usuario_id
       if (!isHistoricoPreservado) {
@@ -647,9 +703,9 @@ export function ControleModal({
           variant: 'destructive',
           title: 'Atribuição bloqueada',
           description:
-            validacaoUsuariosStatus === 'carregando'
-              ? 'A validação central de usuários está em andamento. Aguarde a validação completa para salvar novas atribuições.'
-              : 'A validação central de usuários falhou ou está indisponível. Não é possível alterar ou atribuir novo executor.',
+            validacaoUsuariosStatus === 'carregando' || loadingListas
+              ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
+              : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo executor.',
         })
       }
     }
@@ -1169,39 +1225,40 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Alerta de status da validação central de usuários */}
-                {validacaoUsuariosStatus === 'carregando' && (
+                {/* Alertas de carregamento e erro recuperável */}
+                {loadingListas && (
                   <div className="p-3.5 rounded-xl bg-primary/10 border border-primary/20 text-xs text-foreground flex items-center gap-2">
                     <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" />
-                    <span>Validando usuários elegíveis no Gestor de Acessos Ricci...</span>
+                    <span>
+                      Carregando listas auxiliares e validando usuários no Gestor de Acessos...
+                    </span>
                   </div>
                 )}
 
-                {validacaoUsuariosStatus === 'falhou' && (
-                  <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>
-                        {erroUsuariosCentrais || 'Falha na validação central de usuários.'}
-                      </span>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={carregarListasAuxiliares}
-                      disabled={loadingListas}
-                      className="h-7 px-2.5 rounded-lg text-[11px] shrink-0 border-destructive/30 hover:bg-destructive/15 text-destructive"
-                    >
-                      {loadingListas ? (
-                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                      ) : (
+                {(validacaoUsuariosStatus === 'falhou' || erroListasAuxiliares) &&
+                  !loadingListas && (
+                    <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>
+                          {erroUsuariosCentrais ||
+                            erroListasAuxiliares ||
+                            'Falha ao sincronizar listas auxiliares ou usuários.'}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={carregarListasAuxiliares}
+                        disabled={loadingListas}
+                        className="h-7 px-2.5 rounded-lg text-[11px] shrink-0 border-destructive/30 hover:bg-destructive/15 text-destructive"
+                      >
                         <RefreshCw className="w-3 h-3 mr-1" />
-                      )}
-                      Tentar novamente
-                    </Button>
-                  </div>
-                )}
+                        Tentar novamente
+                      </Button>
+                    </div>
+                  )}
 
                 {/* Bloco 3: Responsável e Executor (única fonte: task_usuarios com dados centrais) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1220,21 +1277,21 @@ export function ControleModal({
                       <Select
                         value={responsavelUsuarioId}
                         disabled={
-                          validacaoUsuariosStatus !== 'válida' &&
+                          (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
                           !controleToEdit?.responsavel_usuario_id
                         }
                         onValueChange={(val) => {
                           if (
-                            validacaoUsuariosStatus !== 'válida' &&
+                            (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
                             val !== controleToEdit?.responsavel_usuario_id
                           ) {
                             toast({
                               variant: 'destructive',
                               title: 'Seleção bloqueada',
                               description:
-                                validacaoUsuariosStatus === 'carregando'
-                                  ? 'Aguarde a validação central de usuários concluir antes de fazer novas escolhas.'
-                                  : 'Não é possível selecionar novos usuários durante falha da validação central.',
+                                validacaoUsuariosStatus === 'carregando' || loadingListas
+                                  ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
+                                  : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
                             })
                             return
                           }
@@ -1356,21 +1413,21 @@ export function ControleModal({
                         value={executorUsuarioId}
                         disabled={
                           executorIsResponsavel ||
-                          (validacaoUsuariosStatus !== 'válida' &&
+                          ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
                             !controleToEdit?.executor_usuario_id)
                         }
                         onValueChange={(val) => {
                           if (
-                            validacaoUsuariosStatus !== 'válida' &&
+                            (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
                             val !== controleToEdit?.executor_usuario_id
                           ) {
                             toast({
                               variant: 'destructive',
                               title: 'Seleção bloqueada',
                               description:
-                                validacaoUsuariosStatus === 'carregando'
-                                  ? 'Aguarde a validação central de usuários concluir antes de fazer novas escolhas.'
-                                  : 'Não é possível selecionar novos usuários durante falha da validação central.',
+                                validacaoUsuariosStatus === 'carregando' || loadingListas
+                                  ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
+                                  : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
                             })
                             return
                           }
@@ -1381,7 +1438,7 @@ export function ControleModal({
                         <SelectTrigger
                           disabled={
                             executorIsResponsavel ||
-                            (validacaoUsuariosStatus !== 'válida' &&
+                            ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
                               !controleToEdit?.executor_usuario_id)
                           }
                           className={cn(
@@ -1907,7 +1964,11 @@ export function ControleModal({
               <Button
                 type="button"
                 size="sm"
-                disabled={saving}
+                disabled={
+                  saving ||
+                  loadingListas ||
+                  (!controleToEdit && validacaoUsuariosStatus !== 'válida')
+                }
                 onClick={() => handleSubmitControle()}
                 className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary text-primary-foreground shadow-sm hover:bg-[#4A4AC2]"
               >
