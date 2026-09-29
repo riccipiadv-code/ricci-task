@@ -1,14 +1,15 @@
-# Plano de Migração e Corte Definitivo para IDs Centrais — Ricci Task (v0.0.68)
+# Plano de Migração e Corte Definitivo para IDs Centrais — Ricci Task (v0.0.74)
 
 ## 1. Contexto e Motivação
 
 O sistema Ricci Task historicamente utilizava uma tabela local (`public.task_usuarios`) para mapear responsáveis e executores de tarefas. Com a unificação da governança corporativa no **Gestor de Acessos Ricci** (`core_usuarios`, `core_sistemas`, `core_perfis`, `core_usuario_sistemas`), as tarefas passaram a conter campos centrais (`responsavel_core_usuario_id` e `executor_core_usuario_id`).
 
-A versão **0.0.68** realiza o corte definitivo de ponta a ponta:
+A versão **0.0.74** consolida o corte definitivo de ponta a ponta:
 
-- Elimina a exigência de registros operacionais em `task_usuarios` ("ponte operacional").
+- Elimina qualquer dependência operacional ou de salvamento da tabela `task_usuarios`.
 - Migra a seleção, filtros, detecção de alteração de responsáveis/executores e disparos de e-mail exclusivamente para os IDs centrais.
 - Preserva histórico, dados arquivados, idempotência estável em `task_email_eventos` e leitura autorizada de nomes históricos (inclusive inativos).
+- **As colunas de tokens históricos (`task_tarefas.responsavel_usuario_id` e `task_tarefas.executor_usuario_id`) PERMANECEM em `task_tarefas`** (sem FK) para garantir que as chaves de idempotência antigas continuem idênticas e resolvíveis determinísticamente.
 
 ---
 
@@ -58,37 +59,41 @@ Para garantir zero indisponibilidade e permitir que **sessões abertas na versã
   1. Assegura que todas as linhas de `task_tarefas` possuam IDs centrais preenchidos.
   2. Altera `responsavel_core_usuario_id` e `executor_core_usuario_id` para `NOT NULL`.
   3. Torna `responsavel_usuario_id` e `executor_usuario_id` em `NULLABLE` (removendo restrição `NOT NULL`).
-  4. Adiciona trigger temporário de compatibilidade reversa (`trg_task_tarefas_compat_core`), garantindo que tanto a versão antiga (que envia IDs de `task_usuarios`) quanto a versão nova (que envia IDs centrais) consigam inserir e atualizar tarefas simultaneamente sem erro de FK ou nulo.
+  4. Adiciona trigger temporário de compatibilidade reversa (`trg_task_tarefas_compat_core`), operando exclusivamente quando uma sessão antiga envia apenas as colunas operacionais (sem preenchimento reverso para gravações novas).
   5. Cria índices para performance nas colunas centrais.
 
 ### Fase 2: Publicação do Frontend e Edge Functions
 
 - **Ação**:
-  1. Build e publicação da versão 0.0.68 do frontend do Ricci Task.
+  1. Build e publicação da versão do frontend do Ricci Task.
   2. Deploy das duas Edge Functions atualizadas:
      - `notify-task-assignment`
      - `notify-task-overdue`
 - **Comportamento nesta fase**:
-  - Usuários que recarregam a página já entram na v0.0.68 operando 100% sobre IDs centrais.
-  - Usuários com abas antigas abertas ainda conseguem salvar casos sem erros técnicos, graças ao trigger de compatibilidade da Fase 1.
+  - Usuários que recarregam a página já entram na versão nova operando 100% sobre IDs centrais.
+  - Pessoas novas sem vínculo com `task_usuarios` gravam normalmente com as colunas centrais preenchidas e colunas operacionais nulas.
   - Nenhuma notificação ou busca em Edge Functions consulta `task_usuarios`.
 
-### Fase 3: Exclusão e Limpeza Definitiva (Pós-Transição)
+### Fase 3: Exclusão e Limpeza Definitiva Manual (Pós-Transição)
 
-- **Quando executar**: Somente após 24h a 48h da publicação da Fase 2, quando todos os usuários tiverem encerrado as sessões antigas.
-- **O que faz**:
-  1. Remove o trigger temporário de compatibilidade.
-  2. Executa `DROP TABLE public.task_email_notificacoes CASCADE`.
-  3. Remove as FKs legadas de `task_tarefas` para `task_usuarios`.
-  4. Remove as colunas legadas `responsavel_usuario_id` e `executor_usuario_id` de `task_tarefas`.
-  5. Executa `DROP FUNCTION public.task_listar_usuarios_elegiveis()`.
-  6. Executa `DROP TABLE public.task_usuarios CASCADE`.
+- **Quando executar**: Somente após 24h a 48h da publicação da Fase 2, e após confirmar que não há mais sessões abertas na versão anterior.
+- **O que faz (Execução Manual SEM CASCADE)**:
+  1. Remove explicitamente triggers e funções: `trg_task_tarefas_compat_core`, `trg_sync_task_usuarios_to_core`, `trg_task_tarefas_compat_core_ids()` e `fn_sync_task_usuarios_to_core()`.
+  2. Remove as Foreign Keys legadas de `task_tarefas` apontando para `task_usuarios` (`task_tarefas_responsavel_usuario_id_fkey`, `task_tarefas_executor_usuario_id_fkey`, etc.).
+  3. **IMPORTANTE: As colunas `task_tarefas.responsavel_usuario_id` e `executor_usuario_id` NÃO são removidas**. Elas permanecem desvinculadas (sem FK) preservando os tokens históricos para idempotência de e-mails antigos.
+  4. Remove explicitamente as FKs de `task_email_notificacoes` e depois remove a tabela `DROP TABLE IF EXISTS task_email_notificacoes` (sem CASCADE).
+  5. Remove a função legada `DROP FUNCTION IF EXISTS task_listar_usuarios_elegiveis()`.
+  6. Remove a tabela `DROP TABLE IF EXISTS task_usuarios` (sem CASCADE).
 
 ---
 
 ## 4. Garantia de Idempotência e Tokens Históricos
 
 - Eventos gravados anteriormente em `task_email_eventos` mantêm suas chaves intactas.
+- A Edge Function `notify-task-assignment` resolve os tokens da chave via `resolveEventKeyToken(historicalToken, coreId)`:
+  - Se a coluna operacional estiver preenchida (`tarefa.executor_usuario_id` / `tarefa.responsavel_usuario_id`), usa o token histórico operacional.
+  - Caso contrário (novas atribuições sem coluna operacional), usa o ID central.
+  - Se nenhum estiver presente, usa `'sem_token'`.
+- Chave composta: `atribuicao:{tarefa.id}:{tarefa.updated_at||tarefa.created_at||'sem_timestamp'}:{execToken}:{respToken}`.
 - Chaves antigas no formato `atribuicao:{tarefa.id}:{timestamp}:{execId}:{respId}` continuam existindo e impedindo reenvios duplicados (`already_sent`).
-- Novos casos e edições na versão 0.0.68 compõem a chave utilizando os **IDs centrais** dos envolvidos (`executor_core_usuario_id` e `responsavel_core_usuario_id`), mantendo a estabilidade e previsibilidade de chaves.
 - Salvar um caso sem alterações não executa UPDATE em `task_tarefas`, preservando `updated_at` e mantendo a integridade da chave de idempotência.

@@ -568,23 +568,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     )
   })
 
-  it('IDs centrais divergentes do respectivo task_usuarios.core_usuario_id são REJEITADOS com erro', async () => {
-    // 1. Caso criação com ID central divergente da lista de ativos elegíveis
-    const usuariosLista = [
-      {
-        id: 'tu-resp',
-        nome: 'Responsável A',
-        email: 'resp.a@riccipi.com.br',
-        core_usuario_id: 'cu-pessoa-a',
-      },
-      {
-        id: 'tu-exec',
-        nome: 'Executor B',
-        email: 'exec.b@riccipi.com.br',
-        core_usuario_id: 'cu-pessoa-b',
-      },
-    ]
-
+  it('validação de pares obrigatórios: exige IDs centrais válidos para Responsável e Executor', async () => {
     vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
       if (table === 'task_status') {
         return {
@@ -598,67 +582,36 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       return {}
     }) as any)
 
-    // Envia responsavel_usuario_id de pessoa A, mas responsavel_core_usuario_id de pessoa B
+    // 1. Sem ID central do Responsável
     await expect(
       controleService.saveControle(
         {
           nome_controle_id: 'nc-1',
-          identificacao_caso: 'Caso Divergente',
+          identificacao_caso: 'Caso Sem Resp',
           status_id: 'st-aberto',
-          responsavel_usuario_id: 'tu-resp',
-          executor_usuario_id: 'tu-exec',
-          responsavel_core_usuario_id: 'cu-pessoa-b', // DIVERGENTE!
+          responsavel_core_usuario_id: '',
           executor_core_usuario_id: 'cu-pessoa-b',
-        },
-        usuariosLista,
-      ),
-    ).rejects.toThrow(
-      'Gravação bloqueada: o ID central do Responsável diverge do vínculo correspondente em task_usuarios.',
-    )
-
-    // 2. Caso com bridge lookup onde o banco retorna cu-pessoa-a e o input enviou cu-trocado
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_status') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
-            }),
-          }),
-        }
-      }
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [
-                  { id: 'tu-resp', core_usuario_id: 'cu-pessoa-a' },
-                  { id: 'tu-exec', core_usuario_id: 'cu-pessoa-b' },
-                ],
-                error: null,
-              }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
-
-    await expect(
-      controleService.saveControle(
-        {
-          nome_controle_id: 'nc-1',
-          identificacao_caso: 'Caso Divergente Executor',
-          status_id: 'st-aberto',
-          responsavel_usuario_id: 'tu-resp',
-          executor_usuario_id: 'tu-exec',
-          responsavel_core_usuario_id: 'cu-pessoa-a',
-          executor_core_usuario_id: 'cu-trocado', // DIVERGENTE!
         },
         [],
       ),
     ).rejects.toThrow(
-      'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
+      'Gravação bloqueada: o Responsável selecionado não possui ID central válido no Gestor de Acessos.',
+    )
+
+    // 2. Sem ID central do Executor
+    await expect(
+      controleService.saveControle(
+        {
+          nome_controle_id: 'nc-1',
+          identificacao_caso: 'Caso Sem Exec',
+          status_id: 'st-aberto',
+          responsavel_core_usuario_id: 'cu-pessoa-a',
+          executor_core_usuario_id: '',
+        },
+        [],
+      ),
+    ).rejects.toThrow(
+      'Gravação bloqueada: o Executor selecionado não possui ID central válido no Gestor de Acessos.',
     )
   })
 
@@ -830,6 +783,147 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
 
     expect(result.responsavel_core_usuario_id).toBe('cu-sem-ponte')
     expect(result.executor_core_usuario_id).toBe('cu-exec')
+  })
+
+  it('gravação dupla quando há ponte: preserva coluna operacional legada quando informada', async () => {
+    let insertedPayload: any = null
+
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_tarefas') {
+        return {
+          insert: (payload: any) => {
+            insertedPayload = payload
+            return {
+              select: () => ({
+                single: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'tarefa-dupla',
+                      ...payload,
+                      updated_at: '2025-05-10T12:00:00Z',
+                    },
+                    error: null,
+                  }),
+              }),
+            }
+          },
+        }
+      }
+      if (table === 'task_providencias') {
+        return {
+          select: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => ({
+                  order: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    await controleService.saveControle(
+      {
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Caso Com Ponte',
+        status_id: 'st-aberto',
+        responsavel_usuario_id: 'tu-ponte-resp', // ID operacional legado de ponte
+        executor_usuario_id: 'tu-ponte-exec', // ID operacional legado de ponte
+        responsavel_core_usuario_id: 'cu-core-resp',
+        executor_core_usuario_id: 'cu-core-exec',
+      },
+      [],
+    )
+
+    expect(insertedPayload.responsavel_usuario_id).toBe('tu-ponte-resp')
+    expect(insertedPayload.executor_usuario_id).toBe('tu-ponte-exec')
+    expect(insertedPayload.responsavel_core_usuario_id).toBe('cu-core-resp')
+    expect(insertedPayload.executor_core_usuario_id).toBe('cu-core-exec')
+  })
+
+  it('prova (d): com mock SEM a tabela task_usuarios, listagem e salvamento funcionam sem nenhuma consulta a ela', async () => {
+    let taskUsuariosQueried = false
+
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_usuarios') {
+        taskUsuariosQueried = true
+        throw new Error('Tabela task_usuarios NÃO DEVE ser consultada no fluxo de salvamento!')
+      }
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_tarefas') {
+        return {
+          insert: (payload: any) => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'tarefa-sem-task-usuarios',
+                    ...payload,
+                    updated_at: '2025-05-10T12:00:00Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          select: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => Promise.resolve({ data: [], error: null }),
+              }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_providencias') {
+        return {
+          select: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => ({
+                  order: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    // Salvamento com usuário sem ponte (apenas IDs centrais)
+    const result = await controleService.saveControle({
+      nome_controle_id: 'nc-1',
+      identificacao_caso: 'Caso Sem Tabela task_usuarios',
+      status_id: 'st-aberto',
+      responsavel_core_usuario_id: 'cu-pessoa-10',
+      executor_core_usuario_id: 'cu-pessoa-20',
+    })
+
+    expect(taskUsuariosQueried).toBe(false)
+    expect(result.responsavel_core_usuario_id).toBe('cu-pessoa-10')
+    expect(result.executor_core_usuario_id).toBe('cu-pessoa-20')
+    expect(result.responsavel_usuario_id).toBe('cu-pessoa-10') // fallback hidratado
+    expect(result.executor_usuario_id).toBe('cu-pessoa-20') // fallback hidratado
   })
 
   it('detecta reatribuição A -> B -> A comparando os IDs centrais e disparando notificações adequadamente', async () => {

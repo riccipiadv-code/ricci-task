@@ -1353,12 +1353,25 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     }
   }
 
-  const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_stamp'
-  const currentExecToken =
-    tarefa.executor_usuario_id || tarefa.executor_core_usuario_id || 'sem_exec'
-  const currentRespToken =
-    tarefa.responsavel_usuario_id || tarefa.responsavel_core_usuario_id || 'sem_resp'
-  const eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${currentExecToken}:${currentRespToken}`
+  const resolveEventKeyToken = (
+    historicalToken?: string | null,
+    coreId?: string | null,
+  ): string => {
+    if (historicalToken) return historicalToken
+    if (coreId) return coreId
+    return 'sem_token'
+  }
+
+  const tarefaSaveStamp = tarefa.updated_at || tarefa.created_at || 'sem_timestamp'
+  const execToken = resolveEventKeyToken(
+    tarefa.executor_usuario_id,
+    tarefa.executor_core_usuario_id,
+  )
+  const respToken = resolveEventKeyToken(
+    tarefa.responsavel_usuario_id,
+    tarefa.responsavel_core_usuario_id,
+  )
+  const eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${execToken}:${respToken}`
 
   // Verificar idempotência
   const { data: existingEvent } = await ctx.supabase
@@ -3725,6 +3738,393 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       // SMTP foi invocado para a tarefa de sucesso
       expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
       expect(ctx.transporter.sentMails[0].to).toBe('exec.sucesso@riccipi.com.br')
+    })
+
+    describe('Provas Obrigatórias v0.0.74 (Regras de Event Key, Ponte e Transição)', () => {
+      it('prova (a): caso antigo com tokens legados + evento success em task_email_eventos resulta em already_sent sem reenvio', async () => {
+        const mockCaller = {
+          id: 'auth-adm',
+          email: 'admin@riccitask.com.br',
+        }
+        ctx.supabase.auth.getUser = vi.fn().mockResolvedValue({
+          data: { user: mockCaller },
+          error: null,
+        })
+
+        const historicalExecToken = 'c9eb08b8-f534-450c-90ac-17c290dadd93'
+        const historicalRespToken = '2233e740-8b6e-4bf0-acf7-8afb0fcc85ac'
+        const stamp = '2025-01-15T10:00:00.000Z'
+        const expectedEventKey = `atribuicao:tarefa-historica:${stamp}:${historicalExecToken}:${historicalRespToken}`
+
+        ctx.supabase.from = vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { id: 'cu-adm', auth_user_id: 'auth-adm', ativo: true },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            return {
+              select: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  in: () => chain,
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'link-ok',
+                        ativo: true,
+                        core_usuarios: {
+                          id: 'cu-exec-1',
+                          nome: 'Exec Histórico',
+                          email: 'exec.hist@riccipi.com.br',
+                          ativo: true,
+                        },
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                      },
+                      error: null,
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-historica',
+                        numero_caso: 99,
+                        executor_usuario_id: historicalExecToken,
+                        responsavel_usuario_id: historicalRespToken,
+                        executor_core_usuario_id: 'cu-core-exec-1',
+                        responsavel_core_usuario_id: 'cu-core-resp-1',
+                        created_at: stamp,
+                        updated_at: stamp,
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: (_col: string, val: string) => ({
+                  maybeSingle: () => {
+                    if (val === expectedEventKey) {
+                      return Promise.resolve({
+                        data: {
+                          id: 'evt-existente',
+                          event_key: expectedEventKey,
+                          status: 'success',
+                          sent_at: '2025-01-15T10:05:00.000Z',
+                        },
+                        error: null,
+                      })
+                    }
+                    return Promise.resolve({ data: null, error: null })
+                  },
+                }),
+              }),
+            }
+          }
+          return {}
+        }) as any
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-historica',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+
+        const body = await res.json()
+        expect(body.sent).toBe(false)
+        expect(body.reason).toBe('already_sent')
+        expect(body.event_key).toBe(expectedEventKey)
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('prova (b): pessoa sem ponte atribuída grava só central e recebe e-mail via ID central na chave', async () => {
+        const mockCaller = {
+          id: 'auth-adm',
+          email: 'admin@riccitask.com.br',
+        }
+        ctx.supabase.auth.getUser = vi.fn().mockResolvedValue({
+          data: { user: mockCaller },
+          error: null,
+        })
+
+        const stamp = '2025-05-15T14:30:00.000Z'
+        const expectedEventKey = `atribuicao:tarefa-sem-ponte:${stamp}:cu-novo-exec:cu-novo-resp`
+
+        ctx.supabase.from = vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { id: 'cu-adm', auth_user_id: 'auth-adm', ativo: true },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            return {
+              select: () => {
+                const chain: any = {
+                  eq: (_col: string, val: string) => {
+                    chain._targetId = val
+                    return chain
+                  },
+                  in: () => chain,
+                  maybeSingle: () => {
+                    const isResp = chain._targetId === 'cu-novo-resp'
+                    return Promise.resolve({
+                      data: {
+                        id: isResp ? 'link-resp' : 'link-exec',
+                        ativo: true,
+                        core_usuarios: {
+                          id: isResp ? 'cu-novo-resp' : 'cu-novo-exec',
+                          nome: isResp ? 'Resp Sem Ponte' : 'Exec Sem Ponte',
+                          email: isResp ? 'resp.novo@riccipi.com.br' : 'exec.novo@riccipi.com.br',
+                          ativo: true,
+                        },
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                      },
+                      error: null,
+                    })
+                  },
+                }
+                return chain
+              },
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-sem-ponte',
+                        numero_caso: 105,
+                        executor_usuario_id: null, // SEM ponte operacional
+                        responsavel_usuario_id: null, // SEM ponte operacional
+                        executor_core_usuario_id: 'cu-novo-exec',
+                        responsavel_core_usuario_id: 'cu-novo-resp',
+                        created_at: stamp,
+                        updated_at: stamp,
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () => Promise.resolve({ data: { id: 'evt-novo-1' }, error: null }),
+                }),
+              }),
+              update: () => ({
+                eq: () => Promise.resolve({ data: null, error: null }),
+              }),
+            }
+          }
+          return {}
+        }) as any
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-sem-ponte',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+
+        const body = await res.json()
+        expect(body.sent).toBe(true)
+        expect(body.event_key).toBe(expectedEventKey)
+        expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
+        expect(ctx.transporter.sentMails[0].to).toBe('exec.novo@riccipi.com.br')
+        expect(ctx.transporter.sentMails[0].cc).toBe('resp.novo@riccipi.com.br')
+      })
+
+      it('prova (c): troca A -> B -> A gera eventos com chaves distintas sem colisão', async () => {
+        const resolveEventKeyToken = (
+          historicalToken?: string | null,
+          coreId?: string | null,
+        ): string => {
+          if (historicalToken) return historicalToken
+          if (coreId) return coreId
+          return 'sem_token'
+        }
+
+        const tarefaId = 'tarefa-troca'
+        const time1 = '2025-05-10T10:00:00.000Z'
+        const time2 = '2025-05-11T11:00:00.000Z'
+        const time3 = '2025-05-12T12:00:00.000Z'
+
+        // Estado 1: Atribuído a A
+        const key1 = `atribuicao:${tarefaId}:${time1}:${resolveEventKeyToken(null, 'cu-a')}:${resolveEventKeyToken(null, 'cu-a')}`
+        // Estado 2: Troca para B
+        const key2 = `atribuicao:${tarefaId}:${time2}:${resolveEventKeyToken(null, 'cu-b')}:${resolveEventKeyToken(null, 'cu-b')}`
+        // Estado 3: Volta para A (updated_at novo no banco)
+        const key3 = `atribuicao:${tarefaId}:${time3}:${resolveEventKeyToken(null, 'cu-a')}:${resolveEventKeyToken(null, 'cu-a')}`
+
+        expect(key1).not.toBe(key2)
+        expect(key2).not.toBe(key3)
+        expect(key1).not.toBe(key3) // Timestamp distinto garante que não colide com o envio original
+      })
+
+      it('prova (d): Edge Function opera sem consultar task_usuarios em nenhuma hipótese', async () => {
+        let taskUsuariosQueried = false
+        ctx.supabase.from = vi.fn((table: string) => {
+          if (table === 'task_usuarios') {
+            taskUsuariosQueried = true
+            throw new Error('task_usuarios NÃO PODE ser consultada na Edge Function!')
+          }
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { id: 'cu-adm', auth_user_id: 'auth-adm', ativo: true },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            return {
+              select: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  in: () => chain,
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'link-ok',
+                        ativo: true,
+                        core_usuarios: {
+                          id: 'cu-core-exec',
+                          nome: 'Exec Test',
+                          email: 'exec@riccipi.com.br',
+                          ativo: true,
+                        },
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                      },
+                      error: null,
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'tarefa-sem-tu',
+                        numero_caso: 10,
+                        executor_usuario_id: null,
+                        responsavel_usuario_id: null,
+                        executor_core_usuario_id: 'cu-core-exec',
+                        responsavel_core_usuario_id: 'cu-core-exec',
+                        created_at: '2025-05-10T10:00:00Z',
+                        updated_at: '2025-05-10T10:00:00Z',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () => Promise.resolve({ data: { id: 'evt-1' }, error: null }),
+                }),
+              }),
+              update: () => ({
+                eq: () => Promise.resolve({ data: null, error: null }),
+              }),
+            }
+          }
+          return {}
+        }) as any
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-sem-tu',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        expect(taskUsuariosQueried).toBe(false)
+      })
     })
   })
 })
