@@ -6,6 +6,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
 import {
+  resolveValidatedRecipientByCoreId,
   resolveValidatedTaskUserEmailDetailed,
   verifyRicciTaskCaller,
 } from '../_shared/core-auth.ts'
@@ -192,6 +193,8 @@ Deno.serve(async (req: Request) => {
         nome_controle_id,
         executor_usuario_id,
         responsavel_usuario_id,
+        executor_core_usuario_id,
+        responsavel_core_usuario_id,
         created_at,
         updated_at,
         deleted_at,
@@ -343,12 +346,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // 4. Buscar Executor e Responsável validados centralmente no Gestor de Acessos:
-    // A partir de task_usuarios.id gravado no caso:
-    // - Obtém task_usuarios.core_usuario_id
-    // - Obtém o e-mail atual em core_usuarios
-    // - Valida: core_usuarios.ativo = true, core_usuario_sistemas.ativo = true (sistema RICCI_TASK ativo) e core_perfis.ativo = true
-    // - Sem vínculo válido ou em falha de leitura central: NÃO envia para o e-mail local antigo (fail-closed).
-    if (!tarefa.executor_usuario_id) {
+    // Autoridade central: usa prioritariamente executor_core_usuario_id e responsavel_core_usuario_id
+    // gravados na tarefa. Se ausentes, resolve via ID operacional com fallback.
+    // Valida: core_usuarios.ativo = true, core_usuario_sistemas.ativo = true, core_sistemas.ativo = true e core_perfis.ativo = true.
+    // task_usuarios.ativo = false NÃO bloqueia pessoa válida no core.
+    const hasExecutor = Boolean(tarefa.executor_core_usuario_id || tarefa.executor_usuario_id)
+    if (!hasExecutor) {
       return new Response(
         JSON.stringify({
           triggered: true,
@@ -363,15 +366,15 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    const execResolution = await resolveValidatedTaskUserEmailDetailed(
-      supabase,
-      tarefa.executor_usuario_id,
-    )
+    const execResolution = tarefa.executor_core_usuario_id
+      ? await resolveValidatedRecipientByCoreId(supabase, tarefa.executor_core_usuario_id)
+      : await resolveValidatedTaskUserEmailDetailed(supabase, tarefa.executor_usuario_id!)
 
     // Se houve falha técnica de consulta central para o executor, retorna erro 500 (recuperável/retry)
     if (execResolution.status === 'technical_failure') {
       console.error('Falha técnica na consulta central do Executor:', execResolution.error, {
         tarefa_id,
+        executor_core_usuario_id: tarefa.executor_core_usuario_id,
         executor_usuario_id: tarefa.executor_usuario_id,
       })
       return new Response(
@@ -399,6 +402,7 @@ Deno.serve(async (req: Request) => {
         'Envio abortado: Executor sem vínculo central ativo válido no Gestor de Acessos para RICCI_TASK ou sem e-mail.',
         {
           tarefa_id,
+          executor_core_usuario_id: tarefa.executor_core_usuario_id,
           executor_usuario_id: tarefa.executor_usuario_id,
           reason: execResolution.error,
         },
@@ -421,21 +425,21 @@ Deno.serve(async (req: Request) => {
     const toEmail = validatedExecutor.email.trim().toLowerCase()
 
     let validatedResponsavel: {
-      taskUsuarioId: string
+      taskUsuarioId?: string
       coreUsuarioId: string
       nome: string
       email: string
     } | null = null
 
-    if (tarefa.responsavel_usuario_id) {
-      const respResolution = await resolveValidatedTaskUserEmailDetailed(
-        supabase,
-        tarefa.responsavel_usuario_id,
-      )
+    if (tarefa.responsavel_core_usuario_id || tarefa.responsavel_usuario_id) {
+      const respResolution = tarefa.responsavel_core_usuario_id
+        ? await resolveValidatedRecipientByCoreId(supabase, tarefa.responsavel_core_usuario_id)
+        : await resolveValidatedTaskUserEmailDetailed(supabase, tarefa.responsavel_usuario_id!)
 
       if (respResolution.status === 'technical_failure') {
         console.error('Falha técnica na consulta central do Responsável:', respResolution.error, {
           tarefa_id,
+          responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
           responsavel_usuario_id: tarefa.responsavel_usuario_id,
         })
         return new Response(

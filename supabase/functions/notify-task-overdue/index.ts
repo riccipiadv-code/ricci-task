@@ -3,6 +3,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
 import {
   verifyRicciTaskAdmin,
+  resolveValidatedRecipientByCoreId,
   resolveValidatedTaskUserEmailDetailed,
   RecipientResolutionResult,
 } from '../_shared/core-auth.ts'
@@ -326,6 +327,8 @@ Deno.serve(async (req: Request) => {
         nome_controle_id,
         executor_usuario_id,
         responsavel_usuario_id,
+        executor_core_usuario_id,
+        responsavel_core_usuario_id,
         deleted_at,
         nome_controle:task_nomes_controle(nome)
       `)
@@ -342,20 +345,34 @@ Deno.serve(async (req: Request) => {
     }
 
     // 6. Cache de resoluções de destinatários no Gestor de Acessos para otimizar chamadas
+    // Prioriza core_usuario_id (autoridade central). Usa cache com prefixo 'core:' ou 'task:'.
     const recipientResolutionCache = new Map<string, RecipientResolutionResult>()
 
     const getRecipientResolution = async (
+      coreUsuarioId?: string | null,
       taskUsuarioId?: string | null,
     ): Promise<RecipientResolutionResult> => {
-      if (!taskUsuarioId) {
-        return { status: 'missing_user_id', recipient: null }
+      if (coreUsuarioId) {
+        const cacheKey = `core:${coreUsuarioId}`
+        if (recipientResolutionCache.has(cacheKey)) {
+          return recipientResolutionCache.get(cacheKey)!
+        }
+        const resolved = await resolveValidatedRecipientByCoreId(supabase, coreUsuarioId)
+        recipientResolutionCache.set(cacheKey, resolved)
+        return resolved
       }
-      if (recipientResolutionCache.has(taskUsuarioId)) {
-        return recipientResolutionCache.get(taskUsuarioId)!
+
+      if (taskUsuarioId) {
+        const cacheKey = `task:${taskUsuarioId}`
+        if (recipientResolutionCache.has(cacheKey)) {
+          return recipientResolutionCache.get(cacheKey)!
+        }
+        const resolved = await resolveValidatedTaskUserEmailDetailed(supabase, taskUsuarioId)
+        recipientResolutionCache.set(cacheKey, resolved)
+        return resolved
       }
-      const resolved = await resolveValidatedTaskUserEmailDetailed(supabase, taskUsuarioId)
-      recipientResolutionCache.set(taskUsuarioId, resolved)
-      return resolved
+
+      return { status: 'missing_user_id', recipient: null }
     }
 
     // Mapa de nomes locais para fallback na montagem do e-mail (caso histórico)
@@ -427,10 +444,13 @@ Deno.serve(async (req: Request) => {
       }
 
       // Obter resolução do Executor validada no Gestor de Acessos
-      // A partir do ID gravado no caso: task_usuarios.core_usuario_id -> core_usuarios.email
+      // Autoridade central: prioriza executor_core_usuario_id gravado na tarefa; fallback para executor_usuario_id
       // Validando usuário, vínculo com RICCI_TASK, sistema e perfil ativos.
       // Diferenciação estrita: falha técnica vs vínculo comprovadamente inválido.
-      const execResolution = await getRecipientResolution(tarefa.executor_usuario_id)
+      const execResolution = await getRecipientResolution(
+        tarefa.executor_core_usuario_id,
+        tarefa.executor_usuario_id,
+      )
 
       // Se falhou tecnicamente na consulta central do Executor:
       // Registra como 'error' com erro 'falha_consulta_central' (permite retry, não marca skipped/sucesso)
@@ -515,7 +535,11 @@ Deno.serve(async (req: Request) => {
       const toEmail = validatedExec.email.trim().toLowerCase()
 
       // Obter dados do Responsável validados centralmente
-      const respResolution = await getRecipientResolution(tarefa.responsavel_usuario_id)
+      // Autoridade central: prioriza responsavel_core_usuario_id gravado na tarefa; fallback para responsavel_usuario_id
+      const respResolution = await getRecipientResolution(
+        tarefa.responsavel_core_usuario_id,
+        tarefa.responsavel_usuario_id,
+      )
 
       // Se falhou tecnicamente na consulta do Responsável:
       if (respResolution.status === 'technical_failure') {
