@@ -368,6 +368,9 @@ Deno.serve(async (req: Request) => {
     let totalSkipped = 0
     let totalErrors = 0
 
+    const INTERVALO_REENVIO_HORAS = 72
+    const INTERVALO_REENVIO_MS = INTERVALO_REENVIO_HORAS * 60 * 60 * 1000
+
     for (const prov of providenciasAbertas) {
       const tarefa = tarefasMap.get(prov.tarefa_id)
 
@@ -384,7 +387,50 @@ Deno.serve(async (req: Request) => {
         continue
       }
 
-      // Idempotência: chave diária exata
+      // REGRA DE REPETIÇÃO A CADA 72 HORAS:
+      // - Mantém o primeiro envio quando a providência entrar em atraso.
+      // - Depois, só permitir novo envio quando tiverem transcorrido 72 horas do sent_at do último envio BEM-SUCEDIDO daquela providência.
+      // - Repetir a cada 72 horas enquanto continuar atrasada e com alertas ativos.
+      // - Consulta o último evento BEM-SUCEDIDO (status = 'success' AND sent_at IS NOT NULL) desta providência.
+      const { data: ultimoEnvioSucesso, error: checkUltimoSucessoError } = await supabase
+        .from('task_email_eventos')
+        .select('id, sent_at')
+        .eq('providencia_id', prov.id)
+        .eq('tipo_evento', 'providencia_atraso')
+        .eq('status', 'success')
+        .not('sent_at', 'is', null)
+        .order('sent_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (checkUltimoSucessoError) {
+        console.warn(
+          'Aviso ao consultar último envio de sucesso para providência',
+          prov.id,
+          checkUltimoSucessoError,
+        )
+      }
+
+      if (ultimoEnvioSucesso && ultimoEnvioSucesso.sent_at) {
+        const sentAtMs = new Date(ultimoEnvioSucesso.sent_at).getTime()
+        const agoraMs = Date.now()
+        const diferencaMs = agoraMs - sentAtMs
+
+        if (diferencaMs < INTERVALO_REENVIO_MS) {
+          const horasRestantes = Math.ceil((INTERVALO_REENVIO_MS - diferencaMs) / (60 * 60 * 1000))
+          results.push({
+            providencia_id: prov.id,
+            tarefa_id: tarefa.id,
+            event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+            status: 'skipped',
+            reason: 'intervalo_72h_nao_atingido',
+          })
+          totalSkipped++
+          continue
+        }
+      }
+
+      // Idempotência do ciclo diário para proteção contra disparos repetidos/concorrentes no mesmo dia
       // providencia_atraso:{providencia_id}:{AAAA-MM-DD}
       const eventKey = `providencia_atraso:${prov.id}:${todayStr}`
 

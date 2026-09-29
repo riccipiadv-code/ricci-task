@@ -830,11 +830,12 @@ export function ControleModal({
       pasta_ricci: pastaRicci.trim() || null,
     }
 
-    // Detecção de reatribuição (para disparar notificação): compara IDs CENTRAIS
-    let tipoNotificacao: 'nova_atribuicao' | 'alteracao_atribuicao' | null = null
-    if (!isEditMode) {
-      tipoNotificacao = 'nova_atribuicao'
-    } else {
+    // Detecção de alteração de atribuição (para disparar notificação): compara IDs CENTRAIS.
+    // REGRA: A CRIAÇÃO de um caso NÃO envia e-mail de atribuição.
+    // Em caso existente, enviar UM ÚNICO e-mail quando Responsável ou Executor mudar, inclusive se ambos mudarem.
+    // Salvar sem mudar a atribuição NÃO envia e-mail.
+    let tipoNotificacao: 'alteracao_atribuicao' | null = null
+    if (isEditMode) {
       const mudouExecutor = prevExecCore !== execCoreId
       const mudouResponsavel = prevRespCore !== respCoreId
       if (mudouExecutor || mudouResponsavel) {
@@ -1909,7 +1910,7 @@ export function ControleModal({
                                     !item.email_alertas && 'opacity-40 pointer-events-none',
                                   )}
                                 >
-                                  {/* Subtipo 1: Inclusão / início */}
+                                  {/* Subtipo 1: Inclusão da providência */}
                                   <div className="flex items-center gap-1.5">
                                     <Checkbox
                                       id={`alerta-inclusao-${item.tempId}`}
@@ -1933,7 +1934,7 @@ export function ControleModal({
                                           : 'cursor-not-allowed',
                                       )}
                                     >
-                                      Inclusão / início
+                                      Inclusão da providência
                                     </Label>
                                   </div>
 

@@ -279,6 +279,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         prazo_conclusao: '2025-02-10',
         responsavel_usuario_id: 'tu-resp',
         executor_usuario_id: 'tu-exec',
+        responsavel_core_usuario_id: 'cu-resp',
+        executor_core_usuario_id: 'cu-exec',
       },
       usuariosLista,
     )
@@ -408,6 +410,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         prazo_conclusao: '2025-02-10',
         responsavel_usuario_id: 'tu-resp-novo',
         executor_usuario_id: 'tu-exec-novo',
+        responsavel_core_usuario_id: 'cu-resp-novo',
+        executor_core_usuario_id: 'cu-exec-novo',
       },
       usuariosLista,
     )
@@ -554,6 +558,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           status_id: 'st-aberto',
           responsavel_usuario_id: 'tu-resp',
           executor_usuario_id: 'tu-exec',
+          responsavel_core_usuario_id: 'cu-resp',
+          executor_core_usuario_id: 'cu-exec',
         },
         [],
       ),
@@ -816,6 +822,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         status_id: 'st-aberto',
         responsavel_usuario_id: 'cu-sem-ponte',
         executor_usuario_id: 'cu-exec',
+        responsavel_core_usuario_id: 'cu-sem-ponte',
+        executor_core_usuario_id: 'cu-exec',
       },
       usuariosListaComPessoaSemPonte,
     )
@@ -828,7 +836,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     let notifyCallCount = 0
     const notifiedTipos: string[] = []
 
-    vi.spyOn(controleService, 'notifyTaskAssignment').mockImplementation((_tarefaId, tipo) => {
+    vi.spyOn(controleService, 'notifyAssignment').mockImplementation((_tarefaId, tipo) => {
       notifyCallCount++
       notifiedTipos.push(tipo)
       return Promise.resolve({ success: true, triggered: true, sent: true } as any)
@@ -914,6 +922,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         prazo_conclusao: '2025-02-10',
         responsavel_usuario_id: 'cu-pessoa-b',
         executor_usuario_id: 'cu-pessoa-b',
+        responsavel_core_usuario_id: 'cu-pessoa-b',
+        executor_core_usuario_id: 'cu-pessoa-b',
       },
       usuarios,
     )
@@ -933,6 +943,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         prazo_conclusao: '2025-02-10',
         responsavel_usuario_id: 'cu-pessoa-a',
         executor_usuario_id: 'cu-pessoa-a',
+        responsavel_core_usuario_id: 'cu-pessoa-a',
+        executor_core_usuario_id: 'cu-pessoa-a',
       },
       usuarios,
     )

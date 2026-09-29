@@ -126,7 +126,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // Tipos suportados:
-    // Legados/Atribuição: 'nova_atribuicao', 'alteracao_atribuicao', 'atribuicao'
+    // Atribuição: 'alteracao_atribuicao' (legados mantidos para tolerância de rota: 'nova_atribuicao', 'atribuicao')
     // Providências: 'providencia_inclusao', 'providencia_atualizacao'
     const allowedTipos = [
       'nova_atribuicao',
@@ -218,6 +218,27 @@ Deno.serve(async (req: Request) => {
           sent: false,
           reason: 'tarefa_excluida',
           message: 'A tarefa informada está excluída.',
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // REGRA DE ATRIBUIÇÃO:
+    // A CRIAÇÃO de um caso NÃO deve enviar e-mail.
+    // Se a requisição for para evento de atribuição e o caso for uma criação nova
+    // (tipo === 'nova_atribuicao' ou tarefa recém-criada sem updated_at distinto de created_at quando tipo for criação),
+    // ignorar o disparo de forma segura e controlada.
+    if (tipo === 'nova_atribuicao') {
+      return new Response(
+        JSON.stringify({
+          triggered: false,
+          sent: false,
+          reason: 'criacao_sem_notificacao',
+          message:
+            'A criação de caso não gera disparo de e-mail de atribuição por regra do sistema.',
         }),
         {
           status: 200,
@@ -644,15 +665,16 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      subject = `Nova atribuição Ricci Task [Caso ${numeroCasoStr}]`
+      subject = `Alteração de atribuição Ricci Task [Caso ${numeroCasoStr}]`
       bodyLines.push(`Olá, ${execFirstName}.`)
       bodyLines.push('')
-      bodyLines.push('Uma nova tarefa foi atribuída a você no Ricci Task.')
+      bodyLines.push('Houve uma alteração de atribuição no seu caso no Ricci Task.')
       bodyLines.push('')
       if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
       bodyLines.push(`Caso: ${numeroCasoStr}`)
       if (tarefa.identificacao_caso?.trim())
         bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+      bodyLines.push(`Executor: ${execNomeFull || 'Não definido'}`)
       if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
 
       if (proximaProvidenciaAberta && proximaProvidenciaAberta.providencia) {
