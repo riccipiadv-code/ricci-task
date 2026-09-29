@@ -154,15 +154,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     [],
   )
 
+  // Controle de versão sequencial para eventos de autenticação
+  const authEventSeqRef = useRef<number>(0)
+  // Flag que indica se onAuthStateChange já recebeu pelo menos um evento
+  const onAuthEventReceivedRef = useRef<boolean>(false)
+
   /**
    * Ponto centralizado para aplicar uma nova sessão (ou nula) e disparar a autorização.
-   * Chamado de forma síncrona tanto por onAuthStateChange quanto pela resolução inicial de getSession().
+   * Chamado de forma síncrona tanto por onAuthStateChange quanto pela checagem inicial de getSession().
+   * Protegido por sequência de versão para impedir que respostas tardias de getSession()
+   * sobrescrevam eventos mais recentes de autenticação ou logout.
    */
   const applySessionAndAuthorize = useCallback(
-    (newSession: Session | null, source: string) => {
+    (newSession: Session | null, source: string, authSeq: number, event?: string) => {
+      // Ignora respostas obsoletas de autenticação (ex.: getSession tardio após onAuthStateChange)
+      if (authSeq < authEventSeqRef.current) {
+        return
+      }
+
       const newUserId = newSession?.user?.id ?? null
       const previousUserId = currentUserIdRef.current
       const isUserSwitch = newUserId !== previousUserId
+      // Se for um novo evento SIGNED_IN do mesmo usuário, permite revalidar se o acesso estava bloqueado ('no_access' ou 'error')
+      const isRevalidatableSignIn =
+        !isUserSwitch &&
+        event === 'SIGNED_IN' &&
+        (accessStatusRef.current === 'no_access' || accessStatusRef.current === 'error')
 
       // Atualiza ref do usuário ativo imediatamente
       currentUserIdRef.current = newUserId
@@ -180,8 +197,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         return
       }
 
-      if (isUserSwitch) {
-        // Novo usuário ou primeira restauração de sessão:
+      if (isUserSwitch || isRevalidatableSignIn) {
+        // Novo usuário, primeira restauração de sessão ou novo SIGNED_IN do mesmo usuário antes bloqueado:
         // 1. Invalida imediatamente qualquer autorização anterior
         // 2. Marca loadingAccess como true ANTES de liberar rotas
         setLoadingAccess(true)
@@ -193,13 +210,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setCoreUsuarioNome(null)
         setCoreErrorMessage(null)
 
-        // Dispara resolução central
-        void resolveAccessForUser(newUserId, false)
+        // Dispara resolução central (se for revalidação forçada de SIGNED_IN, force = true)
+        void resolveAccessForUser(newUserId, isRevalidatableSignIn)
       } else {
         // Mesmo usuário (ex: TOKEN_REFRESHED, USER_UPDATED, getSession repetido).
-        // Se já houver consulta em andamento ou o acesso já foi resolvido, NÃO reativa loadingAccess
-        // sem consulta que o finalize, prevenindo SplashScreens infinitas e queries duplicadas.
-        if (accessStatusRef.current === null && !inFlightPromiseRef.current) {
+        // Se for TOKEN_REFRESHED do mesmo usuário, NÃO dispara nova consulta de acesso.
+        // Se ainda não houve resolução nem consulta em andamento, dispara a inicial.
+        if (
+          event !== 'TOKEN_REFRESHED' &&
+          accessStatusRef.current === null &&
+          !inFlightPromiseRef.current
+        ) {
           setLoadingAccess(true)
           void resolveAccessForUser(newUserId, false)
         }
@@ -223,24 +244,37 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Escuta mudanças de auth em tempo real (login, logout, refresh de token)
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    } = supabase.auth.onAuthStateChange((event, newSession) => {
       // PROIBIDO async/await aqui dentro — estritamente síncrono conforme instrução de integração
-      applySessionAndAuthorize(newSession, 'onAuthStateChange')
+      onAuthEventReceivedRef.current = true
+      const currentSeq = ++authEventSeqRef.current
+      applySessionAndAuthorize(newSession, 'onAuthStateChange', currentSeq, event)
     })
 
-    // Checagem inicial da sessão atual
+    // Checagem de segurança da sessão via getSession():
+    // Uma resposta inicial tardia, nula, com erro ou pertencente a outro usuário JAMAIS pode
+    // sobrescrever evento de autenticação mais recente ou restaurar sessão após logout.
     supabase.auth
       .getSession()
       .then(({ data: { session: initialSession }, error }) => {
+        // Se onAuthStateChange já recebeu evento mais recente, ignora getSession tardio
+        if (onAuthEventReceivedRef.current && authEventSeqRef.current > 0) {
+          return
+        }
+        const currentSeq = ++authEventSeqRef.current
         if (!error && initialSession) {
-          applySessionAndAuthorize(initialSession, 'getSession')
+          applySessionAndAuthorize(initialSession, 'getSession', currentSeq, 'INITIAL_SESSION')
         } else {
-          applySessionAndAuthorize(null, 'getSession-error')
+          applySessionAndAuthorize(null, 'getSession-error', currentSeq, 'INITIAL_SESSION')
         }
       })
       .catch((err) => {
         console.error('[AuthProvider] Erro ao obter sessão inicial:', err)
-        applySessionAndAuthorize(null, 'getSession-catch')
+        if (onAuthEventReceivedRef.current && authEventSeqRef.current > 0) {
+          return
+        }
+        const currentSeq = ++authEventSeqRef.current
+        applySessionAndAuthorize(null, 'getSession-catch', currentSeq, 'INITIAL_SESSION')
       })
 
     return () => {

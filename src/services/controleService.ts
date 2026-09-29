@@ -233,10 +233,10 @@ export const controleService = {
 
     if (sistemaError) {
       console.error('Erro ao consultar core_sistemas para RICCI_TASK:', sistemaError)
-      // Em caso de falha técnica temporária, fallback fail-open para os task_usuarios ativos
-      return (taskUsers || [])
-        .map((u) => ({ id: u.id, nome: u.nome, email: u.email, ativo: u.ativo }))
-        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+      // Fail-closed: falha técnica na leitura central NÃO deve disponibilizar candidatos não confirmados
+      throw new Error(
+        'Falha técnica ao validar permissões no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
+      )
     }
 
     if (!sistemaData || !sistemaData.ativo) {
@@ -260,10 +260,10 @@ export const controleService = {
 
     if (linksError) {
       console.error('Erro ao consultar vínculos de core_usuario_sistemas:', linksError)
-      // Fallback temporário em falha técnica
-      return (taskUsers || [])
-        .map((u) => ({ id: u.id, nome: u.nome, email: u.email, ativo: u.ativo }))
-        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+      // Fail-closed: falha técnica na leitura central NÃO deve disponibilizar candidatos não confirmados
+      throw new Error(
+        'Falha técnica ao consultar vínculos no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
+      )
     }
 
     const authorizedCoreIds = new Set((validLinks || []).map((l: any) => l.usuario_id))

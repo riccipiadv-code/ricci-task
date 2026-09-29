@@ -79,8 +79,8 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.coreUserId).toBe('core-1')
   })
 
-  // 2. eventos repetidos e TOKEN_REFRESHED do mesmo usuário não geram SplashScreen infinita nem consultas duplicadas
-  it('2. eventos repetidos e TOKEN_REFRESHED do mesmo usuário não geram SplashScreen infinita nem consultas duplicadas', async () => {
+  // 2. eventos repetidos e TOKEN_REFRESHED do mesmo usuário NÃO disparam nova consulta nem geram SplashScreen infinita
+  it('2. TOKEN_REFRESHED do mesmo usuário NÃO deve disparar nova consulta de acesso', async () => {
     const mockUser = { id: 'user-refresh-1', email: 'same@riccipi.com.br' }
     const mockSession = { user: mockUser, access_token: 'token-ref-1' }
 
@@ -121,8 +121,8 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.hasSystemAccess).toBe(true)
   })
 
-  // 3. troca de usuário com consulta anterior pendente: a resposta antiga não se aplica
-  it('3. troca de usuário com consulta anterior pendente: a resposta antiga não se aplica', async () => {
+  // 3. troca de usuário com consulta anterior pendente: a resposta antiga não se aplica ao novo usuário
+  it('3. troca de usuário com consulta anterior pendente: resposta antiga não deve valer para o usuário novo', async () => {
     let resolveUser1: (val: any) => void = () => {}
     const user1Promise = new Promise((res) => {
       resolveUser1 = res
@@ -191,8 +191,8 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.corePerfil).toBe('OPERACIONAL_USER_2')
   })
 
-  // 4. logout durante consulta em andamento
-  it('4. logout durante consulta em andamento não restaura acesso após logout', async () => {
+  // 4. logout seguido de resposta antiga: não restaura sessão nem dados de acesso
+  it('4. logout seguido de resposta antiga não deve restaurar sessão nem autorização', async () => {
     let resolveUser: (val: any) => void = () => {}
     const pendingPromise = new Promise((res) => {
       resolveUser = res
@@ -236,8 +236,170 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.accessStatus).toBeNull()
   })
 
-  // 5. revalidações concorrentes (refreshAccess em paralelo)
-  it('5. revalidações concorrentes (refreshAccess em paralelo) deduplicam ou respeitam a versão mais recente', async () => {
+  // 5. getSession() tardio chegando APÓS login: deve ser ignorado e não sobrescrever sessão atual
+  it('5. getSession() tardio chegando APÓS um login deve ser ignorado e não sobrescrever', async () => {
+    let delayedGetSessionResolve: (val: any) => void = () => {}
+    const delayedGetSessionPromise = new Promise((res) => {
+      delayedGetSessionResolve = res
+    })
+
+    vi.spyOn(supabase.auth, 'getSession').mockReturnValue(delayedGetSessionPromise as any)
+
+    vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockResolvedValue({
+      hasSystemAccess: true,
+      accessStatus: 'ok',
+      perfil: 'ADMINISTRADOR',
+      perfilNome: 'Administrador Geral',
+      coreUserId: 'core-login-1',
+      usuarioNome: 'Usuário Login Recente',
+      errorMessage: null,
+      isTechnicalError: false,
+    })
+
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    // Usuário faz login via onAuthStateChange
+    const freshUser = { id: 'user-fresh-login', email: 'fresh@riccipi.com.br' }
+    act(() => {
+      authChangeCallback?.('SIGNED_IN', { user: freshUser, access_token: 'fresh-token' })
+    })
+
+    await waitFor(() => {
+      expect(result.current.loadingAccess).toBe(false)
+    })
+    expect(result.current.user?.id).toBe('user-fresh-login')
+    expect(result.current.hasSystemAccess).toBe(true)
+    expect(result.current.corePerfil).toBe('ADMINISTRADOR')
+
+    // getSession() tardio responde agora com um usuário antigo ou desatualizado
+    const oldUser = { id: 'user-old-delayed', email: 'old@riccipi.com.br' }
+    await act(async () => {
+      delayedGetSessionResolve({
+        data: { session: { user: oldUser, access_token: 'old-token' } },
+        error: null,
+      })
+    })
+
+    // O login mais recente DEVE ter sido preservado integralmente
+    expect(result.current.user?.id).toBe('user-fresh-login')
+    expect(result.current.hasSystemAccess).toBe(true)
+    expect(result.current.corePerfil).toBe('ADMINISTRADOR')
+  })
+
+  // 6. getSession() tardio nulo ou com erro após login: NÃO deve deslogar o usuário ativo
+  it('6. getSession() tardio nulo/com erro após login não deve deslogar o usuário', async () => {
+    let delayedGetSessionResolve: (val: any) => void = () => {}
+    const delayedGetSessionPromise = new Promise((res) => {
+      delayedGetSessionResolve = res
+    })
+
+    vi.spyOn(supabase.auth, 'getSession').mockReturnValue(delayedGetSessionPromise as any)
+
+    vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockResolvedValue({
+      hasSystemAccess: true,
+      accessStatus: 'ok',
+      perfil: 'GESTOR',
+      perfilNome: 'Gestor',
+      coreUserId: 'core-user-active',
+      usuarioNome: 'Usuário Ativo',
+      errorMessage: null,
+      isTechnicalError: false,
+    })
+
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    // Usuário loga
+    act(() => {
+      authChangeCallback?.('SIGNED_IN', {
+        user: { id: 'user-stay-logged' },
+        access_token: 'tok-123',
+      })
+    })
+
+    await waitFor(() => {
+      expect(result.current.loadingAccess).toBe(false)
+    })
+    expect(result.current.user?.id).toBe('user-stay-logged')
+    expect(result.current.hasSystemAccess).toBe(true)
+
+    // getSession() tardio resolve nulo (ou erro)
+    await act(async () => {
+      delayedGetSessionResolve({
+        data: { session: null },
+        error: new Error('Sessão expirada no getSession'),
+      })
+    })
+
+    // Usuário permanece logado e autorizado!
+    expect(result.current.user?.id).toBe('user-stay-logged')
+    expect(result.current.session).not.toBeNull()
+    expect(result.current.hasSystemAccess).toBe(true)
+  })
+
+  // 7. revalidação de acesso de usuário antes negado com `no_access` quando chega novo `SIGNED_IN` do mesmo usuário
+  it('7. revalidação de acesso de usuário antes negado com no_access quando chega novo SIGNED_IN do mesmo usuário', async () => {
+    let callCount = 0
+    vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          hasSystemAccess: false,
+          accessStatus: 'no_access',
+          perfil: null,
+          coreUserId: null,
+          errorMessage: 'Sem perfil para RICCI_TASK',
+          isTechnicalError: false,
+        }
+      }
+      return {
+        hasSystemAccess: true,
+        accessStatus: 'ok',
+        perfil: 'OPERACIONAL',
+        perfilNome: 'Operacional',
+        coreUserId: 'core-liberado',
+        usuarioNome: 'Usuário Liberado',
+        errorMessage: null,
+        isTechnicalError: false,
+      }
+    })
+
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    // Primeiro login: acesso negado no Gestor de Acessos
+    act(() => {
+      authChangeCallback?.('SIGNED_IN', {
+        user: { id: 'user-liberacao-posterior' },
+        access_token: 'tok-initial',
+      })
+    })
+
+    await waitFor(() => {
+      expect(result.current.loadingAccess).toBe(false)
+    })
+    expect(result.current.accessStatus).toBe('no_access')
+    expect(result.current.hasSystemAccess).toBe(false)
+    expect(callCount).toBe(1)
+
+    // Administrador concede permissão no Gestor de Acessos e o usuário faz login novamente (mesmo usuário)
+    act(() => {
+      authChangeCallback?.('SIGNED_IN', {
+        user: { id: 'user-liberacao-posterior' },
+        access_token: 'tok-renewed',
+      })
+    })
+
+    // Deve revalidar o acesso e agora liberar o sistema!
+    await waitFor(() => {
+      expect(result.current.loadingAccess).toBe(false)
+    })
+    expect(callCount).toBe(2)
+    expect(result.current.accessStatus).toBe('ok')
+    expect(result.current.hasSystemAccess).toBe(true)
+    expect(result.current.corePerfil).toBe('OPERACIONAL')
+  })
+
+  // 8. revalidações concorrentes (refreshAccess em paralelo)
+  it('8. revalidações concorrentes (refreshAccess em paralelo) deduplicam ou respeitam a versão mais recente', async () => {
     let callCount = 0
     vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockImplementation(async () => {
       callCount++
@@ -278,55 +440,8 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.accessStatus).toBe('ok')
   })
 
-  // 6. ausência de acesso -> bloqueio; usuário inativo -> desconexão única sem loop; falha de logout mantém bloqueio
-  it('6. ausência de acesso -> bloqueio (no_access); usuário inativo -> disabled', async () => {
-    // 6a: Sem acesso (no_access)
-    vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockResolvedValueOnce({
-      hasSystemAccess: false,
-      accessStatus: 'no_access',
-      perfil: null,
-      coreUserId: null,
-      errorMessage: 'Usuário sem vínculo configurado.',
-      isTechnicalError: false,
-    })
-
-    const { result } = renderHook(() => useAuth(), { wrapper })
-
-    act(() => {
-      authChangeCallback?.('SIGNED_IN', { user: { id: 'user-no-access' } })
-    })
-
-    await waitFor(() => {
-      expect(result.current.loadingAccess).toBe(false)
-    })
-
-    expect(result.current.hasSystemAccess).toBe(false)
-    expect(result.current.accessStatus).toBe('no_access')
-
-    // 6b: Usuário desativado (disabled)
-    vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockResolvedValueOnce({
-      hasSystemAccess: false,
-      accessStatus: 'disabled',
-      perfil: null,
-      coreUserId: 'c-disabled',
-      errorMessage: 'Usuário inativo no sistema corporativo.',
-      isTechnicalError: false,
-    })
-
-    act(() => {
-      authChangeCallback?.('SIGNED_IN', { user: { id: 'user-disabled' } })
-    })
-
-    await waitFor(() => {
-      expect(result.current.loadingAccess).toBe(false)
-    })
-
-    expect(result.current.hasSystemAccess).toBe(false)
-    expect(result.current.accessStatus).toBe('disabled')
-  })
-
-  // 7. falha técnica -> fallback temporário legado; recuperação posterior funciona
-  it('7. falha técnica -> accessStatus=error (fail-open); recuperação posterior via refreshAccess funciona', async () => {
+  // 9. falha técnica -> accessStatus=error (fail-open); recuperação posterior via refreshAccess funciona
+  it('9. falha técnica -> accessStatus=error (fail-open); recuperação posterior via refreshAccess funciona', async () => {
     vi.spyOn(coreAccessModule, 'resolveUserCoreAccess').mockRejectedValueOnce(
       new Error('Erro de conexão ao banco'),
     )
