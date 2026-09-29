@@ -117,7 +117,7 @@ Para garantir alto desempenho e evitar reconsultas pesadas em cada linha avaliad
     - Isso significa que, se uma política de `UPDATE` padrão omitir `WITH CHECK`, uma tentativa de reatribuição para um terceiro fora do escopo do editor falhará com violação de RLS na linha resultante, impedindo a transferência segura e gerando inconsistências no cliente.
     - Portanto, se a operação for feita via UPDATE direto:
       - Deve-se especificar explicitamente `WITH CHECK (true)` para permitir que o usuário com acesso prévio (validado em `USING`) conclua a transferência mesmo perdendo acesso posterior.
-      - OU, preferencialmente e de forma recomendada pela arquitetura, utilizar a função RPC `SECURITY DEFINER` (`public.task_transferir_atribuicao`), que bloqueia a linha (`FOR UPDATE`), valida a autorização estrita no estado anterior real da linha, executa o update, grava auditoria em `task_transicoes_atribuicao` e devolve os metadados de transição sem depender de permissões diretas na API REST.
+      - OU, preferencialmente e de forma recomendada pela arquitetura, utilizar a função RPC `SECURITY DEFINER` (`public.task_transferir_atribuicao`), que bloqueia a linha (`FOR UPDATE`), valida a autorização estrita no estado anterior real da linha, valida a elegibilidade central dos destinatários no RICCI_TASK, preserva o token histórico do papel não alterado, executa o update, grava auditoria em `task_transicoes_atribuicao` (com INSERT bloqueado para clientes) e devolve os metadados de transição (transicao_id, updated_at real e perda_acesso).
   - **USING**: Mesma expressão do `SELECT` (o chamador só pode atualizar casos que já estejam dentro do seu escopo atual prévio ao salvamento).
   - **WITH CHECK explícito**: `WITH CHECK (true)` para políticas de UPDATE direto de dados gerais da tarefa, permitindo transferências autorizadas pelo estado prévio.
   - **Reatribuição com perda de acesso**: O salvamento da reatribuição conclui com sucesso (autorização atestada no estado anterior). Após o commit, o caso sai da listagem do editor na próxima leitura/refresh (já que não atende mais ao `SELECT`).
@@ -162,6 +162,10 @@ As providências herdam o escopo de `task_tarefas`.
 - `task_status`, `task_status_providencia`, `task_tipos_prazo`:
   - **SELECT**: Todos os usuários autenticados no Ricci Task.
   - **INSERT / UPDATE / DELETE**: Restrito a `ADMINISTRADOR`.
+- `task_transicoes_atribuicao`:
+  - **SELECT**: Restrito ao autor da transição (`autor_core_id = task_current_core_user_id()`) e a `ADMINISTRADOR` (`task_is_admin()`).
+  - **INSERT / UPDATE / DELETE**: BLOQUEADO para `authenticated` e `anon`. Nenhuma operação de escrita direta pelo cliente. Inserção realizada exclusivamente pela RPC `SECURITY DEFINER` `public.task_transferir_atribuicao`.
+
 - `task_email_eventos`:
   - Escrita e leitura restritas ao fluxo de notificações do backend e administradores.
 

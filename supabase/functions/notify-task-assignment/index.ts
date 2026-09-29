@@ -7,6 +7,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
 import {
   checkTaskAccessScope,
+  checkTransitionNotificationAccess,
   escapeHtml,
   resolveValidatedRecipientByCoreId,
   verifyRicciTaskCaller,
@@ -259,21 +260,54 @@ Deno.serve(async (req: Request) => {
       tarefa,
     )
 
+    let authorizedByTransition = false
+
     if (!scopeCheck.allowed) {
-      console.warn(
-        `Disparo bloqueado: chamador ${callerCheck.coreUser.id} (${callerCheck.perfil}) fora do escopo da tarefa ${tarefa.id}. Motivo: ${scopeCheck.error}`,
-      )
-      return new Response(
-        JSON.stringify({
-          error:
-            scopeCheck.error ||
-            'Permissão negada: você não possui acesso a este caso para disparar notificações.',
-        }),
-        {
-          status: scopeCheck.status === 'technical_failure' ? 500 : 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      )
+      if (scopeCheck.status === 'technical_failure') {
+        return new Response(
+          JSON.stringify({
+            error:
+              scopeCheck.error ||
+              'Falha técnica de comunicação ao verificar escopo no Gestor de Acessos.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      // Se o chamador NÃO possui mais acesso ao escopo ATUAL da tarefa (ex.: transferiu o caso e perdeu acesso),
+      // e o evento for de atribuição, verifica se existe um registro de transição correspondente
+      // (autor_core_id = chamador, tarefa_id = caso, validado no servidor pela RPC).
+      if (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') {
+        const transCheck = await checkTransitionNotificationAccess(
+          supabase,
+          callerCheck.coreUser.id,
+          tarefa,
+        )
+
+        if (transCheck.allowed) {
+          authorizedByTransition = true
+        }
+      }
+
+      if (!authorizedByTransition) {
+        console.warn(
+          `Disparo bloqueado: chamador ${callerCheck.coreUser.id} (${callerCheck.perfil}) fora do escopo da tarefa ${tarefa.id}. Motivo: ${scopeCheck.error}`,
+        )
+        return new Response(
+          JSON.stringify({
+            error:
+              scopeCheck.error ||
+              'Permissão negada: você não possui acesso a este caso para disparar notificações.',
+          }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
     }
 
     // REGRA DE ATRIBUIÇÃO:

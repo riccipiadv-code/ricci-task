@@ -622,6 +622,70 @@ export async function checkTaskAccessScope(
 /**
  * Escapa caracteres especiais de HTML para prevenção de injeção XSS em e-mails
  */
+/**
+ * Validação de autorização para notificação de reatribuição baseada no registro de transição:
+ * Quando o chamador não tem mais escopo sobre o estado ATUAL da tarefa (ex.: transferiu o caso
+ * e perdeu acesso), verifica se existe um registro em `task_transicoes_atribuicao` que:
+ * - pertença ao mesmo caso (`tarefa_id`)
+ * - tenha sido criado pelo mesmo autor central (`autor_core_id`)
+ * - corresponda aos dados da transição (ex.: versao_anterior_updated_at correspondente)
+ *
+ * Retorna { allowed: boolean; transition?: any; error?: string }
+ */
+export async function checkTransitionNotificationAccess(
+  supabase: SupabaseClient,
+  callerCoreId: string,
+  tarefa: {
+    id: string
+    updated_at?: string | null
+    created_at?: string | null
+  },
+): Promise<{ allowed: boolean; transition?: any; error?: string }> {
+  if (!callerCoreId || !tarefa?.id) {
+    return { allowed: false, error: 'Identificadores incompletos para validação de transição.' }
+  }
+
+  try {
+    const { data: transitions, error: transError } = await supabase
+      .from('task_transicoes_atribuicao')
+      .select(
+        'id, tarefa_id, autor_core_id, versao_anterior_updated_at, perda_acesso_autor, created_at',
+      )
+      .eq('tarefa_id', tarefa.id)
+      .eq('autor_core_id', callerCoreId)
+      .order('created_at', { ascending: false })
+      .limit(5)
+
+    if (transError) {
+      console.error(
+        '[core-auth] Falha técnica ao verificar registro de transição de atribuição:',
+        transError,
+      )
+      return {
+        allowed: false,
+        error: 'Falha técnica ao verificar registro de transição no banco de dados.',
+      }
+    }
+
+    if (!transitions || transitions.length === 0) {
+      return {
+        allowed: false,
+        error: 'Nenhum registro de transição autorizado encontrado para este autor neste caso.',
+      }
+    }
+
+    // Se encontrou transição do mesmo autor para a mesma tarefa
+    const matchingTransition = transitions[0]
+    return { allowed: true, transition: matchingTransition }
+  } catch (err: any) {
+    console.error('[core-auth] Exceção ao verificar transição:', err)
+    return {
+      allowed: false,
+      error: 'Exceção técnica ao verificar registro de transição.',
+    }
+  }
+}
+
 export function escapeHtml(str?: string | null): string {
   if (!str) return ''
   return String(str)

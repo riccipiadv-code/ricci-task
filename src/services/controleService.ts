@@ -942,58 +942,110 @@ export const controleService = {
         return (loaded || existingRecord) as TaskControleRecord
       }
 
-      // Quando houver alteração real, NÃO envie updated_at no payload de update;
-      // deixe o gatilho do banco definir updated_at e use o valor retornado pelo banco (.select().single()).
-      const updatePayload: {
-        nome_controle_id: string
-        identificacao_caso: string
-        status_id: string
-        data_autorizacao: string | null
-        prazo_conclusao: string | null
-        responsavel_usuario_id?: string | null
-        executor_usuario_id?: string | null
-        responsavel_core_usuario_id: string
-        executor_core_usuario_id: string
-        pasta_cliente: string | null
-        pasta_ricci: string | null
-        updated_by: string | null
-        arquivado_at?: string
-      } = {
-        nome_controle_id: input.nome_controle_id,
-        identificacao_caso: cleanNewIdent,
-        status_id: input.status_id,
-        data_autorizacao: cleanNewDataAut,
-        prazo_conclusao: cleanNewPrazo,
-        responsavel_usuario_id: opRespId,
-        executor_usuario_id: opExecId,
-        responsavel_core_usuario_id: targetRespCoreId,
-        executor_core_usuario_id: targetExecCoreId,
-        pasta_cliente: cleanNewPastaCliente,
-        pasta_ricci: cleanNewPastaRicci,
-        updated_by: userId,
+      // DETECÇÃO DE REATRIBUIÇÃO E COORDENAÇÃO SEGURA:
+      // Se houver alteração de responsável ou executor (mudouResp || mudouExec),
+      // a reatribuição DEVE ser executada primeiro via RPC autorizada no servidor (task_transferir_atribuicao),
+      // que bloqueia a linha (FOR UPDATE), valida a permissão no estado anterior, valida elegibilidade central
+      // e grava o registro de auditoria da transição.
+      let effectiveUpdatedAt: string | null = null
+      let perdaAcessoPorRpc = false
+
+      if (mudouResp || mudouExec) {
+        // Chamada à RPC autorizada de transição de atribuição
+        const { data: rpcData, error: rpcErr } = await (supabase.rpc as any)(
+          'task_transferir_atribuicao',
+          {
+            p_tarefa_id: input.id,
+            p_novo_responsavel_core_id: targetRespCoreId,
+            p_novo_executor_core_id: targetExecCoreId,
+            p_motivo: 'Reatribuição via edição de controle',
+          },
+        )
+
+        if (rpcErr) {
+          console.error('Falha na RPC task_transferir_atribuicao:', rpcErr)
+          throw new Error(
+            `Falha ao transferir atribuição do caso: ${rpcErr.message || 'Operação negada ou erro interno.'}`,
+          )
+        }
+
+        const parsedRpc = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData
+        if (!parsedRpc || parsedRpc.success !== true) {
+          throw new Error('A transição de atribuição não foi confirmada pelo servidor.')
+        }
+
+        effectiveUpdatedAt = parsedRpc.updated_at || null
+        perdaAcessoPorRpc = Boolean(parsedRpc.perda_acesso)
       }
 
-      if (statusFinaliza) {
-        updatePayload.arquivado_at = existingRecord.arquivado_at || nowIso
+      // Se houver outros campos alterados no caso (nome, identificação, status, datas, pastas, arquivado),
+      // atualizamos task_tarefas com os demais dados.
+      const outrosCamposMudaram =
+        mudouNome ||
+        mudouIdent ||
+        mudouStatus ||
+        mudouDataAut ||
+        mudouPrazo ||
+        mudouPastaCli ||
+        mudouPastaRicci ||
+        mudouArquivado
+
+      if (outrosCamposMudaram) {
+        const updatePayload: any = {
+          nome_controle_id: input.nome_controle_id,
+          identificacao_caso: cleanNewIdent,
+          status_id: input.status_id,
+          data_autorizacao: cleanNewDataAut,
+          prazo_conclusao: cleanNewPrazo,
+          pasta_cliente: cleanNewPastaCliente,
+          pasta_ricci: cleanNewPastaRicci,
+          updated_by: userId,
+        }
+
+        // Se NÃO passou pela RPC (atribuição não mudou), inclui os IDs e tokens
+        if (!mudouResp && !mudouExec) {
+          updatePayload.responsavel_usuario_id = opRespId
+          updatePayload.executor_usuario_id = opExecId
+          updatePayload.responsavel_core_usuario_id = targetRespCoreId
+          updatePayload.executor_core_usuario_id = targetExecCoreId
+        }
+
+        if (statusFinaliza) {
+          updatePayload.arquivado_at = existingRecord.arquivado_at || nowIso
+        }
+
+        const { data: updatedRows, error: updateErr } = await supabase
+          .from('task_tarefas')
+          .update(updatePayload)
+          .eq('id', input.id)
+          .select('id, updated_at')
+
+        if (updateErr) {
+          console.error('Erro ao atualizar dados complementares de task_tarefas:', updateErr)
+          throw updateErr
+        }
+
+        if (!updatedRows || updatedRows.length === 0) {
+          // Se não retornou linhas e não houve perda de acesso via RPC anterior, NUNCA presumir sucesso!
+          if (!perdaAcessoPorRpc) {
+            throw new Error(
+              'Falha na gravação do caso: nenhuma linha foi afetada no banco de dados Supabase.',
+            )
+          }
+        } else {
+          effectiveUpdatedAt = updatedRows[0].updated_at
+        }
       }
 
-      // Executa o update. Quando RLS estiver habilitado com política que restringe SELECT
-      // ao escopo do usuário, se houver transferência para fora do escopo, .select().single()
-      // retornará erro PGRST116 (0 rows returned) ou data nulo.
-      // Tratamos isso de forma resiliente para suportar transferência com perda de acesso.
-      const { data: updatedRows, error: updateErr } = await supabase
-        .from('task_tarefas')
-        .update(updatePayload)
-        .eq('id', input.id)
-        .select()
-
-      if (updateErr) {
-        console.error('Erro ao atualizar task_tarefas:', updateErr)
-        throw updateErr
+      // Validação estrita contra sucesso presumido:
+      // O timestamp atualizado DEVE ter vindo explicitamente do banco (RPC ou UPDATE returning)
+      if (!effectiveUpdatedAt) {
+        throw new Error(
+          'Falha na confirmação do salvamento: o servidor não retornou o timestamp de atualização.',
+        )
       }
 
-      const data = updatedRows && updatedRows.length > 0 ? updatedRows[0] : null
-      const updatedTimestamp = data?.updated_at || nowIso
+      const updatedTimestamp = effectiveUpdatedAt
 
       // Notifica alteração global caso tenha sido arquivado automaticamente
       if (statusFinaliza && typeof window !== 'undefined') {

@@ -97,3 +97,7 @@ Para garantir zero indisponibilidade e permitir que **sessões abertas na versã
 - Chave composta: `atribuicao:{tarefa.id}:{tarefa.updated_at||tarefa.created_at||'sem_timestamp'}:{execToken}:{respToken}`.
 - Chaves antigas no formato `atribuicao:{tarefa.id}:{timestamp}:{execId}:{respId}` continuam existindo e impedindo reenvios duplicados (`already_sent`).
 - Salvar um caso sem alterações não executa UPDATE em `task_tarefas`, preservando `updated_at` e mantendo a integridade da chave de idempotência.
+- Quando há reatribuição de responsável ou executor, a operação é executada via RPC `public.task_transferir_atribuicao`:
+  - O papel que foi alterado tem seu token histórico limpo (`NULL`), assumindo seu novo ID central corporativo.
+  - O papel que NÃO foi alterado preserva seu token histórico intacto.
+  - Sem mudança real de atribuição, a RPC não atualiza nem grava auditoria.

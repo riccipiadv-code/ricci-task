@@ -1146,9 +1146,9 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(depois).toHaveLength(0)
     })
 
-    it('saveControle: transferência com perda de acesso conclui com sucesso mesmo quando a releitura pós-update (getControleById) retorna null', async () => {
-      // Simula saveControle chamando supabase.from('task_tarefas').update(...)
-      // e depois getControleById retornando null (simulando RLS bloqueando o SELECT para o autor que perdeu acesso)
+    it('saveControle: transferência com perda de acesso chama RPC task_transferir_atribuicao e conclui com timestamp real do servidor', async () => {
+      // Simula saveControle chamando a RPC task_transferir_atribuicao
+      // e depois getControleById retornando null (simulando perda de acesso por RLS)
       const existingControle = {
         id: 't-transf-1',
         identificacao_caso: 'Caso Transferência',
@@ -1165,33 +1165,22 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       }
 
       vi.spyOn(controleService, 'getControleById')
-        // 1ª chamada: existingRecord antes do update
         .mockResolvedValueOnce(existingControle as any)
-        // 2ª chamada: releitura pós-update retorna null (perda de acesso pelo RLS)
         .mockResolvedValueOnce(null)
 
-      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-        if (table === 'task_tarefas') {
-          return {
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                select: vi.fn().mockResolvedValue({
-                  data: [
-                    {
-                      id: 't-transf-1',
-                      responsavel_core_usuario_id: 'cu-novo-resp',
-                      executor_core_usuario_id: 'cu-novo-exec',
-                      updated_at: '2025-05-10T12:00:00Z',
-                    },
-                  ],
-                  error: null,
-                }),
-              }),
-            }),
-          }
-        }
-        return {}
-      }) as any)
+      const rpcSpy = vi.spyOn(supabase, 'rpc').mockResolvedValue({
+        data: {
+          success: true,
+          mudanca_real: true,
+          tarefa_id: 't-transf-1',
+          transicao_id: 'trans-uuid-1',
+          updated_at: '2025-05-10T12:00:00Z',
+          perda_acesso: true,
+          novo_responsavel_core_id: 'cu-novo-resp',
+          novo_executor_core_id: 'cu-novo-exec',
+        },
+        error: null,
+      } as any)
 
       const result = await controleService.saveControle({
         id: 't-transf-1',
@@ -1204,16 +1193,98 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         executor_core_usuario_id: 'cu-novo-exec',
       })
 
-      // Operação CONCLUI INTEGRALMENTE, sem jogar exceção, retornando snapshot consistente
+      // Verifica se a RPC foi chamada com os parâmetros corretos
+      expect(rpcSpy).toHaveBeenCalledWith('task_transferir_atribuicao', {
+        p_tarefa_id: 't-transf-1',
+        p_novo_responsavel_core_id: 'cu-novo-resp',
+        p_novo_executor_core_id: 'cu-novo-exec',
+        p_motivo: expect.any(String),
+      })
+
+      // Operação CONCLUI INTEGRALMENTE, usando timestamp REAL retornado pelo servidor
       expect(result).toBeDefined()
       expect(result.id).toBe('t-transf-1')
       expect(result.responsavel_core_usuario_id).toBe('cu-novo-resp')
       expect(result.executor_core_usuario_id).toBe('cu-novo-exec')
+      expect(result.updated_at).toBe('2025-05-10T12:00:00Z')
 
       // Na releitura subsequente por este mesmo usuário, o controle não é mais acessível
       vi.spyOn(controleService, 'getControleById').mockResolvedValue(null)
       const leituraPosterior = await controleService.getControleById('t-transf-1')
       expect(leituraPosterior).toBeNull()
+    })
+
+    it('saveControle: falha na RPC de transição aborta o salvamento e NÃO gera sucesso presumido', async () => {
+      const existingControle = {
+        id: 't-transf-err',
+        identificacao_caso: 'Caso Erro',
+        numero_caso: 102,
+        nome_controle_id: 'nc-1',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-op-autor',
+        executor_core_usuario_id: 'cu-op-autor',
+        updated_at: '2025-01-01T00:00:00Z',
+      }
+
+      vi.spyOn(controleService, 'getControleById').mockResolvedValue(existingControle as any)
+
+      vi.spyOn(supabase, 'rpc').mockResolvedValue({
+        data: null,
+        error: { message: 'Permissão negada no estado anterior' },
+      } as any)
+
+      await expect(
+        controleService.saveControle({
+          id: 't-transf-err',
+          identificacao_caso: 'Caso Erro',
+          nome_controle_id: 'nc-1',
+          status_id: 'st-1',
+          responsavel_core_usuario_id: 'cu-novo-resp',
+          executor_core_usuario_id: 'cu-novo-exec',
+        }),
+      ).rejects.toThrow(/Falha ao transferir atribuição do caso/)
+    })
+
+    it('saveControle: UPDATE sem retorno de linhas e sem perda de acesso RPC lança erro (sem sucesso presumido)', async () => {
+      const existingControle = {
+        id: 't-sem-linhas',
+        identificacao_caso: 'Caso Sem Linhas',
+        numero_caso: 103,
+        nome_controle_id: 'nc-1',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-mesmo-resp',
+        executor_core_usuario_id: 'cu-mesmo-exec',
+        updated_at: '2025-01-01T00:00:00Z',
+      }
+
+      vi.spyOn(controleService, 'getControleById').mockResolvedValue(existingControle as any)
+
+      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+        if (table === 'task_tarefas') {
+          return {
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockResolvedValue({
+                  data: [], // Nenhuma linha retornada
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }) as any)
+
+      await expect(
+        controleService.saveControle({
+          id: 't-sem-linhas',
+          identificacao_caso: 'Caso Sem Linhas Modificado', // Mudou ident, mesma atribuição
+          nome_controle_id: 'nc-1',
+          status_id: 'st-1',
+          responsavel_core_usuario_id: 'cu-mesmo-resp',
+          executor_core_usuario_id: 'cu-mesmo-exec',
+        }),
+      ).rejects.toThrow(/Falha na gravação do caso: nenhuma linha foi afetada/)
     })
   })
 })

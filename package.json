@@ -2,7 +2,7 @@
   "name": "skip-react-template",
   "description": "Ricci Task - Gestão de Controles e Tarefas",
   "private": true,
-  "version": "0.0.79",
+  "version": "0.0.80",
   "type": "module",
   "scripts": {
     "start": "vite dev",

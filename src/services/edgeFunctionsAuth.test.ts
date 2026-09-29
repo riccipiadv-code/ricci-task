@@ -1302,19 +1302,52 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     executor_usuario_id: tarefa.executor_usuario_id,
   })
 
+  let authorizedByTransition = false
   if (!scopeCheck.allowed) {
     const isTech = scopeCheck.status === 'technical_failure'
-    return new Response(
-      JSON.stringify({
-        error:
-          scopeCheck.error ||
-          'Permissão negada: você não possui permissão para disparar notificações deste caso.',
-      }),
-      {
-        status: isTech ? 500 : 403,
-        headers: corsHeaders,
-      },
-    )
+    if (isTech) {
+      return new Response(
+        JSON.stringify({
+          error: scopeCheck.error || 'Permissão negada: falha técnica ao consultar escopo.',
+        }),
+        {
+          status: 500,
+          headers: corsHeaders,
+        },
+      )
+    }
+
+    // Se o chamador não tem mais escopo sobre o caso atual, mas o evento for de atribuição,
+    // verifica se existe registro de transição autorizada no servidor
+    if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
+      try {
+        const { data: transitions } = await ctx.supabase
+          .from('task_transicoes_atribuicao')
+          .select('id, tarefa_id, autor_core_id')
+          .eq('tarefa_id', tarefa.id)
+          .eq('autor_core_id', callerUser.id)
+
+        if (transitions && transitions.length > 0) {
+          authorizedByTransition = true
+        }
+      } catch (_e) {
+        // Ignora e cai no bloqueio padrão
+      }
+    }
+
+    if (!authorizedByTransition) {
+      return new Response(
+        JSON.stringify({
+          error:
+            scopeCheck.error ||
+            'Permissão negada: você não possui permissão para disparar notificações deste caso.',
+        }),
+        {
+          status: 403,
+          headers: corsHeaders,
+        },
+      )
+    }
   }
 
   // REGRA DE ATRIBUIÇÃO:
@@ -5143,6 +5176,149 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(res.status).toBe(403)
       const data = await res.json()
       expect(data.error).toBe('Permissão negada: dados centrais de usuário ou perfil incompletos.')
+    })
+
+    it('autoriza exclusivamente o envio da notificação quando o chamador perdeu acesso mas possui registro de transição válido', async () => {
+      const ctx = createMockEdgeContext()
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-antigo-dono' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-antigo-dono',
+                        auth_user_id: 'auth-antigo-dono',
+                        nome: 'Antigo Dono',
+                        email: 'antigo@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-1',
+                    ativo: true,
+                    core_usuarios: {
+                      id: 'cu-novo-exec',
+                      nome: 'Novo Exec',
+                      email: 'novo@riccipi.com.br',
+                      ativo: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-1',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-transf-ok',
+                        numero_caso: 555,
+                        responsavel_core_usuario_id: 'cu-novo-resp',
+                        executor_core_usuario_id: 'cu-novo-exec',
+                        updated_at: '2025-05-10T15:00:00Z',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_transicoes_atribuicao') {
+            return {
+              select: () => ({
+                eq: (_col1: string, _val1: any) => ({
+                  eq: (_col2: string, _val2: any) =>
+                    Promise.resolve({
+                      data: [
+                        {
+                          id: 'trans-valid-1',
+                          tarefa_id: 'task-transf-ok',
+                          autor_core_id: 'cu-antigo-dono',
+                        },
+                      ],
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () => Promise.resolve({ data: { id: 'evt-1' }, error: null }),
+                }),
+              }),
+              update: () => ({
+                eq: () => Promise.resolve({ error: null }),
+              }),
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-transf-ok',
+          tipo: 'alteracao_atribuicao',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.success).toBe(true)
+      expect(data.sent).toBe(true)
     })
   })
 })
