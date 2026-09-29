@@ -198,26 +198,68 @@ export const controleService = {
    * Ordenado alfabeticamente por nome.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
-    const { data, error } = await supabase.rpc('task_listar_usuarios_elegiveis')
+    // 1. Chama a RPC para provisionar e listar os IDs operacionais elegíveis
+    const { data: rpcData, error: rpcError } = await supabase.rpc('task_listar_usuarios_elegiveis')
 
-    if (error) {
-      console.error('Falha na RPC task_listar_usuarios_elegiveis:', error)
+    if (rpcError) {
+      console.error('Falha na RPC task_listar_usuarios_elegiveis:', rpcError)
       throw new Error(
-        error.message ||
+        rpcError.message ||
           'Falha técnica ao consultar usuários elegíveis no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
       )
     }
 
-    if (!data || !Array.isArray(data)) {
+    if (!rpcData || !Array.isArray(rpcData) || rpcData.length === 0) {
       return []
     }
 
-    const lista: TaskUsuarioAtivoRecord[] = data.map((item: any) => ({
-      id: item.id,
-      nome: item.nome,
-      email: item.email,
-      ativo: Boolean(item.ativo),
-    }))
+    // 2. Consulta complementar às tabelas centrais via cliente Supabase (leitura apenas):
+    // Resolve e exibe o NOME e E-MAIL atuais de core_usuarios via vínculo task_usuarios.core_usuario_id.
+    // Se a leitura central falhar, NÃO apresenta dados locais como se fossem atuais (fail-closed estrito).
+    const taskIds = rpcData.map((item: any) => item.id).filter(Boolean)
+
+    const { data: bridgedUsers, error: bridgeError } = await supabase
+      .from('task_usuarios')
+      .select(`
+        id,
+        ativo,
+        core_usuario_id,
+        core_usuarios!inner(id, nome, email, ativo)
+      `)
+      .in('id', taskIds)
+
+    if (bridgeError) {
+      console.error('Falha técnica ao consultar dados centrais de core_usuarios:', bridgeError)
+      throw new Error(
+        'Falha técnica ao carregar dados centrais dos usuários (core_usuarios). Novos vínculos estão temporariamente suspensos.',
+      )
+    }
+
+    const centralMap = new Map<string, { nome: string; email: string; ativo: boolean }>()
+    for (const b of bridgedUsers || []) {
+      const cu = (b as any).core_usuarios
+      if (cu && cu.email) {
+        centralMap.set(b.id, {
+          nome: cu.nome || '',
+          email: cu.email || '',
+          ativo: Boolean(b.ativo && cu.ativo),
+        })
+      }
+    }
+
+    // Monta a lista elegível usando EXCLUSIVAMENTE nome e e-mail centrais
+    const lista: TaskUsuarioAtivoRecord[] = []
+    for (const item of rpcData) {
+      const central = centralMap.get(item.id)
+      if (central && central.email) {
+        lista.push({
+          id: item.id,
+          nome: central.nome || item.nome,
+          email: central.email,
+          ativo: central.ativo,
+        })
+      }
+    }
 
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   },

@@ -1,7 +1,11 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
-import { verifyRicciTaskAdmin, resolveValidatedTaskUserEmail } from '../_shared/core-auth.ts'
+import {
+  verifyRicciTaskAdmin,
+  resolveValidatedTaskUserEmailDetailed,
+  RecipientResolutionResult,
+} from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -337,19 +341,20 @@ Deno.serve(async (req: Request) => {
       tarefasMap.set(t.id, t)
     }
 
-    // 6. Cache de destinatários validados no Gestor de Acessos para otimizar chamadas
-    const validatedRecipientsCache = new Map<
-      string,
-      { taskUsuarioId: string; coreUsuarioId: string; nome: string; email: string } | null
-    >()
+    // 6. Cache de resoluções de destinatários no Gestor de Acessos para otimizar chamadas
+    const recipientResolutionCache = new Map<string, RecipientResolutionResult>()
 
-    const getValidatedRecipient = async (taskUsuarioId?: string | null) => {
-      if (!taskUsuarioId) return null
-      if (validatedRecipientsCache.has(taskUsuarioId)) {
-        return validatedRecipientsCache.get(taskUsuarioId) || null
+    const getRecipientResolution = async (
+      taskUsuarioId?: string | null,
+    ): Promise<RecipientResolutionResult> => {
+      if (!taskUsuarioId) {
+        return { status: 'missing_user_id', recipient: null }
       }
-      const resolved = await resolveValidatedTaskUserEmail(supabase, taskUsuarioId)
-      validatedRecipientsCache.set(taskUsuarioId, resolved)
+      if (recipientResolutionCache.has(taskUsuarioId)) {
+        return recipientResolutionCache.get(taskUsuarioId)!
+      }
+      const resolved = await resolveValidatedTaskUserEmailDetailed(supabase, taskUsuarioId)
+      recipientResolutionCache.set(taskUsuarioId, resolved)
       return resolved
     }
 
@@ -421,13 +426,63 @@ Deno.serve(async (req: Request) => {
         continue
       }
 
-      // Obter dados do Executor validados no Gestor de Acessos
+      // Obter resolução do Executor validada no Gestor de Acessos
       // A partir do ID gravado no caso: task_usuarios.core_usuario_id -> core_usuarios.email
       // Validando usuário, vínculo com RICCI_TASK, sistema e perfil ativos.
-      // Sem vínculo válido ou falha central -> fail-closed: não envia para e-mail local antigo.
-      const validatedExec = await getValidatedRecipient(tarefa.executor_usuario_id)
+      // Diferenciação estrita: falha técnica vs vínculo comprovadamente inválido.
+      const execResolution = await getRecipientResolution(tarefa.executor_usuario_id)
 
-      if (!validatedExec || !isValidEmail(validatedExec.email)) {
+      // Se falhou tecnicamente na consulta central do Executor:
+      // Registra como 'error' com erro 'falha_consulta_central' (permite retry, não marca skipped/sucesso)
+      if (execResolution.status === 'technical_failure') {
+        console.error(
+          `Falha técnica na consulta central do Executor para caso ${tarefa.numero_caso}, providência ${prov.id}:`,
+          execResolution.error,
+        )
+
+        const errMsg = execResolution.error || 'Falha técnica ao consultar Gestor de Acessos'
+
+        if (!existingEvent) {
+          await supabase.from('task_email_eventos').insert({
+            tarefa_id: tarefa.id,
+            providencia_id: prov.id,
+            tipo_evento: 'providencia_atraso',
+            event_key: eventKey,
+            to_email: null,
+            cc_email: null,
+            status: 'error',
+            erro: 'falha_consulta_central',
+            data_referencia: todayStr,
+          })
+        } else if (existingEvent.status === 'pending') {
+          await supabase
+            .from('task_email_eventos')
+            .update({
+              status: 'error',
+              erro: 'falha_consulta_central',
+            })
+            .eq('id', existingEvent.id)
+        }
+
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'error',
+          reason: 'falha_consulta_central',
+          error: errMsg,
+        })
+        totalErrors++
+        continue
+      }
+
+      const validatedExec = execResolution.recipient
+
+      if (
+        execResolution.status !== 'valid' ||
+        !validatedExec ||
+        !isValidEmail(validatedExec.email)
+      ) {
         console.warn(
           `Alerta de atraso ignorado: Executor sem vínculo central ativo válido para RICCI_TASK ou sem e-mail (caso ${tarefa.numero_caso}, providência ${prov.id})`,
         )
@@ -460,7 +515,53 @@ Deno.serve(async (req: Request) => {
       const toEmail = validatedExec.email.trim().toLowerCase()
 
       // Obter dados do Responsável validados centralmente
-      const validatedResp = await getValidatedRecipient(tarefa.responsavel_usuario_id)
+      const respResolution = await getRecipientResolution(tarefa.responsavel_usuario_id)
+
+      // Se falhou tecnicamente na consulta do Responsável:
+      if (respResolution.status === 'technical_failure') {
+        console.error(
+          `Falha técnica na consulta central do Responsável para caso ${tarefa.numero_caso}, providência ${prov.id}:`,
+          respResolution.error,
+        )
+
+        const errMsg =
+          respResolution.error || 'Falha técnica ao consultar Responsável no Gestor de Acessos'
+
+        if (!existingEvent) {
+          await supabase.from('task_email_eventos').insert({
+            tarefa_id: tarefa.id,
+            providencia_id: prov.id,
+            tipo_evento: 'providencia_atraso',
+            event_key: eventKey,
+            to_email: toEmail,
+            cc_email: null,
+            status: 'error',
+            erro: 'falha_consulta_central',
+            data_referencia: todayStr,
+          })
+        } else if (existingEvent.status === 'pending') {
+          await supabase
+            .from('task_email_eventos')
+            .update({
+              status: 'error',
+              erro: 'falha_consulta_central',
+            })
+            .eq('id', existingEvent.id)
+        }
+
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'error',
+          reason: 'falha_consulta_central',
+          error: errMsg,
+        })
+        totalErrors++
+        continue
+      }
+
+      const validatedResp = respResolution.recipient
       const respEmailRaw = validatedResp?.email?.trim().toLowerCase() || ''
       let ccEmail: string | null = null
       if (isValidEmail(respEmailRaw) && respEmailRaw !== toEmail) {

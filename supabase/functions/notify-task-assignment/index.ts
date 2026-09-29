@@ -1,7 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
-import { resolveValidatedTaskUserEmail } from '../_shared/core-auth.ts'
+import { resolveValidatedTaskUserEmailDetailed } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -319,17 +319,44 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    const validatedExecutor = await resolveValidatedTaskUserEmail(
+    const execResolution = await resolveValidatedTaskUserEmailDetailed(
       supabase,
       tarefa.executor_usuario_id,
     )
 
-    if (!validatedExecutor || !isValidEmail(validatedExecutor.email)) {
+    // Se houve falha técnica de consulta central para o executor, retorna erro 500 (recuperável/retry)
+    if (execResolution.status === 'technical_failure') {
+      console.error('Falha técnica na consulta central do Executor:', execResolution.error, {
+        tarefa_id,
+        executor_usuario_id: tarefa.executor_usuario_id,
+      })
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: false,
+          reason: 'falha_consulta_central',
+          error:
+            'Falha técnica ao validar destinatário no Gestor de Acessos Ricci (erro de conexão/consulta). Tente novamente.',
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const validatedExecutor = execResolution.recipient
+    if (
+      execResolution.status !== 'valid' ||
+      !validatedExecutor ||
+      !isValidEmail(validatedExecutor.email)
+    ) {
       console.warn(
         'Envio abortado: Executor sem vínculo central ativo válido no Gestor de Acessos para RICCI_TASK ou sem e-mail.',
         {
           tarefa_id,
           executor_usuario_id: tarefa.executor_usuario_id,
+          reason: execResolution.error,
         },
       )
       return new Response(
@@ -357,10 +384,32 @@ Deno.serve(async (req: Request) => {
     } | null = null
 
     if (tarefa.responsavel_usuario_id) {
-      validatedResponsavel = await resolveValidatedTaskUserEmail(
+      const respResolution = await resolveValidatedTaskUserEmailDetailed(
         supabase,
         tarefa.responsavel_usuario_id,
       )
+
+      if (respResolution.status === 'technical_failure') {
+        console.error('Falha técnica na consulta central do Responsável:', respResolution.error, {
+          tarefa_id,
+          responsavel_usuario_id: tarefa.responsavel_usuario_id,
+        })
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            reason: 'falha_consulta_central',
+            error:
+              'Falha técnica ao validar responsável no Gestor de Acessos Ricci (erro de conexão/consulta). Tente novamente.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      validatedResponsavel = respResolution.recipient
     }
 
     const respEmailRaw = validatedResponsavel?.email?.trim().toLowerCase() || ''

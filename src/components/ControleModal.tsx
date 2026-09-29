@@ -32,6 +32,7 @@ import {
   Loader2,
   UserCheck,
   AlertCircle,
+  RefreshCw,
   Search,
   FolderKanban,
   Bell,
@@ -170,21 +171,19 @@ export function ControleModal({
     return tiposPrazoList[0]?.id || ''
   }, [tiposPrazoList])
 
+  const [erroUsuariosCentrais, setErroUsuariosCentrais] = useState<string | null>(null)
+
   // Carrega listas auxiliares
   const carregarListasAuxiliares = useCallback(async () => {
     setLoadingListas(true)
+    setErroUsuariosCentrais(null)
     try {
+      let fetchUsersError: Error | null = null
       const [nomes, users, stProv] = await Promise.all([
         controleService.getNomesControle({ incluirInativos: true }),
         controleService.getUsuariosAtivos().catch((fetchErr) => {
-          console.error('Falha ao carregar usuários elegíveis via RPC:', fetchErr)
-          toast({
-            variant: 'destructive',
-            title: 'Erro ao carregar usuários elegíveis',
-            description:
-              fetchErr?.message ||
-              'Não foi possível obter a lista de usuários disponíveis no Gestor de Acessos.',
-          })
+          console.error('Falha ao carregar usuários elegíveis com dados centrais:', fetchErr)
+          fetchUsersError = fetchErr
           return [] as TaskUsuarioAtivoRecord[]
         }),
         statusProvidenciaList.length > 0
@@ -192,8 +191,22 @@ export function ControleModal({
           : controleService.getStatusProvidencia(),
       ])
 
-      // Se estiver editando e o responsável/executor atual não estiver na lista de ativos,
-      // buscamos todos os usuários para garantir que o valor existente seja preservado legivelmente
+      if (fetchUsersError) {
+        const errorMsg =
+          (fetchUsersError as any)?.message ||
+          'Falha técnica ao consultar dados centrais no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.'
+        setErroUsuariosCentrais(errorMsg)
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao carregar usuários elegíveis',
+          description: errorMsg,
+        })
+      }
+
+      // Fail-closed: se a leitura central falhar, `users` é vazio e não permitimos novos candidatos.
+      // Preservação histórica dos casos já gravados:
+      // Se estiver editando e o responsável/executor atual já estiver atribuído,
+      // buscamos os dados cadastrados em task_usuarios APENAS para preservar legivelmente o caso histórico na tela.
       let listaCombinada = [...users]
       const respId = controleToEdit?.responsavel_usuario_id
       const execId = controleToEdit?.executor_usuario_id
@@ -229,7 +242,7 @@ export function ControleModal({
     } finally {
       setLoadingListas(false)
     }
-  }, [statusProvidenciaList, toast])
+  }, [statusProvidenciaList, toast, controleToEdit])
 
   // Popula o formulário ao abrir
   useEffect(() => {
@@ -349,11 +362,16 @@ export function ControleModal({
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
-  // Opções de Responsáveis (task_usuarios com ativo = true, ou o já selecionado)
+  // Opções de Responsáveis:
+  // Se houver erro de leitura central, fail-closed: não oferece candidatos para nova seleção.
+  // Permite exclusivamente o responsável histórico já gravado em caso de edição.
   const opcoesResponsaveis = useMemo(() => {
+    const editRespId = controleToEdit?.responsavel_usuario_id
     let list = usuariosLista.filter((u) => {
-      // Sempre permitir o usuário que já está selecionado na edição (para preservá-lo)
-      if (u.id === responsavelUsuarioId) return true
+      // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo)
+      if (editRespId && u.id === editRespId) return true
+      // Se a leitura central falhou, não permite candidatos novos
+      if (erroUsuariosCentrais) return false
       return u.ativo ?? true
     })
     if (buscaRespSelect.trim()) {
@@ -363,13 +381,18 @@ export function ControleModal({
       )
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [usuariosLista, responsavelUsuarioId, buscaRespSelect])
+  }, [usuariosLista, controleToEdit, erroUsuariosCentrais, buscaRespSelect])
 
-  // Opções de Executores (task_usuarios com ativo = true, ou o já selecionado)
+  // Opções de Executores:
+  // Se houver erro de leitura central, fail-closed: não oferece candidatos para nova seleção.
+  // Permite exclusivamente o executor histórico já gravado em caso de edição.
   const opcoesExecutores = useMemo(() => {
+    const editExecId = controleToEdit?.executor_usuario_id
     let list = usuariosLista.filter((u) => {
-      // Sempre permitir o usuário que já está selecionado na edição (para preservá-lo)
-      if (u.id === executorUsuarioId) return true
+      // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo)
+      if (editExecId && u.id === editExecId) return true
+      // Se a leitura central falhou, não permite candidatos novos
+      if (erroUsuariosCentrais) return false
       return u.ativo ?? true
     })
     if (buscaExecSelect.trim()) {
@@ -379,7 +402,7 @@ export function ControleModal({
       )
     }
     return list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
-  }, [usuariosLista, executorUsuarioId, buscaExecSelect])
+  }, [usuariosLista, controleToEdit, erroUsuariosCentrais, buscaExecSelect])
 
   // Ref para o container de scroll interno do modal
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -580,10 +603,35 @@ export function ControleModal({
     if (!responsavelUsuarioId) {
       setResponsavelError(true)
       hasError = true
+    } else if (
+      erroUsuariosCentrais &&
+      (!controleToEdit || responsavelUsuarioId !== controleToEdit.responsavel_usuario_id)
+    ) {
+      setResponsavelError(true)
+      hasError = true
+      toast({
+        variant: 'destructive',
+        title: 'Atribuição bloqueada',
+        description:
+          'A validação central de usuários está temporariamente indisponível. Não é possível alterar ou atribuir novo responsável.',
+      })
     }
+
     if (!executorUsuarioId) {
       setExecutorError(true)
       hasError = true
+    } else if (
+      erroUsuariosCentrais &&
+      (!controleToEdit || executorUsuarioId !== controleToEdit.executor_usuario_id)
+    ) {
+      setExecutorError(true)
+      hasError = true
+      toast({
+        variant: 'destructive',
+        title: 'Atribuição bloqueada',
+        description:
+          'A validação central de usuários está temporariamente indisponível. Não é possível alterar ou atribuir novo executor.',
+      })
     }
 
     if (hasError) {
@@ -1101,7 +1149,32 @@ export function ControleModal({
                   </div>
                 </div>
 
-                {/* Bloco 3: Responsável e Executor (única fonte: task_usuarios) */}
+                {/* Alerta de erro central em bloco 3 caso haja falha técnica */}
+                {erroUsuariosCentrais && (
+                  <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{erroUsuariosCentrais}</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={carregarListasAuxiliares}
+                      disabled={loadingListas}
+                      className="h-7 px-2.5 rounded-lg text-[11px] shrink-0 border-destructive/30 hover:bg-destructive/15 text-destructive"
+                    >
+                      {loadingListas ? (
+                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                      ) : (
+                        <RefreshCw className="w-3 h-3 mr-1" />
+                      )}
+                      Tentar novamente
+                    </Button>
+                  </div>
+                )}
+
+                {/* Bloco 3: Responsável e Executor (única fonte: task_usuarios com dados centrais) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Responsável */}
                   <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
@@ -1117,7 +1190,20 @@ export function ControleModal({
                     <div className="relative">
                       <Select
                         value={responsavelUsuarioId}
+                        disabled={Boolean(erroUsuariosCentrais && !controleToEdit)}
                         onValueChange={(val) => {
+                          if (
+                            erroUsuariosCentrais &&
+                            val !== controleToEdit?.responsavel_usuario_id
+                          ) {
+                            toast({
+                              variant: 'destructive',
+                              title: 'Seleção bloqueada',
+                              description:
+                                'Não é possível selecionar novos usuários durante falha da validação central.',
+                            })
+                            return
+                          }
                           setResponsavelUsuarioId(val)
                           if (executorIsResponsavel) {
                             setExecutorUsuarioId(val)
@@ -1232,8 +1318,19 @@ export function ControleModal({
                     <div className="relative">
                       <Select
                         value={executorUsuarioId}
-                        disabled={executorIsResponsavel}
+                        disabled={
+                          executorIsResponsavel || Boolean(erroUsuariosCentrais && !controleToEdit)
+                        }
                         onValueChange={(val) => {
+                          if (erroUsuariosCentrais && val !== controleToEdit?.executor_usuario_id) {
+                            toast({
+                              variant: 'destructive',
+                              title: 'Seleção bloqueada',
+                              description:
+                                'Não é possível selecionar novos usuários durante falha da validação central.',
+                            })
+                            return
+                          }
                           setExecutorUsuarioId(val)
                           if (executorError) setExecutorError(false)
                         }}

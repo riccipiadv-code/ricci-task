@@ -61,79 +61,176 @@ export interface ValidatedRecipient {
   email: string
 }
 
+export type RecipientResolutionStatus =
+  | 'valid'
+  | 'missing_user_id'
+  | 'invalid_link'
+  | 'technical_failure'
+
+export interface RecipientResolutionResult {
+  status: RecipientResolutionStatus
+  recipient: ValidatedRecipient | null
+  error?: string
+}
+
 /**
  * Valida destinatário de caso a partir do seu ID em task_usuarios:
  * 1. Consulta task_usuarios pelo ID gravado no caso (para obter core_usuario_id e nome histórico)
- * 2. Se não possuir core_usuario_id ou task_usuarios estiver inativo, não valida
+ * 2. Se não possuir core_usuario_id, task_usuarios não encontrado ou inativo: vínculo inválido
  * 3. Valida no Gestor de Acessos Ricci:
  *    - core_usuarios (id = core_usuario_id, ativo = true) -> obtém e-mail atual
  *    - core_usuario_sistemas (usuario_id = core_usuario_id, ativo = true)
  *    - core_sistemas (codigo = 'RICCI_TASK', ativo = true)
  *    - core_perfis (ativo = true)
- * 4. Em caso de falha de leitura central ou ausência de vínculo válido ativo, retorna null.
+ * 4. Diferencia FALHA TÉCNICA (erro de rede/leitura) de VÍNCULO INVALIDADO (inativo, sem vínculo).
  *    NUNCA faz fallback para o e-mail local antigo de task_usuarios.
+ */
+export async function resolveValidatedTaskUserEmailDetailed(
+  supabase: SupabaseClient,
+  taskUsuarioId: string,
+): Promise<RecipientResolutionResult> {
+  if (!taskUsuarioId) {
+    return {
+      status: 'missing_user_id',
+      recipient: null,
+      error: 'ID de usuário não fornecido',
+    }
+  }
+
+  // 1. Obter registro de task_usuarios
+  let taskUserResult: any
+  try {
+    taskUserResult = await supabase
+      .from('task_usuarios')
+      .select('id, core_usuario_id, nome, email, ativo')
+      .eq('id', taskUsuarioId)
+      .maybeSingle()
+  } catch (err: any) {
+    console.error('[core-auth] Falha técnica ao consultar task_usuarios:', err)
+    return {
+      status: 'technical_failure',
+      recipient: null,
+      error: err?.message || 'Falha técnica de comunicação ao consultar task_usuarios',
+    }
+  }
+
+  const { data: taskUser, error: taskUserError } = taskUserResult
+
+  if (taskUserError) {
+    console.error('[core-auth] Erro ao consultar task_usuarios:', taskUserError)
+    return {
+      status: 'technical_failure',
+      recipient: null,
+      error: taskUserError.message || 'Falha de leitura em task_usuarios',
+    }
+  }
+
+  if (!taskUser || !taskUser.core_usuario_id) {
+    return {
+      status: 'invalid_link',
+      recipient: null,
+      error: !taskUser
+        ? 'Usuário operacional não encontrado'
+        : 'Usuário sem vínculo central (core_usuario_id ausente)',
+    }
+  }
+
+  if (taskUser.ativo === false) {
+    return {
+      status: 'invalid_link',
+      recipient: null,
+      error: 'Usuário operacional marcado como inativo',
+    }
+  }
+
+  // 2. Buscar e-mail atual em core_usuarios validando vínculo ativo com RICCI_TASK
+  let linkResult: any
+  try {
+    linkResult = await supabase
+      .from('core_usuario_sistemas')
+      .select(`
+        id,
+        ativo,
+        core_usuarios!inner(id, nome, email, ativo),
+        core_sistemas!inner(id, codigo, ativo),
+        core_perfis!inner(id, codigo, ativo)
+      `)
+      .eq('usuario_id', taskUser.core_usuario_id)
+      .eq('ativo', true)
+      .eq('core_usuarios.ativo', true)
+      .eq('core_sistemas.codigo', SYSTEM_CODE_RICCI_TASK)
+      .eq('core_sistemas.ativo', true)
+      .eq('core_perfis.ativo', true)
+      .maybeSingle()
+  } catch (err: any) {
+    console.error('[core-auth] Falha técnica ao validar vínculo central:', err)
+    return {
+      status: 'technical_failure',
+      recipient: null,
+      error: err?.message || 'Falha técnica de comunicação ao consultar tabelas centrais',
+    }
+  }
+
+  const { data: linkData, error: linkError } = linkResult
+
+  if (linkError) {
+    console.error(
+      '[core-auth] Erro de banco ao validar vínculo central do destinatário:',
+      linkError,
+    )
+    return {
+      status: 'technical_failure',
+      recipient: null,
+      error: linkError.message || 'Erro ao consultar Gestor de Acessos Ricci',
+    }
+  }
+
+  if (!linkData) {
+    return {
+      status: 'invalid_link',
+      recipient: null,
+      error: 'Vínculo central ausente ou inativo no Gestor de Acessos para RICCI_TASK',
+    }
+  }
+
+  const coreUser = (linkData as any).core_usuarios
+  if (!coreUser || !coreUser.email) {
+    return {
+      status: 'invalid_link',
+      recipient: null,
+      error: 'Usuário central sem e-mail cadastrado',
+    }
+  }
+
+  const centralEmail = String(coreUser.email).trim().toLowerCase()
+  if (!centralEmail) {
+    return {
+      status: 'invalid_link',
+      recipient: null,
+      error: 'E-mail corporativo em branco',
+    }
+  }
+
+  return {
+    status: 'valid',
+    recipient: {
+      taskUsuarioId: taskUser.id,
+      coreUsuarioId: coreUser.id,
+      nome: coreUser.nome || taskUser.nome,
+      email: centralEmail,
+    },
+  }
+}
+
+/**
+ * Wrapper de compatibilidade com a assinatura anterior: retorna ValidatedRecipient | null
  */
 export async function resolveValidatedTaskUserEmail(
   supabase: SupabaseClient,
   taskUsuarioId: string,
 ): Promise<ValidatedRecipient | null> {
-  if (!taskUsuarioId) return null
-
-  // 1. Obter registro de task_usuarios
-  const { data: taskUser, error: taskUserError } = await supabase
-    .from('task_usuarios')
-    .select('id, core_usuario_id, nome, email, ativo')
-    .eq('id', taskUsuarioId)
-    .maybeSingle()
-
-  if (taskUserError || !taskUser || !taskUser.core_usuario_id) {
-    if (taskUserError) {
-      console.error('[core-auth] Erro ao consultar task_usuarios:', taskUserError)
-    }
-    return null
-  }
-
-  // 2. Buscar e-mail atual em core_usuarios validando vínculo ativo com RICCI_TASK
-  const { data: linkData, error: linkError } = await supabase
-    .from('core_usuario_sistemas')
-    .select(`
-      id,
-      ativo,
-      core_usuarios!inner(id, nome, email, ativo),
-      core_sistemas!inner(id, codigo, ativo),
-      core_perfis!inner(id, codigo, ativo)
-    `)
-    .eq('usuario_id', taskUser.core_usuario_id)
-    .eq('ativo', true)
-    .eq('core_usuarios.ativo', true)
-    .eq('core_sistemas.codigo', SYSTEM_CODE_RICCI_TASK)
-    .eq('core_sistemas.ativo', true)
-    .eq('core_perfis.ativo', true)
-    .maybeSingle()
-
-  if (linkError || !linkData) {
-    if (linkError) {
-      console.error('[core-auth] Erro ao validar vínculo central do destinatário:', linkError)
-    }
-    return null
-  }
-
-  const coreUser = (linkData as any).core_usuarios
-  if (!coreUser || !coreUser.email) {
-    return null
-  }
-
-  const centralEmail = String(coreUser.email).trim().toLowerCase()
-  if (!centralEmail) {
-    return null
-  }
-
-  return {
-    taskUsuarioId: taskUser.id,
-    coreUsuarioId: coreUser.id,
-    nome: coreUser.nome || taskUser.nome,
-    email: centralEmail,
-  }
+  const result = await resolveValidatedTaskUserEmailDetailed(supabase, taskUsuarioId)
+  return result.recipient
 }
 
 /**
