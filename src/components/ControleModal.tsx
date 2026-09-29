@@ -49,6 +49,7 @@ import {
 import { formatDateTimeBR } from '@/lib/formatters'
 import { controleService } from '@/services/controleService'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 import { DeleteConfirmDialog } from '@/components/DeleteConfirmDialog'
 import { cn } from '@/lib/utils'
 
@@ -312,9 +313,62 @@ export function ControleModal({
     }
   }, [statusProvidenciaList, toast, controleToEdit])
 
+  const { corePerfil, coreUserId } = useAuth()
+
   // Popula o formulário ao abrir
   useEffect(() => {
     if (!open) return
+
+    // Validação de escopo central na abertura do modal para edição
+    if (controleToEdit && corePerfil && coreUserId) {
+      let isAllowed = false
+      if (corePerfil === 'ADMINISTRADOR') {
+        isAllowed = true
+      } else {
+        const respCore =
+          controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id
+        const execCore =
+          controleToEdit.executor_core_usuario_id || controleToEdit.executor_usuario_id
+        const isProprio = Boolean(
+          (respCore && respCore === coreUserId) || (execCore && execCore === coreUserId),
+        )
+
+        if (isProprio) {
+          isAllowed = true
+        } else if (corePerfil === 'OPERACIONAL') {
+          isAllowed = false
+        } else if (corePerfil === 'GESTOR') {
+          // Checagem assíncrona da equipe direta
+          void (async () => {
+            const allowed = await controleService.checkControleAccessScope(
+              controleToEdit,
+              corePerfil,
+              coreUserId,
+            )
+            if (!allowed) {
+              toast({
+                variant: 'destructive',
+                title: 'Acesso negado',
+                description: 'Você não possui permissão para visualizar ou editar este caso.',
+              })
+              onOpenChange(false)
+            }
+          })()
+          // Enquanto aguarda a checagem do gestor, deixa passar temporariamente (fechará se false)
+          isAllowed = true
+        }
+      }
+
+      if (!isAllowed) {
+        toast({
+          variant: 'destructive',
+          title: 'Acesso negado',
+          description: 'Você não possui permissão para visualizar ou editar este caso.',
+        })
+        onOpenChange(false)
+        return
+      }
+    }
 
     carregarListasAuxiliares()
     setActiveTab(initialTab || 'dados')

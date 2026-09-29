@@ -11,6 +11,8 @@ import {
   ROLE_CODE_GESTOR,
   ROLE_CODE_OPERACIONAL,
   RICCI_TASK_ALLOWED_CALLER_ROLES,
+  checkTaskAccessScope,
+  escapeHtml,
 } from '../../supabase/functions/_shared/core-auth'
 
 describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ricci)', () => {
@@ -1278,6 +1280,36 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     return new Response(
       JSON.stringify({ triggered: false, sent: false, reason: 'tarefa_excluida' }),
       { status: 200, headers: corsHeaders },
+    )
+  }
+
+  // Validação de escopo de acesso central à tarefa
+  const callerUser = callerCheck.coreUser
+  const scopeCheck = await checkTaskAccessScope(
+    ctx.supabase,
+    { id: callerUser ? callerUser.id : '' },
+    callerCheck.perfil || '',
+    {
+      id: tarefa.id,
+      responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
+      executor_core_usuario_id: tarefa.executor_core_usuario_id,
+      responsavel_usuario_id: tarefa.responsavel_usuario_id,
+      executor_usuario_id: tarefa.executor_usuario_id,
+    },
+  )
+
+  if (!scopeCheck.allowed) {
+    const isTech = scopeCheck.status === 'technical_failure'
+    return new Response(
+      JSON.stringify({
+        error:
+          scopeCheck.error ||
+          'Permissão negada: você não possui permissão para disparar notificações deste caso.',
+      }),
+      {
+        status: isTech ? 500 : 403,
+        headers: corsHeaders,
+      },
     )
   }
 
@@ -4766,6 +4798,272 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(mailArgs.html).toContain('https://ricci-task.goskip.app/')
       expect(mailArgs.html).not.toContain('https://riccitask.goskip.app/')
       expect(mailArgs.html).not.toContain('riccitask.goskip')
+    })
+  })
+
+  describe('Suíte de Escopo Central e Fail-Closed em checkTaskAccessScope', () => {
+    it('escapa caracteres especiais de HTML corretamente', () => {
+      expect(escapeHtml('<script>alert("xss") & \'test\'</script>')).toBe(
+        '&lt;script&gt;alert(&quot;xss&quot;) &amp; &#39;test&#39;&lt;/script&gt;',
+      )
+      expect(escapeHtml('')).toBe('')
+      expect(escapeHtml(null)).toBe('')
+    })
+
+    it('ADMINISTRADOR: tem acesso a qualquer caso', async () => {
+      const mockSupabase = {} as any
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-admin' }, 'ADMINISTRADOR', {
+        id: 't-1',
+        responsavel_core_usuario_id: 'cu-outro-1',
+        executor_core_usuario_id: 'cu-outro-2',
+      })
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('ok')
+    })
+
+    it('Caso sem IDs centrais válidos: bloqueia imediatamente (fail-closed, sem fallback permissivo)', async () => {
+      const mockSupabase = {} as any
+      // Para OPERACIONAL
+      const resOp = await checkTaskAccessScope(mockSupabase, { id: 'cu-op' }, 'OPERACIONAL', {
+        id: 't-sem-core',
+        responsavel_core_usuario_id: null,
+        executor_core_usuario_id: null,
+      })
+      expect(resOp.allowed).toBe(false)
+      expect(resOp.status).toBe('denied')
+
+      // Para GESTOR
+      const resGestor = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor' }, 'GESTOR', {
+        id: 't-sem-core-gestor',
+        responsavel_core_usuario_id: null,
+        executor_core_usuario_id: null,
+      })
+      expect(resGestor.allowed).toBe(false)
+      expect(resGestor.status).toBe('denied')
+      expect(resGestor.error).toContain('sem IDs centrais válidos')
+    })
+
+    it('Chamador sem ID central válido: bloqueia imediatamente', async () => {
+      const mockSupabase = {} as any
+      const res = await checkTaskAccessScope(mockSupabase, { id: '' }, 'GESTOR', {
+        id: 't-1',
+        responsavel_core_usuario_id: 'cu-resp',
+        executor_core_usuario_id: 'cu-exec',
+      })
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toContain('sem ID central corporativo válido')
+    })
+
+    it('OPERACIONAL: permite apenas casos próprios (como responsável ou executor)', async () => {
+      const mockSupabase = {} as any
+      // Como responsável
+      const resResp = await checkTaskAccessScope(mockSupabase, { id: 'cu-op-1' }, 'OPERACIONAL', {
+        id: 't-propria-resp',
+        responsavel_core_usuario_id: 'cu-op-1',
+        executor_core_usuario_id: 'cu-outro',
+      })
+      expect(resResp.allowed).toBe(true)
+
+      // Como executor
+      const resExec = await checkTaskAccessScope(mockSupabase, { id: 'cu-op-1' }, 'OPERACIONAL', {
+        id: 't-propria-exec',
+        responsavel_core_usuario_id: 'cu-outro',
+        executor_core_usuario_id: 'cu-op-1',
+      })
+      expect(resExec.allowed).toBe(true)
+
+      // Caso de terceiro
+      const resOutro = await checkTaskAccessScope(mockSupabase, { id: 'cu-op-1' }, 'OPERACIONAL', {
+        id: 't-terceiro',
+        responsavel_core_usuario_id: 'cu-outro-1',
+        executor_core_usuario_id: 'cu-outro-2',
+      })
+      expect(resOutro.allowed).toBe(false)
+      expect(resOutro.status).toBe('denied')
+    })
+
+    it('GESTOR: permite casos próprios', async () => {
+      const mockSupabase = {} as any
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-gestor-propria',
+        responsavel_core_usuario_id: 'cu-gestor-1',
+        executor_core_usuario_id: 'cu-outro',
+      })
+      expect(res.allowed).toBe(true)
+    })
+
+    it('GESTOR: permite casos de membros de sua equipe direta (core_usuarios.gestor_id = idCentralDoGestor, ativo = true)', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            in: vi.fn().mockResolvedValue({
+              data: [{ id: 'cu-sub-1', gestor_id: 'cu-gestor-1', ativo: true }],
+              error: null,
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-sub',
+        responsavel_core_usuario_id: 'cu-sub-1',
+        executor_core_usuario_id: 'cu-outro',
+      })
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('ok')
+    })
+
+    it('GESTOR: nega casos de membros inativos ou de outro gestor', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            in: vi.fn().mockResolvedValue({
+              data: [
+                { id: 'cu-sub-inativo', gestor_id: 'cu-gestor-1', ativo: false },
+                { id: 'cu-outro-gestor', gestor_id: 'cu-gestor-2', ativo: true },
+              ],
+              error: null,
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-negada',
+        responsavel_core_usuario_id: 'cu-sub-inativo',
+        executor_core_usuario_id: 'cu-outro-gestor',
+      })
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+    })
+
+    it('GESTOR: falha de consulta em core_usuarios retorna technical_failure (fail-closed)', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            in: vi.fn().mockResolvedValue({
+              data: null,
+              error: { message: 'Database connection error' },
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-falha',
+        responsavel_core_usuario_id: 'cu-alvo',
+        executor_core_usuario_id: 'cu-outro',
+      })
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('technical_failure')
+    })
+
+    it('Perfil desconhecido retorna denied', async () => {
+      const mockSupabase = {} as any
+      const res = await checkTaskAccessScope(
+        mockSupabase,
+        { id: 'cu-user' },
+        'CONVIDADO_DESCONHECIDO',
+        {
+          id: 't-1',
+          responsavel_core_usuario_id: 'cu-resp',
+          executor_core_usuario_id: 'cu-exec',
+        },
+      )
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+    })
+  })
+
+  describe('Integração de Escopo no Handler notify-task-assignment', () => {
+    it('retorna 403 quando chamador OPERACIONAL tentar disparar notificação para caso de terceiro', async () => {
+      const ctx = createMockEdgeContext()
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-1',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-100',
+                        numero_caso: 100,
+                        responsavel_core_usuario_id: 'cu-outro-resp',
+                        executor_core_usuario_id: 'cu-outro-exec',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-op-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-100',
+          tipo: 'alteracao_atribuicao',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(403)
+      const data = await res.json()
+      expect(data.error).toContain('não possui permissão para disparar notificações deste caso')
     })
   })
 })

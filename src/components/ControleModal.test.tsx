@@ -5,6 +5,11 @@ import { ControleModal } from '@/components/ControleModal'
 import { controleService } from '@/services/controleService'
 import { TaskControleRecord, TaskUsuarioAtivoRecord } from '@/types/task'
 
+const mockUseAuth = vi.fn()
+vi.mock('@/hooks/use-auth', () => ({
+  useAuth: () => mockUseAuth(),
+}))
+
 vi.mock('@/services/controleService', () => ({
   controleService: {
     getNomesControle: vi.fn(),
@@ -42,6 +47,13 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-1' },
+      corePerfil: 'ADMINISTRADOR',
+      coreUserId: 'cu-admin',
+      hasSystemAccess: true,
+      loadingAccess: false,
+    })
     vi.mocked(controleService.getNomesControle).mockResolvedValue([
       { id: 'nc-1', nome: 'Controle Geral', ativo: true },
     ] as any)
@@ -208,5 +220,52 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
 
     // Campos obrigatórios de formulário vazio impedem saveControle, mas a pessoa sem ponte não gera erro prévio
     expect(controleService.saveControle).not.toHaveBeenCalled()
+  })
+
+  it('bloqueia abertura e fecha modal quando caso está fora do escopo do usuário OPERACIONAL', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-op' },
+      corePerfil: 'OPERACIONAL',
+      coreUserId: 'cu-op-1',
+      hasSystemAccess: true,
+      loadingAccess: false,
+    })
+
+    const onOpenChangeMock = vi.fn()
+    const controleDeOutro: TaskControleRecord = {
+      id: 'caso-outro-1',
+      nome_controle_id: 'nc-1',
+      numero_caso: 50,
+      identificacao_caso: 'Caso De Terceiro',
+      status_id: 'st-aberto',
+      responsavel_usuario_id: 'tu-outro',
+      executor_usuario_id: 'tu-outro-exec',
+      responsavel_core_usuario_id: 'cu-outro-resp',
+      executor_core_usuario_id: 'cu-outro-exec',
+      data_autorizacao: '2024-01-10',
+      prazo_conclusao: '2024-02-10',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2024-01-10T10:00:00Z',
+      created_by: null,
+      updated_at: '2024-01-10T10:00:00Z',
+      updated_by: null,
+      deleted_at: null,
+      deleted_by: null,
+      providencias: [],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={onOpenChangeMock}
+        controleToEdit={controleDeOutro}
+        statusList={[]}
+        tiposPrazoList={[]}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(onOpenChangeMock).toHaveBeenCalledWith(false)
   })
 })

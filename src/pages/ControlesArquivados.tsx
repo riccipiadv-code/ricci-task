@@ -15,6 +15,7 @@ import {
 import { controleService } from '@/services/controleService'
 import { TaskControleRecord, TaskUsuarioAtivoRecord } from '@/types/task'
 import { PageHeader } from '@/components/PageHeader'
+import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -37,6 +38,7 @@ import { cn } from '@/lib/utils'
 
 export default function ControlesArquivadosPage() {
   const { toast } = useToast()
+  const { corePerfil, coreUserId, hasSystemAccess, loadingAccess, user } = useAuth()
 
   const [controlesArquivados, setControlesArquivados] = useState<TaskControleRecord[]>([])
   const [usuariosAtivos, setUsuariosAtivos] = useState<TaskUsuarioAtivoRecord[]>([])
@@ -51,8 +53,14 @@ export default function ControlesArquivadosPage() {
   )
   const [desarquivando, setDesarquivando] = useState(false)
 
-  // Carregamento de dados com resolução de nomes via task_usuarios
+  // Carregamento de dados com resolução de nomes e escopo de acesso central
   const carregarDados = useCallback(async () => {
+    if (!hasSystemAccess || !corePerfil || !coreUserId) {
+      setControlesArquivados([])
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     setLoadError(null)
     try {
@@ -65,7 +73,10 @@ export default function ControlesArquivadosPage() {
       }
       setUsuariosAtivos(users)
 
-      const arquivados = await controleService.getControlesArquivados(users)
+      const arquivados = await controleService.getControlesArquivados(users, {
+        perfil: corePerfil,
+        coreUserId,
+      })
       setControlesArquivados(arquivados)
     } catch (err: any) {
       console.error('Erro ao carregar controles arquivados:', err)
@@ -79,11 +90,19 @@ export default function ControlesArquivadosPage() {
     } finally {
       setLoading(false)
     }
-  }, [toast])
+  }, [hasSystemAccess, corePerfil, coreUserId, toast])
 
   useEffect(() => {
-    carregarDados()
-  }, [carregarDados])
+    if (!user || (!loadingAccess && !hasSystemAccess)) {
+      setControlesArquivados([])
+      setLoading(false)
+      return
+    }
+
+    if (user && hasSystemAccess && corePerfil && coreUserId) {
+      carregarDados()
+    }
+  }, [user, hasSystemAccess, corePerfil, coreUserId, loadingAccess, carregarDados])
 
   // Ouve eventos de alteração global (ex: arquivamento feito na tela principal de Controles)
   useEffect(() => {

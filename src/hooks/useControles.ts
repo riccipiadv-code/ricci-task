@@ -19,7 +19,7 @@ const DEFAULT_SETTINGS: UserSettings = {
 }
 
 export function useControles() {
-  const { user } = useAuth()
+  const { user, corePerfil, coreUserId, hasSystemAccess, loadingAccess } = useAuth()
 
   const [controles, setControles] = useState<TaskControleRecord[]>([])
   const [statusList, setStatusList] = useState<TaskStatusRecord[]>([])
@@ -57,12 +57,25 @@ export function useControles() {
   // Carrega catálogos, usuários e controles.
   // Resiliente: se a busca de usuários falhar, usamos uma lista vazia, registramos o erro no console
   // e prosseguimos com o carregamento dos Controles (task_tarefas) normalmente.
+  // Limpa estados e caches quando o usuário troca, perde acesso ou a autorização está pendente
+  const resetState = useCallback(() => {
+    setControles([])
+    setNomesControle([])
+    setUsuariosAtivos([])
+    setError(null)
+  }, [])
+
   const carregarDadosCompletos = useCallback(async () => {
+    if (!hasSystemAccess || !corePerfil || !coreUserId) {
+      resetState()
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     setError(null)
     try {
       // 1. Busca usuários e tabelas auxiliares de forma independente e tolerante a falhas
-      // Nenhuma falha em consultas auxiliares pode impedir o carregamento de task_tarefas
       let users: TaskUsuarioAtivoRecord[] = []
       try {
         users = await controleService.getUsuariosAtivos()
@@ -97,8 +110,11 @@ export function useControles() {
       setTiposPrazoList(tpList)
       setNomesControle(nomes)
 
-      // 2. Busca task_tarefas da lista principal (garantindo carregamento mesmo se auxiliares falharem)
-      const ctrlList = await controleService.getControles(users)
+      // 2. Busca task_tarefas aplicando escopo de acesso central
+      const ctrlList = await controleService.getControles(users, {
+        perfil: corePerfil,
+        coreUserId,
+      })
       setControles(ctrlList)
     } catch (err: any) {
       console.error('Erro ao carregar controles do Ricci Task:', err)
@@ -106,7 +122,7 @@ export function useControles() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [hasSystemAccess, corePerfil, coreUserId, resetState])
 
   const refreshUsuariosAtivos = useCallback(async () => {
     try {
@@ -120,19 +136,41 @@ export function useControles() {
   }, [])
 
   const refreshControles = useCallback(async () => {
+    if (!hasSystemAccess || !corePerfil || !coreUserId) {
+      setControles([])
+      return
+    }
     try {
-      const ctrlList = await controleService.getControles(usuariosAtivos)
+      const ctrlList = await controleService.getControles(usuariosAtivos, {
+        perfil: corePerfil,
+        coreUserId,
+      })
       setControles(ctrlList)
     } catch (err: any) {
       console.error('Erro ao recarregar controles:', err)
     }
-  }, [usuariosAtivos])
+  }, [usuariosAtivos, hasSystemAccess, corePerfil, coreUserId])
 
+  // Monitora autenticação e autorização
   useEffect(() => {
-    if (user) {
+    if (!user || (!loadingAccess && !hasSystemAccess)) {
+      resetState()
+      setLoading(false)
+      return
+    }
+
+    if (user && hasSystemAccess && corePerfil && coreUserId) {
       carregarDadosCompletos()
     }
-  }, [user, carregarDadosCompletos])
+  }, [
+    user,
+    hasSystemAccess,
+    corePerfil,
+    coreUserId,
+    loadingAccess,
+    carregarDadosCompletos,
+    resetState,
+  ])
 
   // Ouve eventos de alteração global (ex: arquivar/desarquivar feito em qualquer tela)
   useEffect(() => {

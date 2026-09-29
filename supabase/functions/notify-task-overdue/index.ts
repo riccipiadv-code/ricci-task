@@ -5,6 +5,7 @@ import {
   verifyRicciTaskAdmin,
   resolveValidatedRecipientByCoreId,
   RecipientResolutionResult,
+  escapeHtml,
 } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
@@ -721,13 +722,16 @@ Deno.serve(async (req: Request) => {
       bodyLines.push('Acesse o Ricci Task para consultar e atualizar a providência.')
       bodyLines.push('https://ricci-task.goskip.app/')
 
+      const escapedSubject = escapeHtml(subject)
       const emailHtml = `
       <div style="font-family: sans-serif; color: #1e293b; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #b91c1c; margin-bottom: 16px;">${subject}</h2>
+        <h2 style="color: #b91c1c; margin-bottom: 16px;">${escapedSubject}</h2>
         <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
           ${bodyLines
             .filter((line) => line !== 'https://ricci-task.goskip.app/')
-            .map((line) => (line === '' ? '<br/>' : `<p style="margin: 4px 0;">${line}</p>`))
+            .map((line) =>
+              line === '' ? '<br/>' : `<p style="margin: 4px 0;">${escapeHtml(line)}</p>`,
+            )
             .join('')}
         </div>
         <p style="margin-top: 24px;">

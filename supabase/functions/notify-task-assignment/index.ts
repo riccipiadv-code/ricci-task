@@ -5,7 +5,12 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
-import { resolveValidatedRecipientByCoreId, verifyRicciTaskCaller } from '../_shared/core-auth.ts'
+import {
+  checkTaskAccessScope,
+  escapeHtml,
+  resolveValidatedRecipientByCoreId,
+  verifyRicciTaskCaller,
+} from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -747,13 +752,16 @@ Deno.serve(async (req: Request) => {
     bodyLines.push('Acesse o Ricci Task para consultar o caso.')
     bodyLines.push('https://ricci-task.goskip.app/')
 
+    const escapedSubject = escapeHtml(subject)
     const emailHtml = `
       <div style="font-family: sans-serif; color: #1e293b; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #0f172a; margin-bottom: 16px;">${subject}</h2>
+        <h2 style="color: #0f172a; margin-bottom: 16px;">${escapedSubject}</h2>
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
           ${bodyLines
             .filter((line) => line !== 'https://ricci-task.goskip.app/')
-            .map((line) => (line === '' ? '<br/>' : `<p style="margin: 4px 0;">${line}</p>`))
+            .map((line) =>
+              line === '' ? '<br/>' : `<p style="margin: 4px 0;">${escapeHtml(line)}</p>`,
+            )
             .join('')}
         </div>
         <p style="margin-top: 24px;">

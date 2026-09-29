@@ -537,14 +537,30 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // 3. GESTOR: verifica se o caso pertence à sua equipe direta
-  // Equipe direta definida exclusivamente por core_usuarios.gestor_id = callerCoreId
-  if (perfilUpper === ROLE_CODE_GESTOR) {
-    // Casos históricos sem nenhum ID central preenchido permanecem acessíveis ao Gestor para compatibilidade
-    if (!respCore && !execCore) {
-      return { allowed: true, status: 'ok' }
+  // Validação fail-closed do chamador:
+  // Se o chamador não possuir ID central válido, acesso negado
+  if (!callerCoreId) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error: 'Permissão negada: chamador sem ID central corporativo válido.',
     }
+  }
 
+  // Validação fail-closed do caso:
+  // Se o caso não tiver nenhum ID central válido (responsavel_core_usuario_id ou executor_core_usuario_id),
+  // acesso bloqueado imediatamente (fail-closed, sem fallback permissivo).
+  if (!respCore && !execCore) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error: 'Permissão negada: caso sem IDs centrais válidos de responsável ou executor.',
+    }
+  }
+
+  // 3. GESTOR: verifica se o caso pertence à sua equipe direta
+  // Equipe direta definida exclusivamente por core_usuarios.gestor_id = callerCoreId (1 nível)
+  if (perfilUpper === ROLE_CODE_GESTOR) {
     const targetUserIds = [respCore, execCore].filter(Boolean) as string[]
     try {
       const { data: teamMembers, error: teamError } = await supabase
@@ -585,11 +601,25 @@ export async function checkTaskAccessScope(
     }
   }
 
+  // Perfil desconhecido ou não autorizado -> denied
   return {
     allowed: false,
     status: 'denied',
     error: 'Permissão negada: perfil não autorizado para acessar este caso.',
   }
+}
+
+/**
+ * Escapa caracteres especiais de HTML para prevenção de injeção XSS em e-mails
+ */
+export function escapeHtml(str?: string | null): string {
+  if (!str) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 export async function resolveGestorFromCore(

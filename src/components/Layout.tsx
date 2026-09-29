@@ -33,10 +33,13 @@ export default function Layout({ children }: LayoutProps) {
   useTheme()
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, signOut } = useAuth()
+  const { user, signOut, corePerfil } = useAuth()
   const { toast } = useToast()
   const supabaseConn = useSupabaseConnection()
   const [loggingOut, setLoggingOut] = useState(false)
+
+  // Apenas perfil ADMINISTRADOR vê os menus "Tabelas" e "Configurações"
+  const isAdmin = corePerfil === 'ADMINISTRADOR'
 
   // Submenu Tabelas expansível:
   // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes ou /tabelas/arquivados)
@@ -236,99 +239,103 @@ export default function Layout({ children }: LayoutProps) {
             <span className="truncate">Controles</span>
           </NavLink>
 
-          {/* Tabelas (Expansível) */}
-          <div className="space-y-1">
-            <button
-              type="button"
-              onClick={() => setTabelasExpanded((prev) => !prev)}
+          {/* Tabelas (Expansível) - Apenas ADMINISTRADOR */}
+          {isAdmin && (
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => setTabelasExpanded((prev) => !prev)}
+                className={cn(
+                  'w-full group relative flex items-center justify-between gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200 text-left',
+                  isTabelasChildActive
+                    ? 'bg-primary/10 text-primary font-semibold shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                )}
+                title="Tabelas"
+              >
+                {isTabelasChildActive && (
+                  <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
+                )}
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <TableProperties
+                    className={cn(
+                      'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
+                      isTabelasChildActive
+                        ? 'text-primary stroke-[2.2]'
+                        : 'text-muted-foreground stroke-[1.8]',
+                    )}
+                  />
+                  <span className="truncate">Tabelas</span>
+                </div>
+                <ChevronDown
+                  className={cn(
+                    'w-4 h-4 shrink-0 transition-transform duration-200 opacity-70',
+                    tabelasExpanded && 'rotate-180',
+                  )}
+                />
+              </button>
+
+              {/* Subitens de Tabelas */}
+              {tabelasExpanded && (
+                <div className="pl-6 pr-1 space-y-1 py-0.5 animate-fade-in">
+                  <NavLink
+                    to="/tabelas/nomes"
+                    className={cn(
+                      'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                      location.pathname === '/tabelas/nomes'
+                        ? 'bg-primary/15 text-primary font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                    )}
+                    title="Nomes dos Controles"
+                  >
+                    <FolderKanban className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Nomes dos Controles</span>
+                  </NavLink>
+
+                  <NavLink
+                    to="/tabelas/arquivados"
+                    className={cn(
+                      'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                      location.pathname === '/tabelas/arquivados'
+                        ? 'bg-primary/15 text-primary font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                    )}
+                    title="Controles Arquivados"
+                  >
+                    <Archive className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Controles Arquivados</span>
+                  </NavLink>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Configurações - Apenas ADMINISTRADOR */}
+          {isAdmin && (
+            <NavLink
+              to="/configuracoes"
               className={cn(
-                'w-full group relative flex items-center justify-between gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200 text-left',
-                isTabelasChildActive
+                'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
+                location.pathname === '/configuracoes'
                   ? 'bg-primary/10 text-primary font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
               )}
-              title="Tabelas"
+              title="Configurações"
             >
-              {isTabelasChildActive && (
+              {location.pathname === '/configuracoes' && (
                 <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
               )}
-              <div className="flex items-center gap-3.5 min-w-0">
-                <TableProperties
-                  className={cn(
-                    'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
-                    isTabelasChildActive
-                      ? 'text-primary stroke-[2.2]'
-                      : 'text-muted-foreground stroke-[1.8]',
-                  )}
-                />
-                <span className="truncate">Tabelas</span>
-              </div>
-              <ChevronDown
+              <SettingsIcon
                 className={cn(
-                  'w-4 h-4 shrink-0 transition-transform duration-200 opacity-70',
-                  tabelasExpanded && 'rotate-180',
+                  'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
+                  location.pathname === '/configuracoes'
+                    ? 'text-primary stroke-[2.2]'
+                    : 'text-muted-foreground stroke-[1.8]',
                 )}
               />
-            </button>
-
-            {/* Subitens de Tabelas */}
-            {tabelasExpanded && (
-              <div className="pl-6 pr-1 space-y-1 py-0.5 animate-fade-in">
-                <NavLink
-                  to="/tabelas/nomes"
-                  className={cn(
-                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
-                    location.pathname === '/tabelas/nomes'
-                      ? 'bg-primary/15 text-primary font-semibold'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-                  )}
-                  title="Nomes dos Controles"
-                >
-                  <FolderKanban className="w-4 h-4 shrink-0" />
-                  <span className="truncate">Nomes dos Controles</span>
-                </NavLink>
-
-                <NavLink
-                  to="/tabelas/arquivados"
-                  className={cn(
-                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
-                    location.pathname === '/tabelas/arquivados'
-                      ? 'bg-primary/15 text-primary font-semibold'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-                  )}
-                  title="Controles Arquivados"
-                >
-                  <Archive className="w-4 h-4 shrink-0" />
-                  <span className="truncate">Controles Arquivados</span>
-                </NavLink>
-              </div>
-            )}
-          </div>
-
-          {/* Configurações */}
-          <NavLink
-            to="/configuracoes"
-            className={cn(
-              'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
-              location.pathname === '/configuracoes'
-                ? 'bg-primary/10 text-primary font-semibold shadow-xs'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
-            )}
-            title="Configurações"
-          >
-            {location.pathname === '/configuracoes' && (
-              <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
-            )}
-            <SettingsIcon
-              className={cn(
-                'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
-                location.pathname === '/configuracoes'
-                  ? 'text-primary stroke-[2.2]'
-                  : 'text-muted-foreground stroke-[1.8]',
-              )}
-            />
-            <span className="truncate">Configurações</span>
-          </NavLink>
+              <span className="truncate">Configurações</span>
+            </NavLink>
+          )}
         </nav>
 
         {/* Sidebar Footer */}
@@ -453,39 +460,43 @@ export default function Layout({ children }: LayoutProps) {
           <span>Controles</span>
         </NavLink>
 
-        {/* Tabelas */}
-        <NavLink
-          to="/tabelas/nomes"
-          className={cn(
-            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
-            isTabelasChildActive
-              ? 'text-primary font-semibold'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {isTabelasChildActive && (
-            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
-          )}
-          <TableProperties className="w-4 h-4 mb-0.5" />
-          <span>Tabelas</span>
-        </NavLink>
+        {/* Tabelas - Apenas ADMINISTRADOR */}
+        {isAdmin && (
+          <NavLink
+            to="/tabelas/nomes"
+            className={cn(
+              'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+              isTabelasChildActive
+                ? 'text-primary font-semibold'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {isTabelasChildActive && (
+              <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+            )}
+            <TableProperties className="w-4 h-4 mb-0.5" />
+            <span>Tabelas</span>
+          </NavLink>
+        )}
 
-        {/* Configurações */}
-        <NavLink
-          to="/configuracoes"
-          className={cn(
-            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
-            location.pathname === '/configuracoes'
-              ? 'text-primary font-semibold'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {location.pathname === '/configuracoes' && (
-            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
-          )}
-          <SettingsIcon className="w-4 h-4 mb-0.5" />
-          <span>Ajustes</span>
-        </NavLink>
+        {/* Configurações - Apenas ADMINISTRADOR */}
+        {isAdmin && (
+          <NavLink
+            to="/configuracoes"
+            className={cn(
+              'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+              location.pathname === '/configuracoes'
+                ? 'text-primary font-semibold'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {location.pathname === '/configuracoes' && (
+              <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+            )}
+            <SettingsIcon className="w-4 h-4 mb-0.5" />
+            <span>Ajustes</span>
+          </NavLink>
+        )}
 
         {/* Botão Sair no Mobile */}
         <button

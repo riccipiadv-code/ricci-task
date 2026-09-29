@@ -395,17 +395,138 @@ export const controleService = {
   },
 
   // --------------------------------------------------------------------------
+  // ESCOPO CENTRAL DE ACESSO A CONTROLES (ADMINISTRADOR / GESTOR / OPERACIONAL)
+  // --------------------------------------------------------------------------
+  /**
+   * Obtém a lista de IDs centrais dos subordinados diretos de um gestor
+   * (core_usuarios where gestor_id = gestorCoreId and ativo = true)
+   */
+  async getSubordinadosDiretosIds(gestorCoreId: string): Promise<string[]> {
+    if (!gestorCoreId) return []
+    try {
+      const { data, error } = await supabase
+        .from('core_usuarios')
+        .select('id')
+        .eq('gestor_id', gestorCoreId)
+        .eq('ativo', true)
+
+      if (error) {
+        console.error('Erro ao buscar subordinados diretos:', error)
+        return []
+      }
+      return (data || []).map((u: any) => u.id)
+    } catch (err) {
+      console.error('Falha ao consultar equipe direta do gestor:', err)
+      return []
+    }
+  },
+
+  /**
+   * Avalia se um caso está dentro do escopo de acesso central do usuário logado:
+   * - ADMINISTRADOR: tudo permitido.
+   * - GESTOR: próprio (responsável ou executor) OU membro da equipe direta.
+   * - OPERACIONAL: apenas casos próprios (responsável ou executor).
+   */
+  async checkControleAccessScope(
+    controle: {
+      responsavel_core_usuario_id?: string | null
+      executor_core_usuario_id?: string | null
+      responsavel_usuario_id?: string | null
+      executor_usuario_id?: string | null
+    },
+    userPerfil: string | null,
+    userCoreId: string | null,
+  ): Promise<boolean> {
+    if (!userPerfil || !userCoreId) return false
+    const perfilUpper = userPerfil.toUpperCase()
+    if (perfilUpper === 'ADMINISTRADOR') return true
+
+    const respCore = controle.responsavel_core_usuario_id || controle.responsavel_usuario_id || null
+    const execCore = controle.executor_core_usuario_id || controle.executor_usuario_id || null
+
+    const isProprio = Boolean(
+      (respCore && respCore === userCoreId) || (execCore && execCore === userCoreId),
+    )
+
+    if (isProprio) return true
+    if (perfilUpper === 'OPERACIONAL') return false
+
+    if (perfilUpper === 'GESTOR') {
+      if (!respCore && !execCore) return false
+      const subIds = await this.getSubordinadosDiretosIds(userCoreId)
+      const subSet = new Set(subIds)
+      return Boolean((respCore && subSet.has(respCore)) || (execCore && subSet.has(execCore)))
+    }
+
+    return false
+  },
+
+  /**
+   * Filtra uma lista de controles aplicando o escopo central:
+   * - ADMINISTRADOR: sem filtro
+   * - GESTOR: casos próprios + casos com responsável ou executor na equipe direta
+   * - OPERACIONAL: apenas casos próprios
+   */
+  async applyAccessScopeToControles(
+    controles: TaskControleRecord[],
+    userPerfil: string | null,
+    userCoreId: string | null,
+  ): Promise<TaskControleRecord[]> {
+    if (!userPerfil || !userCoreId) return []
+    const perfilUpper = userPerfil.toUpperCase()
+    if (perfilUpper === 'ADMINISTRADOR') {
+      return controles
+    }
+
+    if (perfilUpper === 'OPERACIONAL') {
+      return controles.filter((c) => {
+        const respCore = c.responsavel_core_usuario_id || c.responsavel_usuario_id
+        const execCore = c.executor_core_usuario_id || c.executor_usuario_id
+        return respCore === userCoreId || execCore === userCoreId
+      })
+    }
+
+    if (perfilUpper === 'GESTOR') {
+      const subIds = await this.getSubordinadosDiretosIds(userCoreId)
+      const subSet = new Set(subIds)
+      return controles.filter((c) => {
+        const respCore = c.responsavel_core_usuario_id || c.responsavel_usuario_id
+        const execCore = c.executor_core_usuario_id || c.executor_usuario_id
+        const isProprio = respCore === userCoreId || execCore === userCoreId
+        const isEquipe = Boolean(
+          (respCore && subSet.has(respCore)) || (execCore && subSet.has(execCore)),
+        )
+        return isProprio || isEquipe
+      })
+    }
+
+    return []
+  },
+
+  // --------------------------------------------------------------------------
   // LISTAGEM PRINCIPAL DE CONTROLES (task_tarefas)
   // Resolvendo responsáveis e executores diretamente por IDs centrais em core_usuarios
   // --------------------------------------------------------------------------
-  async getControles(usuariosParam?: TaskUsuarioAtivoRecord[]): Promise<TaskControleRecord[]> {
-    return this.fetchControlesList({ apenasArquivados: false }, usuariosParam)
+  async getControles(
+    usuariosParam?: TaskUsuarioAtivoRecord[],
+    scopeUser?: { perfil: string | null; coreUserId: string | null },
+  ): Promise<TaskControleRecord[]> {
+    const list = await this.fetchControlesList({ apenasArquivados: false }, usuariosParam)
+    if (scopeUser && scopeUser.perfil && scopeUser.coreUserId) {
+      return this.applyAccessScopeToControles(list, scopeUser.perfil, scopeUser.coreUserId)
+    }
+    return list
   },
 
   async getControlesArquivados(
     usuariosParam?: TaskUsuarioAtivoRecord[],
+    scopeUser?: { perfil: string | null; coreUserId: string | null },
   ): Promise<TaskControleRecord[]> {
-    return this.fetchControlesList({ apenasArquivados: true }, usuariosParam)
+    const list = await this.fetchControlesList({ apenasArquivados: true }, usuariosParam)
+    if (scopeUser && scopeUser.perfil && scopeUser.coreUserId) {
+      return this.applyAccessScopeToControles(list, scopeUser.perfil, scopeUser.coreUserId)
+    }
+    return list
   },
 
   async fetchControlesList(

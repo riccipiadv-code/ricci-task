@@ -1047,4 +1047,103 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
     expect(notifiedTipos[1]).toBe('alteracao_atribuicao')
     expect(currentDbRecord.executor_core_usuario_id).toBe('cu-pessoa-a')
   })
+
+  describe('Escopo Central em Listagens de Controles (ADMINISTRADOR / GESTOR / OPERACIONAL)', () => {
+    const listaExemplo: any[] = [
+      {
+        id: 't-1',
+        identificacao_caso: 'Caso Admin Only',
+        responsavel_core_usuario_id: 'cu-outro-1',
+        executor_core_usuario_id: 'cu-outro-2',
+      },
+      {
+        id: 't-2',
+        identificacao_caso: 'Caso do Operacional 1',
+        responsavel_core_usuario_id: 'cu-op-1',
+        executor_core_usuario_id: 'cu-outro-3',
+      },
+      {
+        id: 't-3',
+        identificacao_caso: 'Caso do Subordinado 1',
+        responsavel_core_usuario_id: 'cu-sub-1',
+        executor_core_usuario_id: 'cu-outro-4',
+      },
+    ]
+
+    it('ADMINISTRADOR: sem filtro, recebe todos os casos', async () => {
+      const filtrados = await controleService.applyAccessScopeToControles(
+        listaExemplo,
+        'ADMINISTRADOR',
+        'cu-admin-id',
+      )
+      expect(filtrados).toHaveLength(3)
+    })
+
+    it('OPERACIONAL: recebe apenas casos próprios (responsável ou executor)', async () => {
+      const filtrados = await controleService.applyAccessScopeToControles(
+        listaExemplo,
+        'OPERACIONAL',
+        'cu-op-1',
+      )
+      expect(filtrados).toHaveLength(1)
+      expect(filtrados[0].id).toBe('t-2')
+    })
+
+    it('GESTOR: recebe casos próprios e da equipe direta (core_usuarios.gestor_id = meuId)', async () => {
+      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+        if (table === 'core_usuarios') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () =>
+                  Promise.resolve({
+                    data: [{ id: 'cu-sub-1' }],
+                    error: null,
+                  }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }) as any)
+
+      const filtrados = await controleService.applyAccessScopeToControles(
+        listaExemplo,
+        'GESTOR',
+        'cu-gestor-1',
+      )
+      // cu-gestor-1 não tem caso próprio aqui, mas cu-sub-1 está em sua equipe direta
+      expect(filtrados).toHaveLength(1)
+      expect(filtrados[0].id).toBe('t-3')
+    })
+
+    it('Reatribuição com perda de acesso: caso salvo conclui normalmente e na leitura seguinte sai da lista do editor operacional', async () => {
+      // Cenário: Operacional é dono de t-2
+      const antes = await controleService.applyAccessScopeToControles(
+        listaExemplo,
+        'OPERACIONAL',
+        'cu-op-1',
+      )
+      expect(antes.map((c) => c.id)).toContain('t-2')
+
+      // Editor operacional reatribui t-2 para outro usuário (cu-outro-5)
+      const listaPosReatribuicao = listaExemplo.map((item) =>
+        item.id === 't-2'
+          ? {
+              ...item,
+              responsavel_core_usuario_id: 'cu-outro-5',
+              executor_core_usuario_id: 'cu-outro-5',
+            }
+          : item,
+      )
+
+      const depois = await controleService.applyAccessScopeToControles(
+        listaPosReatribuicao,
+        'OPERACIONAL',
+        'cu-op-1',
+      )
+      expect(depois.map((c) => c.id)).not.toContain('t-2')
+      expect(depois).toHaveLength(0)
+    })
+  })
 })

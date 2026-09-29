@@ -112,11 +112,12 @@ Para garantir alto desempenho e evitar reconsultas pesadas em cada linha avaliad
     ```
 
 - **UPDATE** (`task_tarefas_update_policy`):
-  - **USING**: Mesma expressão do `SELECT` (o chamador só atualiza casos dentro do seu escopo atual).
+  - **USING**: Mesma expressão do `SELECT` (o chamador só pode atualizar casos que já estejam dentro do seu escopo atual prévio ao salvamento).
   - **WITH CHECK**:
-    - Para `ADMINISTRADOR`: permite qualquer alteração válida.
-    - Para `GESTOR`: permite salvar se os novos responsável/executor continuarem dentro de si mesmo ou de sua equipe direta. Se reatribuir para alguém de fora, o gestor perde o acesso no instante seguinte.
-    - Para `OPERACIONAL`: permite atualizar se continuar sendo responsável ou executor; caso transfira ambos para outro usuário, o acesso é revogado imediatamente após o commit.
+    - Não deve exigir que o editor continue no novo escopo resultante (`WITH CHECK (true)` ou omitido para o escopo de destino). A autorização é avaliada exclusivamente no escopo ANTERIOR (`USING`).
+    - **Reatribuição com perda de acesso**: O salvamento da reatribuição DEVE concluir com sucesso (a autorização já foi atestada na leitura prévia e no `USING`).
+    - Após o commit, o caso naturalmente sai da listagem do editor na próxima leitura/refresh (já que não atende mais ao `SELECT`).
+    - As notificações por e-mail disparam para os novos responsáveis sem conceder acesso retroativo nem bloquear o salvamento realizado pelo editor anterior.
 
 - **DELETE** (`task_tarefas_delete_policy`):
   - Restrito a `ADMINISTRADOR` (a exclusão padrão no Ricci Task é lógica via `deleted_at`, que passa por `UPDATE`).
