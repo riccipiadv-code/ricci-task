@@ -258,37 +258,35 @@ export function ControleModal({
       // Preserva sempre os responsáveis e executores históricos já gravados no caso em todos os estados
       // (carregando, falhou, válida), nunca deixando o histórico desaparecer do modal.
       let listaCombinada = [...usersValidados]
-      const respId = controleToEdit?.responsavel_usuario_id
-      const execId = controleToEdit?.executor_usuario_id
-      const respFalta = respId && !listaCombinada.some((u) => u.id === respId)
-      const execFalta = execId && !listaCombinada.some((u) => u.id === execId)
+      const respCore =
+        controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
+      const execCore =
+        controleToEdit?.executor_core_usuario_id || controleToEdit?.executor_usuario_id
+      const respFalta = respCore && !listaCombinada.some((u) => u.id === respCore)
+      const execFalta = execCore && !listaCombinada.some((u) => u.id === execCore)
 
       if (respFalta || execFalta) {
         try {
-          const todos = await controleService.getTodosUsuarios()
-          // Verifica novamente se a requisição ainda é a atual após busca de todos os usuários
+          const missingIds: string[] = []
+          if (respCore && !listaCombinada.some((u) => u.id === respCore)) missingIds.push(respCore)
+          if (execCore && !listaCombinada.some((u) => u.id === execCore)) missingIds.push(execCore)
+
+          const fetched = await controleService.getCoreUsuariosByIds(missingIds)
           if (requestId !== activeRequestIdRef.current) return
 
-          todos.forEach((tu) => {
-            if (
-              (tu.id === respId || tu.id === execId) &&
-              !listaCombinada.some((u) => u.id === tu.id)
-            ) {
-              const matchedCoreId =
-                tu.id === respId
-                  ? controleToEdit?.responsavel_core_usuario_id || tu.core_usuario_id
-                  : controleToEdit?.executor_core_usuario_id || tu.core_usuario_id
+          for (const [uid, u] of fetched.entries()) {
+            if (!listaCombinada.some((cand) => cand.id === uid)) {
               listaCombinada.push({
-                id: tu.id,
-                nome: tu.nome,
-                email: tu.email,
-                ativo: tu.ativo,
-                core_usuario_id: matchedCoreId || null,
+                id: u.id,
+                nome: u.nome,
+                email: u.email,
+                ativo: u.ativo,
+                core_usuario_id: u.id,
               })
             }
-          })
+          }
         } catch (err) {
-          console.error('Aviso ao preservar usuário existente em edição:', err)
+          console.error('Aviso ao preservar usuário central existente em edição:', err)
         }
       }
 
@@ -339,8 +337,10 @@ export function ControleModal({
       setPrazoConclusao(
         controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
       )
-      const editRespId = controleToEdit.responsavel_usuario_id || ''
-      const editExecId = controleToEdit.executor_usuario_id || ''
+      const editRespId =
+        controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id || ''
+      const editExecId =
+        controleToEdit.executor_core_usuario_id || controleToEdit.executor_usuario_id || ''
       setResponsavelUsuarioId(editRespId)
       setExecutorUsuarioId(editExecId)
       const sameUser = Boolean(editRespId && editExecId && editRespId === editExecId)
@@ -438,10 +438,11 @@ export function ControleModal({
   // NÃO permite selecionar novos candidatos; mantém exclusivamente o responsável histórico
   // já gravado visível na edição. Libera novas escolhas somente após a validação completa ('válida').
   const opcoesResponsaveis = useMemo(() => {
-    const editRespId = controleToEdit?.responsavel_usuario_id
+    const editRespId =
+      controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
     let list = usuariosLista.filter((u) => {
       // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo na visualização)
-      if (editRespId && u.id === editRespId) return true
+      if (editRespId && (u.id === editRespId || u.core_usuario_id === editRespId)) return true
       // Durante carregando ou falhou, NÃO oferece candidatos novos
       if (validacaoUsuariosStatus !== 'válida') return false
       return u.ativo ?? true
@@ -460,10 +461,11 @@ export function ControleModal({
   // NÃO permite selecionar novos candidatos; mantém exclusivamente o executor histórico
   // já gravado visível na edição. Libera novas escolhas somente após a validação completa ('válida').
   const opcoesExecutores = useMemo(() => {
-    const editExecId = controleToEdit?.executor_usuario_id
+    const editExecId =
+      controleToEdit?.executor_core_usuario_id || controleToEdit?.executor_usuario_id
     let list = usuariosLista.filter((u) => {
       // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo na visualização)
-      if (editExecId && u.id === editExecId) return true
+      if (editExecId && (u.id === editExecId || u.core_usuario_id === editExecId)) return true
       // Durante carregando ou falhou, NÃO oferece candidatos novos
       if (validacaoUsuariosStatus !== 'válida') return false
       return u.ativo ?? true
@@ -673,12 +675,19 @@ export function ControleModal({
       setStatusError(true)
       hasError = true
     }
+    const existingRespId =
+      controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
+    const existingExecId =
+      controleToEdit?.executor_core_usuario_id || controleToEdit?.executor_usuario_id
+
     if (!responsavelUsuarioId) {
       setResponsavelError(true)
       hasError = true
     } else {
       const isHistoricoPreservado =
-        controleToEdit && responsavelUsuarioId === controleToEdit.responsavel_usuario_id
+        controleToEdit &&
+        (responsavelUsuarioId === existingRespId ||
+          responsavelUsuarioId === controleToEdit.responsavel_usuario_id)
       if (!isHistoricoPreservado) {
         if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
           setResponsavelError(true)
@@ -691,18 +700,6 @@ export function ControleModal({
                 ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
                 : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo responsável.',
           })
-        } else {
-          // Verifica se a pessoa selecionada possui ponte operacional em task_usuarios
-          const candResp = usuariosLista.find((u) => u.id === responsavelUsuarioId)
-          if (candResp && candResp.task_usuario_id === null) {
-            setResponsavelError(true)
-            hasError = true
-            toast({
-              variant: 'destructive',
-              title: 'Ponte operacional ausente',
-              description: `A pessoa "${candResp.nome}" está elegível no Gestor de Acessos, mas não possui ponte operacional (task_usuarios) no Ricci Task. Atribuição bloqueada.`,
-            })
-          }
         }
       }
     }
@@ -712,7 +709,9 @@ export function ControleModal({
       hasError = true
     } else {
       const isHistoricoPreservado =
-        controleToEdit && executorUsuarioId === controleToEdit.executor_usuario_id
+        controleToEdit &&
+        (executorUsuarioId === existingExecId ||
+          executorUsuarioId === controleToEdit.executor_usuario_id)
       if (!isHistoricoPreservado) {
         if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
           setExecutorError(true)
@@ -725,18 +724,6 @@ export function ControleModal({
                 ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
                 : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo executor.',
           })
-        } else {
-          // Verifica se a pessoa selecionada possui ponte operacional em task_usuarios
-          const candExec = usuariosLista.find((u) => u.id === executorUsuarioId)
-          if (candExec && candExec.task_usuario_id === null) {
-            setExecutorError(true)
-            hasError = true
-            toast({
-              variant: 'destructive',
-              title: 'Ponte operacional ausente',
-              description: `A pessoa "${candExec.nome}" está elegível no Gestor de Acessos, mas não possui ponte operacional (task_usuarios) no Ricci Task. Atribuição bloqueada.`,
-            })
-          }
         }
       }
     }
@@ -782,22 +769,29 @@ export function ControleModal({
     }
 
     // Resolve os vínculos centrais a partir da lista validada ou preservada:
-    // Se o usuário não alterou a pessoa na edição, preserva o core_usuario_id existente de controleToEdit
     const isEditMode = Boolean(controleToEdit?.id)
-    const respNaoMudou =
-      isEditMode && responsavelUsuarioId === controleToEdit?.responsavel_usuario_id
-    const execNaoMudou = isEditMode && executorUsuarioId === controleToEdit?.executor_usuario_id
+    const prevRespCore =
+      controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
+    const prevExecCore =
+      controleToEdit?.executor_core_usuario_id || controleToEdit?.executor_usuario_id
 
-    const selectedResp = usuariosLista.find((u) => u.id === responsavelUsuarioId)
-    const selectedExec = usuariosLista.find((u) => u.id === executorUsuarioId)
+    const respNaoMudou = isEditMode && responsavelUsuarioId === prevRespCore
+    const execNaoMudou = isEditMode && executorUsuarioId === prevExecCore
+
+    const selectedResp = usuariosLista.find(
+      (u) => u.id === responsavelUsuarioId || u.core_usuario_id === responsavelUsuarioId,
+    )
+    const selectedExec = usuariosLista.find(
+      (u) => u.id === executorUsuarioId || u.core_usuario_id === executorUsuarioId,
+    )
 
     const respCoreId = respNaoMudou
-      ? controleToEdit?.responsavel_core_usuario_id || selectedResp?.core_usuario_id || null
-      : selectedResp?.core_usuario_id || null
+      ? prevRespCore || selectedResp?.core_usuario_id || responsavelUsuarioId
+      : selectedResp?.core_usuario_id || responsavelUsuarioId
 
     const execCoreId = execNaoMudou
-      ? controleToEdit?.executor_core_usuario_id || selectedExec?.core_usuario_id || null
-      : selectedExec?.core_usuario_id || null
+      ? prevExecCore || selectedExec?.core_usuario_id || executorUsuarioId
+      : selectedExec?.core_usuario_id || executorUsuarioId
 
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
@@ -806,26 +800,21 @@ export function ControleModal({
       status_id: statusId,
       data_autorizacao: dataAutorizacao || null,
       prazo_conclusao: prazoConclusao || null,
-      responsavel_usuario_id: responsavelUsuarioId,
-      executor_usuario_id: executorUsuarioId,
+      responsavel_usuario_id: controleToEdit?.responsavel_usuario_id || respCoreId,
+      executor_usuario_id: controleToEdit?.executor_usuario_id || execCoreId,
       responsavel_core_usuario_id: respCoreId,
       executor_core_usuario_id: execCoreId,
       pasta_cliente: pastaCliente.trim() || null,
       pasta_ricci: pastaRicci.trim() || null,
     }
 
-    // Captura os IDs anteriores ANTES do salvamento para comparar com segurança
-    const isEdicao = Boolean(controleToEdit?.id)
-    const prevExecutorId = controleToEdit?.executor_usuario_id || null
-    const prevResponsavelId = controleToEdit?.responsavel_usuario_id || null
-
-    // Determina se deve notificar e qual o tipo
+    // Detecção de reatribuição (para disparar notificação): compara IDs CENTRAIS
     let tipoNotificacao: 'nova_atribuicao' | 'alteracao_atribuicao' | null = null
-    if (!isEdicao) {
+    if (!isEditMode) {
       tipoNotificacao = 'nova_atribuicao'
     } else {
-      const mudouExecutor = prevExecutorId !== executorUsuarioId
-      const mudouResponsavel = prevResponsavelId !== responsavelUsuarioId
+      const mudouExecutor = prevExecCore !== execCoreId
+      const mudouResponsavel = prevRespCore !== respCoreId
       if (mudouExecutor || mudouResponsavel) {
         tipoNotificacao = 'alteracao_atribuicao'
       }
@@ -1403,14 +1392,6 @@ export function ControleModal({
                                           Inativo
                                         </span>
                                       )}
-                                      {r.task_usuario_id === null && (
-                                        <span
-                                          className="text-[10px] px-1.5 py-0.2 rounded bg-destructive/10 text-destructive border border-destructive/20 font-medium"
-                                          title="Sem vínculo operacional task_usuarios"
-                                        >
-                                          Sem ponte
-                                        </span>
-                                      )}
                                     </div>
                                     {r.email && (
                                       <span className="text-[11px] text-muted-foreground font-normal">
@@ -1547,14 +1528,6 @@ export function ControleModal({
                                       {isInativoLocal && (
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
                                           Inativo
-                                        </span>
-                                      )}
-                                      {e.task_usuario_id === null && (
-                                        <span
-                                          className="text-[10px] px-1.5 py-0.2 rounded bg-destructive/10 text-destructive border border-destructive/20 font-medium"
-                                          title="Sem vínculo operacional task_usuarios"
-                                        >
-                                          Sem ponte
                                         </span>
                                       )}
                                     </div>

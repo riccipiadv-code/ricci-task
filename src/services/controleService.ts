@@ -188,17 +188,13 @@ export const controleService = {
   /**
    * Retorna os usuários disponíveis para seleção em NOVOS Responsáveis e Executores:
    * Usa a função SQL RPC public.task_listar_usuarios_core_elegiveis() como ÚNICA fonte
-   * de elegibilidade, retornando IDs, nomes e e-mails centrais diretamente do Gestor de Acessos (core_*).
+   * de elegibilidade, retornando IDs centrais (core_usuarios.id), nomes e e-mails centrais
+   * diretamente do Gestor de Acessos (core_*).
    *
-   * Resolve a ponte operacional task_usuarios.id via vínculo core_usuario_id para cada pessoa.
-   * Se a ponte não for encontrada para algum usuário, atribui task_usuario_id = null (ou preserva o
-   * registro sinalizado para que salvamentos que tentem usá-lo sejam bloqueados).
-   *
-   * Fail-Closed estrito: se a RPC falhar ou a consulta de ponte falhar tecnicamente, lança erro
-   * e bloqueia novas atribuições sem fallback para listas legadas.
+   * Corte definitivo: NÃO consulta nem exige ponte em task_usuarios.
+   * Fail-Closed estrito: se a RPC falhar, lança erro e bloqueia novas atribuições sem fallback.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
-    // 1. Chama a RPC task_listar_usuarios_core_elegiveis como ÚNICA fonte de elegibilidade
     const { data: rpcData, error: rpcError } = await supabase.rpc(
       'task_listar_usuarios_core_elegiveis',
     )
@@ -215,151 +211,52 @@ export const controleService = {
       return []
     }
 
-    // 2. Resolve a ponte temporária de gravação em task_usuarios (pelo vínculo core_usuario_id)
-    const coreUserIds = rpcData.map((item: any) => item.id).filter(Boolean)
-
-    const { data: bridgedUsers, error: bridgeError } = await supabase
-      .from('task_usuarios')
-      .select('id, core_usuario_id, ativo')
-      .in('core_usuario_id', coreUserIds)
-
-    if (bridgeError) {
-      console.error('Falha técnica ao consultar ponte em task_usuarios:', bridgeError)
-      throw new Error(
-        'Falha técnica ao verificar a ponte operacional dos usuários no Ricci Task. Novos vínculos estão temporariamente suspensos.',
-      )
-    }
-
-    // Mapeia core_usuario_id -> task_usuarios correspondente
-    // Dando preferência a registro ativo caso haja mais de um
-    const bridgeMap = new Map<string, { id: string; ativo: boolean }>()
-    for (const b of bridgedUsers || []) {
-      if (b.core_usuario_id) {
-        const existing = bridgeMap.get(b.core_usuario_id)
-        if (!existing || (!existing.ativo && b.ativo)) {
-          bridgeMap.set(b.core_usuario_id, { id: b.id, ativo: Boolean(b.ativo) })
-        }
-      }
-    }
-
-    // 3. Monta a lista de candidatos centrais elegíveis
-    // O ID exposto para a UI é o task_usuarios.id (quando existe ponte) ou o core_usuario_id caso contrário
-    // preservando nome e e-mail CENTRAIS retornados pela RPC nova.
-    const lista: TaskUsuarioAtivoRecord[] = []
-    for (const item of rpcData) {
-      const bridge = bridgeMap.get(item.id)
-      const operationalId = bridge ? bridge.id : item.id
-      lista.push({
-        id: operationalId,
-        nome: (item.nome || '').trim(),
-        email: (item.email || '').trim().toLowerCase(),
-        ativo: item.ativo ?? true,
-        core_usuario_id: item.id,
-        task_usuario_id: bridge ? bridge.id : null,
-      })
-    }
+    const lista: TaskUsuarioAtivoRecord[] = rpcData.map((item: any) => ({
+      id: item.id, // ID Central definitivo
+      nome: (item.nome || '').trim(),
+      email: (item.email || '').trim().toLowerCase(),
+      ativo: item.ativo ?? true,
+      core_usuario_id: item.id,
+      task_usuario_id: item.id, // retrocompatibilidade sem ponte
+    }))
 
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   },
 
   /**
-   * Retorna todos os usuários de task_usuarios (ativos e inativos), usando exclusivamente
-   * task_usuarios.select('id, nome, email, ativo').
+   * Resolve e recupera nomes e e-mails centrais de usuários a partir de core_usuarios
+   * (incluindo usuários centrais inativos referenciados por casos antigos).
    */
-  async getTodosUsuarios(): Promise<TaskUsuarioRecord[]> {
-    const { data, error } = await supabase
-      .from('task_usuarios')
-      .select('id, nome, email, ativo, core_usuario_id')
-      .order('nome', { ascending: true })
+  async getCoreUsuariosByIds(
+    ids: string[],
+  ): Promise<Map<string, { id: string; nome: string; email: string; ativo: boolean }>> {
+    const userMap = new Map<string, { id: string; nome: string; email: string; ativo: boolean }>()
+    const validIds = Array.from(new Set(ids.filter(Boolean)))
+    if (validIds.length === 0) return userMap
 
-    if (error) {
-      console.error('Erro ao listar task_usuarios:', error)
-      throw new Error('Falha ao listar usuários do sistema.')
-    }
-
-    return (data || []) as TaskUsuarioRecord[]
-  },
-
-  /**
-   * Cadastra ou atualiza um usuário em task_usuarios.
-   */
-  async saveUsuario(input: SaveUsuarioInput): Promise<TaskUsuarioRecord> {
-    const cleanNome = input.nome.trim()
-    const cleanEmail = input.email.trim().toLowerCase()
-
-    if (!cleanNome) {
-      throw new Error('O Nome do usuário é obrigatório.')
-    }
-    if (!cleanEmail) {
-      throw new Error('O E-mail do usuário é obrigatório.')
-    }
-
-    const payload = {
-      nome: cleanNome,
-      email: cleanEmail,
-      ativo: input.ativo !== undefined ? input.ativo : true,
-      updated_at: new Date().toISOString(),
-    }
-
-    if (input.id) {
+    try {
       const { data, error } = await supabase
-        .from('task_usuarios')
-        .update(payload)
-        .eq('id', input.id)
+        .from('core_usuarios')
         .select('id, nome, email, ativo')
-        .single()
+        .in('id', validIds)
 
       if (error) {
-        console.error('Erro ao atualizar task_usuarios:', error)
-        throw error
+        console.warn('Aviso ao consultar core_usuarios por IDs:', error)
+      } else if (data) {
+        for (const u of data) {
+          userMap.set(u.id, {
+            id: u.id,
+            nome: (u.nome || '').trim(),
+            email: (u.email || '').trim().toLowerCase(),
+            ativo: Boolean(u.ativo),
+          })
+        }
       }
-      return data as TaskUsuarioRecord
-    } else {
-      const { data, error } = await supabase
-        .from('task_usuarios')
-        .insert({
-          ...payload,
-        })
-        .select('id, nome, email, ativo')
-        .single()
-
-      if (error) {
-        console.error('Erro ao criar task_usuarios:', error)
-        throw error
-      }
-      return data as TaskUsuarioRecord
+    } catch (err) {
+      console.warn('Falha segura ao buscar usuários centrais por IDs:', err)
     }
-  },
 
-  /**
-   * Altera exclusivamente o campo 'ativo' de um registro em task_usuarios.
-   */
-  async toggleUsuarioAtivo(id: string, novoAtivo: boolean): Promise<void> {
-    const { error } = await supabase
-      .from('task_usuarios')
-      .update({
-        ativo: novoAtivo,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-
-    if (error) {
-      console.error('Erro ao atualizar ativo em task_usuarios:', error)
-      throw new Error('Não foi possível alterar a situação do usuário no Ricci Task.')
-    }
-  },
-
-  /**
-   * Exclui fisicamente um usuário do Ricci Task.
-   * Se o usuário estiver vinculado a controles (FK violation), lança erro específico.
-   */
-  async deleteUsuario(id: string): Promise<void> {
-    const { error } = await supabase.from('task_usuarios').delete().eq('id', id)
-
-    if (error) {
-      console.error('Erro ao excluir task_usuarios:', error)
-      throw error
-    }
+    return userMap
   },
 
   // --------------------------------------------------------------------------
@@ -499,7 +396,7 @@ export const controleService = {
 
   // --------------------------------------------------------------------------
   // LISTAGEM PRINCIPAL DE CONTROLES (task_tarefas)
-  // Resolvendo responsáveis e executores a partir de task_usuarios
+  // Resolvendo responsáveis e executores diretamente por IDs centrais em core_usuarios
   // --------------------------------------------------------------------------
   async getControles(usuariosParam?: TaskUsuarioAtivoRecord[]): Promise<TaskControleRecord[]> {
     return this.fetchControlesList({ apenasArquivados: false }, usuariosParam)
@@ -515,27 +412,7 @@ export const controleService = {
     options: { apenasArquivados: boolean },
     usuariosParam?: TaskUsuarioAtivoRecord[],
   ): Promise<TaskControleRecord[]> {
-    // 1. Garante que temos um mapa de usuários para resolver os nomes de responsáveis e executores.
-    // Se falhar ou vier vazio, mantemos mapa vazio para não interromper a busca de task_tarefas.
-    let usuariosMap = new Map<string, { id: string; nome: string; email?: string }>()
-    if (usuariosParam && usuariosParam.length > 0) {
-      usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
-    } else {
-      try {
-        const allUsers = await this.getTodosUsuarios()
-        allUsers.forEach((u) => usuariosMap.set(u.id, { id: u.id, nome: u.nome, email: u.email }))
-      } catch (err) {
-        console.error(
-          'Aviso ao obter usuários para resolução de controles (usando lista vazia):',
-          err,
-        )
-      }
-    }
-
-    // 2. Consulta parte de public.task_tarefas com LEFT JOINs opcionais (sem !inner).
-    // Para a lista principal: exclusivamente .is('arquivado_at', null).
-    // Para controles arquivados: exclusivamente .not('arquivado_at', 'is', null).order('arquivado_at', { ascending: false }).
-    // Não aplica filtros implícitos de status, prazo, providência, deleted_at, responsável ou executor.
+    // 1. Consulta parte de public.task_tarefas com LEFT JOINs opcionais (sem !inner).
     let query = supabase.from('task_tarefas').select(`
         *,
         nome_controle_obj:task_nomes_controle(id, nome),
@@ -561,7 +438,7 @@ export const controleService = {
 
     const tarefaIds = tarefasRaw.map((t) => t.id)
 
-    // 3. Busca providências associadas aos controles de forma resiliente
+    // 2. Busca providências associadas aos controles de forma resiliente
     const provsByTarefa: Record<string, TaskProvidenciaRecord[]> = {}
     try {
       const { data: providenciasRaw, error: provError } = await supabase
@@ -587,7 +464,33 @@ export const controleService = {
       console.error('Aviso ao buscar providências dos controles:', provErr)
     }
 
-    // 4. Monta o modelo hidratado (tolerante a ausência de relacionamentos)
+    // 3. Monta mapa de resolução de usuários pelos IDs centrais
+    const usuariosMap = new Map<
+      string,
+      { id: string; nome: string; email?: string; ativo?: boolean }
+    >()
+    if (usuariosParam && usuariosParam.length > 0) {
+      usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
+    }
+
+    // Identifica quais IDs centrais precisam ser resolvidos em core_usuarios
+    // (incluindo usuários centrais inativos referenciados por casos antigos)
+    const neededCoreIds = new Set<string>()
+    for (const t of tarefasRaw) {
+      const respCore = t.responsavel_core_usuario_id || t.responsavel_usuario_id
+      const execCore = t.executor_core_usuario_id || t.executor_usuario_id
+      if (respCore && !usuariosMap.has(respCore)) neededCoreIds.add(respCore)
+      if (execCore && !usuariosMap.has(execCore)) neededCoreIds.add(execCore)
+    }
+
+    if (neededCoreIds.size > 0) {
+      const fetchedCoreUsers = await this.getCoreUsuariosByIds(Array.from(neededCoreIds))
+      for (const [id, u] of fetchedCoreUsers.entries()) {
+        usuariosMap.set(id, u)
+      }
+    }
+
+    // 4. Monta o modelo hidratado com IDs centrais prioritários
     const controles: TaskControleRecord[] = tarefasRaw.map((t: any) => {
       const provs = provsByTarefa[t.id] || []
 
@@ -606,12 +509,11 @@ export const controleService = {
       provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
       const proximaProvAberta = provAbertas[0] || null
 
-      const respUsuario = t.responsavel_usuario_id
-        ? usuariosMap.get(t.responsavel_usuario_id) || null
-        : null
-      const execUsuario = t.executor_usuario_id
-        ? usuariosMap.get(t.executor_usuario_id) || null
-        : null
+      const respCoreId = t.responsavel_core_usuario_id || t.responsavel_usuario_id
+      const execCoreId = t.executor_core_usuario_id || t.executor_usuario_id
+
+      const respUsuario = respCoreId ? usuariosMap.get(respCoreId) || null : null
+      const execUsuario = execCoreId ? usuariosMap.get(execCoreId) || null : null
 
       return {
         id: t.id,
@@ -621,10 +523,10 @@ export const controleService = {
         status_id: t.status_id,
         data_autorizacao: t.data_autorizacao,
         prazo_conclusao: t.prazo_conclusao,
-        responsavel_usuario_id: t.responsavel_usuario_id,
-        executor_usuario_id: t.executor_usuario_id,
-        responsavel_core_usuario_id: t.responsavel_core_usuario_id || null,
-        executor_core_usuario_id: t.executor_core_usuario_id || null,
+        responsavel_usuario_id: t.responsavel_usuario_id || respCoreId,
+        executor_usuario_id: t.executor_usuario_id || execCoreId,
+        responsavel_core_usuario_id: respCoreId,
+        executor_core_usuario_id: execCoreId,
         pasta_cliente: t.pasta_cliente,
         pasta_ricci: t.pasta_ricci,
         created_at: t.created_at,
@@ -700,22 +602,29 @@ export const controleService = {
       return null
     }
 
-    let usuariosMap = new Map<string, TaskUsuarioAtivoRecord>()
+    const raw: any = t
+    const respCoreId = raw.responsavel_core_usuario_id || raw.responsavel_usuario_id
+    const execCoreId = raw.executor_core_usuario_id || raw.executor_usuario_id
+
+    const usuariosMap = new Map<string, TaskUsuarioAtivoRecord>()
     if (usuariosParam && usuariosParam.length > 0) {
       usuariosParam.forEach((u) => usuariosMap.set(u.id, u))
-    } else {
-      try {
-        const allUsers = await this.getTodosUsuarios()
-        allUsers.forEach((u) =>
-          usuariosMap.set(u.id, {
-            id: u.id,
-            nome: u.nome,
-            email: u.email,
-            ativo: u.ativo,
-          }),
-        )
-      } catch (err) {
-        console.error('Aviso ao obter usuários para resolução de controle:', err)
+    }
+
+    const missingIds: string[] = []
+    if (respCoreId && !usuariosMap.has(respCoreId)) missingIds.push(respCoreId)
+    if (execCoreId && !usuariosMap.has(execCoreId)) missingIds.push(execCoreId)
+
+    if (missingIds.length > 0) {
+      const fetched = await this.getCoreUsuariosByIds(missingIds)
+      for (const [uid, u] of fetched.entries()) {
+        usuariosMap.set(uid, {
+          id: u.id,
+          nome: u.nome,
+          email: u.email,
+          ativo: u.ativo,
+          core_usuario_id: u.id,
+        })
       }
     }
 
@@ -731,9 +640,8 @@ export const controleService = {
     const provAbertas = provs.filter((p) => !p.status?.finaliza)
     provAbertas.sort((a, b) => (a.prazo_conclusao || '').localeCompare(b.prazo_conclusao || ''))
 
-    const raw: any = t
-    const respUsuario = usuariosMap.get(raw.responsavel_usuario_id) || null
-    const execUsuario = usuariosMap.get(raw.executor_usuario_id) || null
+    const respUsuario = respCoreId ? usuariosMap.get(respCoreId) || null : null
+    const execUsuario = execCoreId ? usuariosMap.get(execCoreId) || null : null
 
     return {
       id: raw.id,
@@ -743,10 +651,10 @@ export const controleService = {
       status_id: raw.status_id,
       data_autorizacao: raw.data_autorizacao,
       prazo_conclusao: raw.prazo_conclusao,
-      responsavel_usuario_id: raw.responsavel_usuario_id,
-      executor_usuario_id: raw.executor_usuario_id,
-      responsavel_core_usuario_id: raw.responsavel_core_usuario_id || null,
-      executor_core_usuario_id: raw.executor_core_usuario_id || null,
+      responsavel_usuario_id: raw.responsavel_usuario_id || respCoreId,
+      executor_usuario_id: raw.executor_usuario_id || execCoreId,
+      responsavel_core_usuario_id: respCoreId,
+      executor_core_usuario_id: execCoreId,
       pasta_cliente: raw.pasta_cliente,
       pasta_ricci: raw.pasta_ricci,
       created_at: raw.created_at,
@@ -795,11 +703,8 @@ export const controleService = {
       console.error('Aviso ao verificar se status do controle finaliza:', checkErr)
     }
 
-    // Se for edição (input.id presente), precisamos consultar o registro anterior primeiro (fail-closed estrito)
-    // para viabilizar:
-    // a) Preservação histórica sem re-resolução de IDs centrais caso a atribuição não tenha mudado;
-    // b) Detecção de alteração real antes de executar qualquer UPDATE;
-    // c) Bloqueio caso a consulta do registro anterior falhe.
+    // Se for edição (input.id presente), consultamos o registro anterior primeiro (fail-closed)
+    // para detecção de alteração real antes de executar qualquer UPDATE.
     let existingRecord: any = null
     if (input.id) {
       const { data: existingData, error: existingErr } = await supabase
@@ -836,175 +741,40 @@ export const controleService = {
       existingRecord = existingData
     }
 
-    // Regra 5: Para atribuição histórica sem mudança em edição, preservar o par já gravado no registro
-    // (central + operacional juntos), sem tentar re-resolver ou sobrescrever com candidatos atuais.
-    let resolvedRespCoreId: string | null = null
-    let resolvedExecCoreId: string | null = null
+    // Autoridade definitiva: IDs CENTRAIS (core_usuarios.id)
+    const targetRespCoreId = input.responsavel_core_usuario_id || input.responsavel_usuario_id
+    const targetExecCoreId = input.executor_core_usuario_id || input.executor_usuario_id
 
-    const respNaoMudou = Boolean(
-      existingRecord &&
-      existingRecord.responsavel_usuario_id === input.responsavel_usuario_id &&
-      existingRecord.responsavel_core_usuario_id,
-    )
-    if (respNaoMudou) {
-      // Se um ID central diferente foi enviado no input com o mesmo operacional, valida consistência
-      if (
-        input.responsavel_core_usuario_id &&
-        input.responsavel_core_usuario_id !== existingRecord.responsavel_core_usuario_id
-      ) {
-        throw new Error(
-          'Gravação bloqueada: o ID central do Responsável diverge do vínculo gravado no sistema.',
-        )
-      }
-      resolvedRespCoreId = existingRecord.responsavel_core_usuario_id
+    if (!targetRespCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o Responsável selecionado não possui ID central válido no Gestor de Acessos.',
+      )
+    }
+    if (!targetExecCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o Executor selecionado não possui ID central válido no Gestor de Acessos.',
+      )
     }
 
-    const execNaoMudou = Boolean(
-      existingRecord &&
-      existingRecord.executor_usuario_id === input.executor_usuario_id &&
-      existingRecord.executor_core_usuario_id,
-    )
-    if (execNaoMudou) {
-      if (
-        input.executor_core_usuario_id &&
-        input.executor_core_usuario_id !== existingRecord.executor_core_usuario_id
-      ) {
-        throw new Error(
-          'Gravação bloqueada: o ID central do Executor diverge do vínculo gravado no sistema.',
-        )
-      }
-      resolvedExecCoreId = existingRecord.executor_core_usuario_id
-    }
+    // Resolver retrocompatibilidade de IDs operacionais legados (para não violar FKs caso o banco ainda exija NOT NULL antes da Fase 1)
+    let opRespId = input.responsavel_usuario_id || targetRespCoreId
+    let opExecId = input.executor_usuario_id || targetExecCoreId
 
-    // Resolução dos IDs centrais e validação estrita da ponte operacional task_usuarios:
-    // Para novos vínculos ou edições com alteração:
-    // 1. Busca primeiro nos candidatos informados (usuariosParam)
-    // 2. Se ausente, busca direto em task_usuarios
-    const needBridgeLookup: string[] = []
-
-    if (!resolvedRespCoreId && input.responsavel_usuario_id) {
-      const foundResp = (usuariosParam || []).find((u) => u.id === input.responsavel_usuario_id)
-      if (foundResp && foundResp.core_usuario_id) {
-        resolvedRespCoreId = foundResp.core_usuario_id
-      } else {
-        needBridgeLookup.push(input.responsavel_usuario_id)
-      }
-    }
-
-    if (!resolvedExecCoreId && input.executor_usuario_id) {
-      const foundExec = (usuariosParam || []).find((u) => u.id === input.executor_usuario_id)
-      if (foundExec && foundExec.core_usuario_id) {
-        resolvedExecCoreId = foundExec.core_usuario_id
-      } else if (!needBridgeLookup.includes(input.executor_usuario_id)) {
-        needBridgeLookup.push(input.executor_usuario_id)
-      }
-    }
-
-    if (needBridgeLookup.length > 0) {
-      const { data: usersBridge, error: bridgeErr } = await supabase
+    // Se opRespId ou opExecId for o ID central, podemos verificar se existe ponte em task_usuarios sem bloquear caso não exista
+    try {
+      const { data: bridges } = await supabase
         .from('task_usuarios')
         .select('id, core_usuario_id')
-        .in('id', needBridgeLookup)
+        .in('core_usuario_id', [targetRespCoreId, targetExecCoreId])
 
-      if (bridgeErr) {
-        console.error('Erro ao consultar task_usuarios para mapear core_usuario_id:', bridgeErr)
-        throw new Error(
-          'Gravação bloqueada: falha ao verificar os vínculos centrais dos usuários em task_usuarios.',
-        )
-      }
-
-      for (const u of usersBridge || []) {
-        if (u.id === input.responsavel_usuario_id && !resolvedRespCoreId) {
-          resolvedRespCoreId = u.core_usuario_id || null
-        }
-        if (u.id === input.executor_usuario_id && !resolvedExecCoreId) {
-          resolvedExecCoreId = u.core_usuario_id || null
+      if (bridges && bridges.length > 0) {
+        for (const b of bridges) {
+          if (b.core_usuario_id === targetRespCoreId) opRespId = b.id
+          if (b.core_usuario_id === targetExecCoreId) opExecId = b.id
         }
       }
-    }
-
-    // Validação estrita do vínculo central (presença):
-    if (!resolvedRespCoreId) {
-      throw new Error(
-        'Gravação bloqueada: o Responsável selecionado não possui vínculo central (core_usuario_id) válido no Gestor de Acessos.',
-      )
-    }
-    if (!resolvedExecCoreId) {
-      throw new Error(
-        'Gravação bloqueada: o Executor selecionado não possui vínculo central (core_usuario_id) válido no Gestor de Acessos.',
-      )
-    }
-
-    // Validação da ponte operacional task_usuarios:
-    // O input.responsavel_usuario_id e executor_usuario_id devem existir em task_usuarios com o mesmo core_usuario_id
-    // Se usuariosParam apontar que falta a ponte (task_usuario_id === null), bloqueia imediatamente com erro claro
-    const paramResp = (usuariosParam || []).find((u) => u.id === input.responsavel_usuario_id)
-    if (paramResp && paramResp.task_usuario_id === null) {
-      throw new Error(
-        `Gravação bloqueada: a pessoa selecionada como Responsável (${paramResp.nome}) não possui registro operacional (ponte) no Ricci Task. Novos vínculos operacionais locais não podem ser criados pelo frontend.`,
-      )
-    }
-
-    const paramExec = (usuariosParam || []).find((u) => u.id === input.executor_usuario_id)
-    if (paramExec && paramExec.task_usuario_id === null) {
-      throw new Error(
-        `Gravação bloqueada: a pessoa selecionada como Executor (${paramExec.nome}) não possui registro operacional (ponte) no Ricci Task. Novos vínculos operacionais locais não podem ser criados pelo frontend.`,
-      )
-    }
-
-    // Regra 4: Valide que cada ID central enviado corresponde ao task_usuarios.core_usuario_id do respectivo ID operacional.
-    // NÃO aceite uma dupla divergente (ex.: responsavel_usuario_id de pessoa A com responsavel_core_usuario_id de pessoa B).
-    if (
-      input.responsavel_core_usuario_id &&
-      input.responsavel_core_usuario_id !== resolvedRespCoreId
-    ) {
-      throw new Error(
-        'Gravação bloqueada: o ID central do Responsável diverge do vínculo correspondente em task_usuarios.',
-      )
-    }
-    if (input.executor_core_usuario_id && input.executor_core_usuario_id !== resolvedExecCoreId) {
-      throw new Error(
-        'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
-      )
-    }
-
-    // Validação de correspondência real em task_usuarios para o ID operacional enviado
-    // Caso a pessoa tenha sido selecionada sem ponte comprovada em task_usuarios
-    const opIdsToCheck = [input.responsavel_usuario_id, input.executor_usuario_id].filter(Boolean)
-    const { data: dbOpUsers, error: dbOpErr } = await supabase
-      .from('task_usuarios')
-      .select('id, core_usuario_id')
-      .in('id', opIdsToCheck)
-
-    if (dbOpErr) {
-      console.error('Erro ao verificar existência dos IDs operacionais em task_usuarios:', dbOpErr)
-      throw new Error(
-        'Gravação bloqueada: falha técnica ao validar a ponte operacional em task_usuarios.',
-      )
-    }
-
-    const opRespRecord = (dbOpUsers || []).find((u) => u.id === input.responsavel_usuario_id)
-    if (!opRespRecord) {
-      throw new Error(
-        'Gravação bloqueada: o Responsável selecionado não possui ponte operacional correspondente em task_usuarios. Não é permitida a criação local pelo frontend.',
-      )
-    }
-    if (opRespRecord.core_usuario_id !== resolvedRespCoreId) {
-      throw new Error(
-        'Gravação bloqueada: o ID central do Responsável diverge do vínculo correspondente em task_usuarios.',
-      )
-    }
-
-    const opExecRecord = (dbOpUsers || []).find((u) => u.id === input.executor_usuario_id)
-    if (!opExecRecord) {
-      throw new Error(
-        'Gravação bloqueada: o Executor selecionado não possui ponte operacional correspondente em task_usuarios. Não é permitida a criação local pelo frontend.',
-      )
-    }
-    if (opExecRecord.core_usuario_id !== resolvedExecCoreId) {
-      throw new Error(
-        'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
-      )
+    } catch {
+      // Ignora falha de consulta em task_usuarios (corte definitivo ativo)
     }
 
     const nowIso = new Date().toISOString()
@@ -1017,6 +787,11 @@ export const controleService = {
       const cleanNewPastaCliente = input.pasta_cliente?.trim() || null
       const cleanNewPastaRicci = input.pasta_ricci?.trim() || null
 
+      const existingRespCore =
+        existingRecord.responsavel_core_usuario_id || existingRecord.responsavel_usuario_id
+      const existingExecCore =
+        existingRecord.executor_core_usuario_id || existingRecord.executor_usuario_id
+
       const mudouNome = existingRecord.nome_controle_id !== input.nome_controle_id
       const mudouIdent = (existingRecord.identificacao_caso || '').trim() !== cleanNewIdent
       const mudouStatus = existingRecord.status_id !== input.status_id
@@ -1026,12 +801,8 @@ export const controleService = {
       const mudouPrazo =
         (existingRecord.prazo_conclusao ? existingRecord.prazo_conclusao.split('T')[0] : null) !==
         (cleanNewPrazo ? cleanNewPrazo.split('T')[0] : null)
-      const mudouResp =
-        existingRecord.responsavel_usuario_id !== input.responsavel_usuario_id ||
-        (existingRecord.responsavel_core_usuario_id || null) !== resolvedRespCoreId
-      const mudouExec =
-        existingRecord.executor_usuario_id !== input.executor_usuario_id ||
-        (existingRecord.executor_core_usuario_id || null) !== resolvedExecCoreId
+      const mudouResp = existingRespCore !== targetRespCoreId
+      const mudouExec = existingExecCore !== targetExecCoreId
       const mudouPastaCli =
         (existingRecord.pasta_cliente || '').trim() !== (cleanNewPastaCliente || '')
       const mudouPastaRicci =
@@ -1050,14 +821,14 @@ export const controleService = {
         mudouPastaRicci ||
         mudouArquivado
 
-      // Regra 1: Quando a edição NÃO altera nenhum campo da tarefa, NÃO execute UPDATE em task_tarefas.
+      // Regra: Quando a edição NÃO altera nenhum campo da tarefa, NÃO execute UPDATE em task_tarefas.
       // Retorne o registro existente hidratado.
       if (!houveMudancaReal) {
         const loaded = await this.getControleById(existingRecord.id, usuariosParam)
         return (loaded || existingRecord) as TaskControleRecord
       }
 
-      // Regra 3: Quando houver alteração real, NÃO envie updated_at no payload de update;
+      // Quando houver alteração real, NÃO envie updated_at no payload de update;
       // deixe o gatilho do banco definir updated_at e use o valor retornado pelo banco (.select().single()).
       const updatePayload: {
         nome_controle_id: string
@@ -1065,10 +836,10 @@ export const controleService = {
         status_id: string
         data_autorizacao: string | null
         prazo_conclusao: string | null
-        responsavel_usuario_id: string
-        executor_usuario_id: string
-        responsavel_core_usuario_id: string | null
-        executor_core_usuario_id: string | null
+        responsavel_usuario_id?: string | null
+        executor_usuario_id?: string | null
+        responsavel_core_usuario_id: string
+        executor_core_usuario_id: string
         pasta_cliente: string | null
         pasta_ricci: string | null
         updated_by: string | null
@@ -1079,10 +850,10 @@ export const controleService = {
         status_id: input.status_id,
         data_autorizacao: cleanNewDataAut,
         prazo_conclusao: cleanNewPrazo,
-        responsavel_usuario_id: input.responsavel_usuario_id,
-        executor_usuario_id: input.executor_usuario_id,
-        responsavel_core_usuario_id: resolvedRespCoreId,
-        executor_core_usuario_id: resolvedExecCoreId,
+        responsavel_usuario_id: opRespId,
+        executor_usuario_id: opExecId,
+        responsavel_core_usuario_id: targetRespCoreId,
+        executor_core_usuario_id: targetExecCoreId,
         pasta_cliente: cleanNewPastaCliente,
         pasta_ricci: cleanNewPastaRicci,
         updated_by: userId,
@@ -1127,10 +898,10 @@ export const controleService = {
         status_id: input.status_id,
         data_autorizacao: input.data_autorizacao || null,
         prazo_conclusao: input.prazo_conclusao || null,
-        responsavel_usuario_id: input.responsavel_usuario_id,
-        executor_usuario_id: input.executor_usuario_id,
-        responsavel_core_usuario_id: resolvedRespCoreId,
-        executor_core_usuario_id: resolvedExecCoreId,
+        responsavel_usuario_id: opRespId,
+        executor_usuario_id: opExecId,
+        responsavel_core_usuario_id: targetRespCoreId,
+        executor_core_usuario_id: targetExecCoreId,
         pasta_cliente: input.pasta_cliente?.trim() || null,
         pasta_ricci: input.pasta_ricci?.trim() || null,
         updated_at: nowIso,

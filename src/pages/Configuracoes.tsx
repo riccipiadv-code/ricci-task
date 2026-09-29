@@ -305,17 +305,17 @@ export default function ConfiguracoesPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Armazenamento:</span>
               <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                Supabase PostgreSQL (task_tarefas, task_providencias, task_usuarios)
+                Supabase PostgreSQL (task_tarefas, task_providencias)
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Responsável e Executor:</span>
-              <span className="text-foreground">Gestor de Acessos Ricci (RICCI_TASK)</span>
+              <span className="text-foreground">Gestor de Acessos Ricci (core_usuarios)</span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground text-[11px]">
               <span className="text-muted-foreground">Fonte:</span>
               <span className="text-muted-foreground">
-                Gestor central de usuários e acessos (RPC task_listar_usuarios_elegiveis).
+                Gestor central de usuários e acessos (RPC task_listar_usuarios_core_elegiveis).
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">

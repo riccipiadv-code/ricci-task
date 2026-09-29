@@ -415,14 +415,21 @@ export default function TarefasPage() {
       list = list.filter((c) => c.status_id === statusControleFilter)
     }
 
-    // 4. Filtro por Responsável (ID)
+    // 4. Filtro por Responsável (ID Central)
     if (responsavelFilter !== 'todos') {
-      list = list.filter((c) => c.responsavel_usuario_id === responsavelFilter)
+      list = list.filter(
+        (c) =>
+          c.responsavel_core_usuario_id === responsavelFilter ||
+          c.responsavel_usuario_id === responsavelFilter,
+      )
     }
 
-    // 5. Filtro por Executor (ID)
+    // 5. Filtro por Executor (ID Central)
     if (executorFilter !== 'todos') {
-      list = list.filter((c) => c.executor_usuario_id === executorFilter)
+      list = list.filter(
+        (c) =>
+          c.executor_core_usuario_id === executorFilter || c.executor_usuario_id === executorFilter,
+      )
     }
 
     // 6. Filtro por Tipo de Prazo (ID em providências)

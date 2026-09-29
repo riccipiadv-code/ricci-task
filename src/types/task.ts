@@ -53,12 +53,12 @@ export interface TaskNomeControleRecord {
 }
 
 export interface TaskUsuarioAtivoRecord {
-  id: string
+  id: string // core_usuarios.id
   nome: string
   email?: string
   ativo?: boolean
   core_usuario_id?: string | null
-  task_usuario_id?: string | null
+  task_usuario_id?: string | null // mantido opcional para retrocompatibilidade
 }
 
 export interface TaskUsuarioRecord {
@@ -111,10 +111,10 @@ export interface TaskControleRecord {
   status_id: string
   data_autorizacao: string | null
   prazo_conclusao: string | null
-  responsavel_usuario_id: string
-  executor_usuario_id: string
-  responsavel_core_usuario_id?: string | null
-  executor_core_usuario_id?: string | null
+  responsavel_usuario_id?: string | null // mantido opcional para retrocompatibilidade
+  executor_usuario_id?: string | null // mantido opcional para retrocompatibilidade
+  responsavel_core_usuario_id: string // Autoridade definitiva
+  executor_core_usuario_id: string // Autoridade definitiva
   pasta_cliente: string | null
   pasta_ricci: string | null
   created_at: string
@@ -146,10 +146,10 @@ export interface SaveControleInput {
   status_id: string
   data_autorizacao?: string | null
   prazo_conclusao?: string | null
-  responsavel_usuario_id: string
-  executor_usuario_id: string
-  responsavel_core_usuario_id?: string | null
-  executor_core_usuario_id?: string | null
+  responsavel_usuario_id?: string | null
+  executor_usuario_id?: string | null
+  responsavel_core_usuario_id: string // Campo central obrigatório
+  executor_core_usuario_id: string // Campo central obrigatório
   pasta_cliente?: string | null
   pasta_ricci?: string | null
 }
