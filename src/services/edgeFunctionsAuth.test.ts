@@ -12,6 +12,8 @@ import {
   ROLE_CODE_OPERACIONAL,
   RICCI_TASK_ALLOWED_CALLER_ROLES,
   checkTaskAccessScope,
+  checkTransitionNotificationAccess,
+  checkProvidenciaEventAccess,
   escapeHtml,
 } from '../../supabase/functions/_shared/core-auth'
 
@@ -1317,25 +1319,74 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
       )
     }
 
-    // Se o chamador não tem mais escopo sobre o caso atual, mas o evento for de atribuição,
-    // verifica se existe registro de transição autorizada no servidor
-    if (dbTipoEvento === 'atribuicao' || dbTipoEvento === 'alteracao_atribuicao') {
-      try {
-        const { data: transitions } = await ctx.supabase
-          .from('task_transicoes_atribuicao')
-          .select('id, tarefa_id, autor_core_id')
-          .eq('tarefa_id', tarefa.id)
-          .eq('autor_core_id', callerUser.id)
+    if (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') {
+      const transValidation = await checkTransitionNotificationAccess(ctx.supabase, callerUser.id, {
+        transicaoId: body.transicao_id || null,
+        tipoEvento: dbTipoEvento,
+        tarefa: {
+          id: tarefa.id,
+          responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
+          executor_core_usuario_id: tarefa.executor_core_usuario_id,
+          updated_at: tarefa.updated_at,
+          created_at: tarefa.created_at,
+        },
+      })
 
-        if (transitions && transitions.length > 0) {
-          authorizedByTransition = true
-        }
-      } catch (_e) {
-        // Ignora e cai no bloqueio padrão
+      if (transValidation.status === 'technical_failure') {
+        return new Response(
+          JSON.stringify({
+            error: transValidation.error || 'Falha técnica ao validar transição.',
+          }),
+          { status: 500, headers: corsHeaders },
+        )
       }
-    }
 
-    if (!authorizedByTransition) {
+      if (!transValidation.allowed) {
+        return new Response(
+          JSON.stringify({
+            error: transValidation.error || 'Transição inválida ou incompatível.',
+          }),
+          { status: 403, headers: corsHeaders },
+        )
+      }
+
+      authorizedByTransition = true
+    } else if (
+      (dbTipoEvento === 'providencia_inclusao' || dbTipoEvento === 'providencia_atualizacao') &&
+      providencia_id
+    ) {
+      const { data: provVersionData } = await ctx.supabase
+        .from('task_providencias')
+        .select('updated_at, created_at')
+        .eq('id', providencia_id)
+        .eq('tarefa_id', tarefa.id)
+        .maybeSingle()
+
+      const realProvVersion = provVersionData?.updated_at || provVersionData?.created_at || null
+
+      const provCheck = await checkProvidenciaEventAccess(ctx.supabase, callerUser.id, {
+        tarefaId: tarefa.id,
+        providenciaId: providencia_id,
+        tipoEvento: dbTipoEvento,
+        versaoUpdatedAt: realProvVersion,
+      })
+
+      if (provCheck.status === 'technical_failure') {
+        return new Response(JSON.stringify({ error: provCheck.error }), {
+          status: 500,
+          headers: corsHeaders,
+        })
+      }
+
+      if (!provCheck.allowed) {
+        return new Response(JSON.stringify({ error: provCheck.error }), {
+          status: 403,
+          headers: corsHeaders,
+        })
+      }
+
+      authorizedByTransition = true
+    } else {
       return new Response(
         JSON.stringify({
           error:
@@ -1346,6 +1397,39 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
           status: 403,
           headers: corsHeaders,
         },
+      )
+    }
+  }
+
+  // Ponto 4: Para alertas de atribuição, EXIGE transição válida TAMBÉM quando o chamador tem acesso
+  if (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') {
+    const transValidation = await checkTransitionNotificationAccess(ctx.supabase, callerUser.id, {
+      transicaoId: body.transicao_id || null,
+      tipoEvento: dbTipoEvento,
+      tarefa: {
+        id: tarefa.id,
+        responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
+        executor_core_usuario_id: tarefa.executor_core_usuario_id,
+        updated_at: tarefa.updated_at,
+        created_at: tarefa.created_at,
+      },
+    })
+
+    if (transValidation.status === 'technical_failure') {
+      return new Response(
+        JSON.stringify({ error: transValidation.error || 'Falha técnica ao validar transição.' }),
+        { status: 500, headers: corsHeaders },
+      )
+    }
+
+    if (!transValidation.allowed) {
+      return new Response(
+        JSON.stringify({
+          error:
+            transValidation.error ||
+            'Transição inválida ou incompatível com o estado atual da tarefa.',
+        }),
+        { status: 403, headers: corsHeaders },
       )
     }
   }
@@ -1442,12 +1526,27 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
   )
   const eventKey = `atribuicao:${tarefa.id}:${tarefaSaveStamp}:${execToken}:${respToken}`
 
-  // Verificar idempotência
-  const { data: existingEvent } = await ctx.supabase
+  // PONTOS 5 E 6: Aquisição atômica com token de posse (owner_token)
+  const callOwnerToken = 'token-' + Math.random().toString(36).slice(2)
+  const lockCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+  let acquiredEvent: any = null
+
+  const { data: existingEvent, error: checkEventError } = await ctx.supabase
     .from('task_email_eventos')
-    .select('id, status')
+    .select('id, event_key, status, sent_at, updated_at, locked_at, owner_token')
     .eq('event_key', eventKey)
     .maybeSingle()
+
+  if (checkEventError) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        sent: false,
+        error: 'Falha técnica ao consultar task_email_eventos.',
+      }),
+      { status: 500, headers: corsHeaders },
+    )
+  }
 
   if (existingEvent && existingEvent.status === 'success') {
     return new Response(
@@ -1461,9 +1560,24 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     )
   }
 
-  let eventoId = existingEvent?.id
+  if (
+    existingEvent &&
+    (existingEvent.status === 'uncertain' || existingEvent.status === 'pending_reconciliation')
+  ) {
+    return new Response(
+      JSON.stringify({
+        triggered: true,
+        sent: false,
+        reason: 'uncertain_status_reconciliation_required',
+        event_key: eventKey,
+      }),
+      { status: 409, headers: corsHeaders },
+    )
+  }
+
   if (!existingEvent) {
-    const { data: insertedEvent } = await ctx.supabase
+    const nowIso = new Date().toISOString()
+    const { data: insertedEvent, error: insertEventError } = await ctx.supabase
       .from('task_email_eventos')
       .insert({
         tarefa_id: tarefa.id,
@@ -1472,11 +1586,143 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
         to_email: toEmail,
         cc_email: ccEmail,
         status: 'pending',
+        owner_token: callOwnerToken,
+        locked_at: nowIso,
       })
-      .select('id')
+      .select('id, owner_token, status')
       .maybeSingle()
-    eventoId = insertedEvent?.id
+
+    if (insertEventError) {
+      if (insertEventError.code === '23505' || insertEventError.message?.includes('23505')) {
+        const { data: raceAcquired } = await ctx.supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'pending',
+            owner_token: callOwnerToken,
+            locked_at: nowIso,
+            to_email: toEmail,
+            cc_email: ccEmail,
+          })
+          .eq('event_key', eventKey)
+          .in('status', ['error'])
+          .select('id, owner_token, status')
+          .maybeSingle()
+
+        if (!raceAcquired) {
+          const { data: raceEvent } = await ctx.supabase
+            .from('task_email_eventos')
+            .select('id, status')
+            .eq('event_key', eventKey)
+            .maybeSingle()
+
+          if (raceEvent && raceEvent.status === 'success') {
+            return new Response(
+              JSON.stringify({
+                triggered: true,
+                sent: false,
+                reason: 'already_sent',
+                event_key: eventKey,
+              }),
+              { status: 200, headers: corsHeaders },
+            )
+          }
+
+          return new Response(
+            JSON.stringify({
+              triggered: true,
+              sent: false,
+              reason: 'in_progress',
+              event_key: eventKey,
+            }),
+            { status: 200, headers: corsHeaders },
+          )
+        }
+        acquiredEvent = raceAcquired
+      } else {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error: 'Erro ao registrar evento.',
+          }),
+          { status: 500, headers: corsHeaders },
+        )
+      }
+    } else {
+      acquiredEvent = insertedEvent
+    }
+  } else {
+    const nowIso = new Date().toISOString()
+    const { data: updatedRows, error: updateErr } = await ctx.supabase
+      .from('task_email_eventos')
+      .update({
+        status: 'pending',
+        owner_token: callOwnerToken,
+        locked_at: nowIso,
+        to_email: toEmail,
+        cc_email: ccEmail,
+      })
+      .eq('id', existingEvent.id)
+      .neq('status', 'success')
+      .neq('status', 'uncertain')
+      .neq('status', 'pending_reconciliation')
+      .or(`status.eq.error,locked_at.is.null,locked_at.lt.${lockCutoffIso}`)
+      .select('id, owner_token, status')
+
+    if (updateErr) {
+      return new Response(
+        JSON.stringify({ success: false, sent: false, error: 'Erro ao atualizar evento.' }),
+        { status: 500, headers: corsHeaders },
+      )
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      const { data: latestState } = await ctx.supabase
+        .from('task_email_eventos')
+        .select('id, status')
+        .eq('id', existingEvent.id)
+        .maybeSingle()
+
+      if (latestState && latestState.status === 'success') {
+        return new Response(
+          JSON.stringify({
+            triggered: true,
+            sent: false,
+            reason: 'already_sent',
+            event_key: eventKey,
+          }),
+          { status: 200, headers: corsHeaders },
+        )
+      }
+
+      return new Response(
+        JSON.stringify({
+          triggered: true,
+          sent: false,
+          reason: 'in_progress',
+          message: 'Aquisição de 0 linhas retornadas.',
+          event_key: eventKey,
+        }),
+        { status: 200, headers: corsHeaders },
+      )
+    }
+
+    acquiredEvent = updatedRows[0]
   }
+
+  if (!acquiredEvent || acquiredEvent.owner_token !== callOwnerToken) {
+    return new Response(
+      JSON.stringify({
+        triggered: true,
+        sent: false,
+        reason: 'lock_acquisition_failed',
+        event_key: eventKey,
+      }),
+      { status: 409, headers: corsHeaders },
+    )
+  }
+
+  const eventoId = acquiredEvent.id
 
   const execNomeFull = 'Executor Teste'
   const execFirstName = 'Executor'
@@ -1563,11 +1809,42 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
       html: emailHtml,
     })
 
+    const agoraIso = new Date().toISOString()
+    let persFailed = false
+
     if (eventoId) {
-      await ctx.supabase
+      const { data: updatedSuccessRows, error: updateSuccessErr } = await ctx.supabase
         .from('task_email_eventos')
-        .update({ status: 'success', sent_at: new Date().toISOString() })
+        .update({ status: 'success', sent_at: agoraIso, erro: null })
         .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .select('id, status')
+
+      if (updateSuccessErr || !updatedSuccessRows || updatedSuccessRows.length === 0) {
+        persFailed = true
+        await ctx.supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'uncertain',
+            sent_at: agoraIso,
+            erro: 'Falha pós-SMTP na persistência.',
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+      }
+    }
+
+    if (persFailed) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: true,
+          status: 'uncertain',
+          reason: 'post_send_persistence_failure',
+          event_key: eventKey,
+        }),
+        { status: 500, headers: corsHeaders },
+      )
     }
 
     return new Response(
@@ -1581,16 +1858,22 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
       { status: 200, headers: corsHeaders },
     )
   } catch (sendErr: any) {
+    const isTimeout = sendErr.code === 'ETIMEDOUT' || /timeout/i.test(sendErr.message || '')
+
+    const errStatus = isTimeout ? 'uncertain' : 'error'
+
     if (eventoId) {
       await ctx.supabase
         .from('task_email_eventos')
-        .update({ status: 'error', erro: sendErr.message })
+        .update({ status: errStatus, erro: sendErr.message })
         .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
     }
     return new Response(
       JSON.stringify({
         success: false,
         sent: false,
+        status: errStatus,
         error: sendErr.message,
       }),
       { status: 500, headers: corsHeaders },
@@ -5293,14 +5576,25 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                   maybeSingle: () => Promise.resolve({ data: null, error: null }),
                 }),
               }),
-              insert: () => ({
+              insert: (payload: any) => ({
                 select: () => ({
-                  maybeSingle: () => Promise.resolve({ data: { id: 'evt-1' }, error: null }),
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { id: 'evt-1', owner_token: payload.owner_token, status: 'pending' },
+                      error: null,
+                    }),
                 }),
               }),
-              update: () => ({
-                eq: () => Promise.resolve({ error: null }),
-              }),
+              update: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  select: () => ({
+                    data: [{ id: 'evt-1', status: 'success' }],
+                    error: null,
+                  }),
+                }
+                return chain
+              },
             }
           }
           return {}
@@ -5325,6 +5619,631 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       const data = await res.json()
       expect(data.success).toBe(true)
       expect(data.sent).toBe(true)
+    })
+  })
+
+  describe('Pontos 4, 5 e 6: Testes Reais de Validação de Versões, Concorrência e Tolerância a Falhas', () => {
+    it('Ponto 4: Rejeita notificação de providência quando versaoUpdatedAt for nula ou ausente', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  eq: vi.fn().mockReturnValue({
+                    order: vi.fn().mockReturnValue({
+                      limit: vi.fn().mockResolvedValue({
+                        data: [
+                          {
+                            id: 'ev-1',
+                            versao_updated_at: '2025-05-10T12:00:00Z',
+                          },
+                        ],
+                        error: null,
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await checkProvidenciaEventAccess(mockSupabase, 'cu-autor', {
+        tarefaId: 'task-1',
+        providenciaId: 'prov-1',
+        tipoEvento: 'providencia_atualizacao',
+        versaoUpdatedAt: null,
+      })
+
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toContain('Versão da providência não informada')
+    })
+
+    it('Ponto 4: Rejeita notificação de providência quando houver divergência de timestamp (mesmo que por 1 segundo)', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  eq: vi.fn().mockReturnValue({
+                    order: vi.fn().mockReturnValue({
+                      limit: vi.fn().mockResolvedValue({
+                        data: [
+                          {
+                            id: 'ev-1',
+                            versao_updated_at: '2025-05-10T12:00:00.000Z',
+                          },
+                        ],
+                        error: null,
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      } as any
+
+      // 1 segundo de diferença: a regra antiga aceitava (< 5000ms), a nova DEVE rejeitar
+      const res = await checkProvidenciaEventAccess(mockSupabase, 'cu-autor', {
+        tarefaId: 'task-1',
+        providenciaId: 'prov-1',
+        tipoEvento: 'providencia_atualizacao',
+        versaoUpdatedAt: '2025-05-10T12:00:01.000Z',
+      })
+
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toContain('não corresponde ao evento gravado pelo servidor')
+    })
+
+    it('Ponto 4: Rejeita transição de reatribuição se versao_resultante_updated_at estiver ausente ou divergente', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                order: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockResolvedValue({
+                    data: [
+                      {
+                        id: 'trans-old',
+                        tarefa_id: 'task-1',
+                        autor_core_id: 'cu-autor',
+                        novo_responsavel_core_id: 'cu-resp',
+                        novo_executor_core_id: 'cu-exec',
+                        versao_resultante_updated_at: null,
+                      },
+                    ],
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await checkTransitionNotificationAccess(mockSupabase, 'cu-autor', {
+        tipoEvento: 'alteracao_atribuicao',
+        tarefa: {
+          id: 'task-1',
+          responsavel_core_usuario_id: 'cu-resp',
+          executor_core_usuario_id: 'cu-exec',
+          updated_at: '2025-05-10T14:00:00Z',
+        },
+      })
+
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toContain('não corresponde ao estado atual gravado do caso')
+    })
+
+    it('Ponto 5: Concorrência na primeira aquisição (unique violation 23505) impede segundo envio SMTP', async () => {
+      const ctx = createMockEdgeContext()
+
+      let smtpCallCount = 0
+      ctx.transporter.sendMail = vi.fn().mockImplementation(() => {
+        smtpCallCount++
+        return Promise.resolve()
+      })
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-user-op' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Operador',
+                        email: 'op@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'link-op',
+                    ativo: true,
+                    core_usuarios: {
+                      id: 'cu-op',
+                      nome: 'Operador',
+                      email: 'op@riccipi.com.br',
+                      ativo: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'link-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-race-1',
+                        numero_caso: 101,
+                        responsavel_core_usuario_id: 'cu-op',
+                        executor_core_usuario_id: 'cu-op',
+                        updated_at: '2025-05-10T10:00:00Z',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_transicoes_atribuicao') {
+            const chain: any = {
+              eq: () => chain,
+              order: () => chain,
+              limit: () =>
+                Promise.resolve({
+                  data: [
+                    {
+                      id: 'trans-race-1',
+                      tarefa_id: 'task-race-1',
+                      autor_core_id: 'cu-op',
+                      novo_responsavel_core_id: 'cu-op',
+                      novo_executor_core_id: 'cu-op',
+                      versao_resultante_updated_at: '2025-05-10T10:00:00Z',
+                      created_at: '2025-05-10T10:00:00Z',
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: null,
+                      error: {
+                        code: '23505',
+                        message: 'duplicate key value violates unique constraint',
+                      },
+                    }),
+                }),
+              }),
+              update: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  in: () => chain,
+                  select: () => ({
+                    maybeSingle: () => Promise.resolve({ data: null }),
+                  }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-race-1',
+          tipo: 'alteracao_atribuicao',
+          transicao_id: 'trans-race-1',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.reason).toBe('in_progress')
+      expect(smtpCallCount).toBe(0)
+    })
+
+    it('Ponto 5: Aquisição de zero linhas no UPDATE condicional impede segundo envio SMTP', async () => {
+      const ctx = createMockEdgeContext()
+
+      let smtpCallCount = 0
+      ctx.transporter.sendMail = vi.fn().mockImplementation(() => {
+        smtpCallCount++
+        return Promise.resolve()
+      })
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-user-op' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Operador',
+                        email: 'op@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'link-op',
+                    ativo: true,
+                    core_usuarios: {
+                      id: 'cu-op',
+                      nome: 'Operador',
+                      email: 'op@riccipi.com.br',
+                      ativo: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'link-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-zero-rows',
+                        numero_caso: 102,
+                        responsavel_core_usuario_id: 'cu-op',
+                        executor_core_usuario_id: 'cu-op',
+                        updated_at: '2025-05-10T10:00:00Z',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_transicoes_atribuicao') {
+            const chain: any = {
+              eq: () => chain,
+              order: () => chain,
+              limit: () =>
+                Promise.resolve({
+                  data: [
+                    {
+                      id: 'trans-zero-1',
+                      tarefa_id: 'task-zero-rows',
+                      autor_core_id: 'cu-op',
+                      novo_responsavel_core_id: 'cu-op',
+                      novo_executor_core_id: 'cu-op',
+                      versao_resultante_updated_at: '2025-05-10T10:00:00Z',
+                      created_at: '2025-05-10T10:00:00Z',
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-existing',
+                        event_key: 'atribuicao:task-zero-rows:...',
+                        status: 'pending',
+                        locked_at: new Date().toISOString(),
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => {
+                const chain: any = {
+                  eq: () => chain,
+                  neq: () => chain,
+                  or: () => chain,
+                  select: () => ({
+                    data: [],
+                    error: null,
+                  }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-zero-rows',
+          tipo: 'alteracao_atribuicao',
+          transicao_id: 'trans-zero-1',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.reason).toBe('in_progress')
+      expect(data.message).toContain('0 linhas')
+      expect(smtpCallCount).toBe(0)
+    })
+
+    it('Ponto 6: Falha de persistência pós-SMTP marca evento como incerto (uncertain) e bloqueia reenvio automático', async () => {
+      const ctx = createMockEdgeContext()
+
+      let recordedStatus = ''
+      ctx.transporter.sendMail = vi.fn().mockResolvedValue({})
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-user-op' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Operador',
+                        email: 'op@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'link-op',
+                    ativo: true,
+                    core_usuarios: {
+                      id: 'cu-op',
+                      nome: 'Operador',
+                      email: 'op@riccipi.com.br',
+                      ativo: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'link-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-pers-fail',
+                        numero_caso: 103,
+                        responsavel_core_usuario_id: 'cu-op',
+                        executor_core_usuario_id: 'cu-op',
+                        updated_at: '2025-05-10T10:00:00Z',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_transicoes_atribuicao') {
+            const chain: any = {
+              eq: () => chain,
+              order: () => chain,
+              limit: () =>
+                Promise.resolve({
+                  data: [
+                    {
+                      id: 'trans-pers-1',
+                      tarefa_id: 'task-pers-fail',
+                      autor_core_id: 'cu-op',
+                      novo_responsavel_core_id: 'cu-op',
+                      novo_executor_core_id: 'cu-op',
+                      versao_resultante_updated_at: '2025-05-10T10:00:00Z',
+                      created_at: '2025-05-10T10:00:00Z',
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (payload: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { id: 'evt-pers', owner_token: payload.owner_token, status: 'pending' },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (updatePayload: any) => {
+                if (updatePayload.status === 'uncertain') {
+                  recordedStatus = 'uncertain'
+                }
+                const chain: any = {
+                  eq: () => chain,
+                  select: () => ({
+                    data: [],
+                    error: { message: 'Database connection dropped' },
+                  }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-pers-fail',
+          tipo: 'alteracao_atribuicao',
+          transicao_id: 'trans-pers-1',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.status).toBe('uncertain')
+      expect(data.reason).toBe('post_send_persistence_failure')
+      expect(recordedStatus).toBe('uncertain')
     })
   })
 })

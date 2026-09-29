@@ -264,17 +264,14 @@ Deno.serve(async (req: Request) => {
     let authorizedByTransition = false
     let transitionObject: any = null
 
-    // Ponto 4: Se o chamador forneceu transicao_id, SEMPRE valida a transição antes de utilizá-la
-    // inclusive quando o chamador ainda tem acesso ao caso. Não aceita IDs arbitrários ou transição incompatível.
-    if (
-      transicao_id &&
-      (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao')
-    ) {
+    // Ponto 4: Para alertas de alteração de atribuição, EXIGE transição válida TAMBÉM quando o chamador ainda possui acesso.
+    // Omitir transicao_id não pode contornar essa exigência de transição válida.
+    if (dbTipoEvento === 'alteracao_atribuicao' || dbTipoEvento === 'atribuicao') {
       const transValidation = await checkTransitionNotificationAccess(
         supabase,
         callerCheck.coreUser.id,
         {
-          transicaoId: transicao_id,
+          transicaoId: transicao_id || null,
           tipoEvento: dbTipoEvento,
           tarefa: {
             id: tarefa.id,
@@ -305,7 +302,7 @@ Deno.serve(async (req: Request) => {
           JSON.stringify({
             error:
               transValidation.error ||
-              'Transição inválida ou incompatível com o estado atual da tarefa.',
+              'Transição inválida ou incompatível com o estado atual da tarefa. Notificação de alteração de atribuição requer transição válida do servidor.',
           }),
           {
             status: 403,
@@ -375,17 +372,41 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Caso 2 (Ponto 5): Eventos de providência após transferência (perda de acesso)
+      // Caso 2 (Ponto 4 & 5): Eventos de providência após transferência (perda de acesso)
       // Permite os alertas das providências efetivamente incluídas/alteradas naquela transação
-      // comprovadas por registros de task_transacao_providencias_eventos no servidor
+      // comprovadas por registros de task_transacao_providencias_eventos no servidor.
+      // A versão da providência DEVE ser consultada e validada obrigatoriamente sem tolerância.
       if (
         (dbTipoEvento === 'providencia_inclusao' || dbTipoEvento === 'providencia_atualizacao') &&
         providencia_id
       ) {
+        // Buscar versão real da providência no banco de dados para validação estrita
+        const { data: provVersionData, error: provVersionErr } = await supabase
+          .from('task_providencias')
+          .select('updated_at, created_at')
+          .eq('id', providencia_id)
+          .eq('tarefa_id', tarefa.id)
+          .maybeSingle()
+
+        if (provVersionErr) {
+          return new Response(
+            JSON.stringify({
+              error: 'Falha técnica ao verificar versão da providência.',
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
+
+        const realProvVersion = provVersionData?.updated_at || provVersionData?.created_at || null
+
         const provCheck = await checkProvidenciaEventAccess(supabase, callerCheck.coreUser.id, {
           tarefaId: tarefa.id,
           providenciaId: providencia_id,
           tipoEvento: dbTipoEvento,
+          versaoUpdatedAt: realProvVersion,
         })
 
         if (provCheck.status === 'technical_failure') {
@@ -714,12 +735,18 @@ Deno.serve(async (req: Request) => {
       eventKey = `providencia_atualizacao:${providenciaAlvo.id}:${provUpdatedAt}`
     }
 
-    // 6. PONTO 6: Aquisição exclusiva do evento ANTES do envio SMTP
-    // Garante que erro ao consultar/registrar o evento impeça o SMTP (fail-closed obrigatório).
-    // Inserção com status = 'pending' ou lock seguro.
+    // 6. PONTOS 5 E 6: Aquisição atômica com token de posse (owner_token)
+    // - Gera UUID exclusivo para esta chamada (owner_token)
+    // - Exclusividade garantida pelo token de posse + retorno OBRIGATÓRIO (RETURNING via .select())
+    // - Bloqueia retry automático em estado 'uncertain' / 'pending_reconciliation'
+    const callOwnerToken = crypto.randomUUID()
+    const lockCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    let acquiredEvent: any = null
+
+    // 6.1 Consulta inicial do evento existente
     const { data: existingEvent, error: checkEventError } = await supabase
       .from('task_email_eventos')
-      .select('id, event_key, status, sent_at, updated_at')
+      .select('id, event_key, status, sent_at, updated_at, locked_at, owner_token')
       .eq('event_key', eventKey)
       .maybeSingle()
 
@@ -756,33 +783,30 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // Se já está 'pending' há menos de 5 minutos, outra execução está processando concorrentemente
-    if (existingEvent && existingEvent.status === 'pending') {
-      const pendingAgeMs =
-        Date.now() -
-        new Date(existingEvent.updated_at || existingEvent.sent_at || Date.now()).getTime()
-      if (pendingAgeMs < 5 * 60 * 1000) {
-        return new Response(
-          JSON.stringify({
-            triggered: true,
-            sent: false,
-            reason: 'in_progress',
-            message:
-              'O envio deste evento já está em processamento por outra requisição simultânea.',
-            event_key: eventKey,
-          }),
-          {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
-      }
+    // Ponto 6: Se o evento está em estado incerto / reconciliação pendente, NUNCA permite retry automático
+    if (
+      existingEvent &&
+      (existingEvent.status === 'uncertain' || existingEvent.status === 'pending_reconciliation')
+    ) {
+      return new Response(
+        JSON.stringify({
+          triggered: true,
+          sent: false,
+          reason: 'uncertain_status_reconciliation_required',
+          message:
+            'O status de envio deste evento está incerto e aguarda reconciliação manual. Reenvio automático bloqueado para evitar duplicidade.',
+          event_key: eventKey,
+        }),
+        {
+          status: 409,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
-    let eventoId: string | null = null
-
     if (!existingEvent) {
-      // Inserção atômica para travar concorrência
+      // Inserção atômica com owner_token inicial
+      const nowIso = new Date().toISOString()
       const { data: insertedEvent, error: insertEventError } = await supabase
         .from('task_email_eventos')
         .insert({
@@ -793,27 +817,61 @@ Deno.serve(async (req: Request) => {
           to_email: toEmail,
           cc_email: ccEmail,
           status: 'pending',
-          data_referencia: new Date().toISOString().split('T')[0],
+          owner_token: callOwnerToken,
+          locked_at: nowIso,
+          data_referencia: nowIso.split('T')[0],
         })
-        .select('id')
+        .select('id, owner_token, status')
         .maybeSingle()
 
       if (insertEventError) {
         // Conflito de concorrência (23505)
         if (insertEventError.code === '23505' || insertEventError.message?.includes('23505')) {
-          const { data: raceEvent } = await supabase
+          // Tentar adquirir o evento concorrente via update condicional atômico
+          const { data: raceAcquired } = await supabase
             .from('task_email_eventos')
-            .select('id, status')
+            .update({
+              status: 'pending',
+              owner_token: callOwnerToken,
+              locked_at: nowIso,
+              to_email: toEmail,
+              cc_email: ccEmail,
+            })
             .eq('event_key', eventKey)
+            .in('status', ['error'])
+            .select('id, owner_token, status')
             .maybeSingle()
 
-          if (raceEvent && raceEvent.status === 'success') {
+          if (!raceAcquired) {
+            // Verificar se o concorrente concluiu com sucesso
+            const { data: raceEvent } = await supabase
+              .from('task_email_eventos')
+              .select('id, status')
+              .eq('event_key', eventKey)
+              .maybeSingle()
+
+            if (raceEvent && raceEvent.status === 'success') {
+              return new Response(
+                JSON.stringify({
+                  triggered: true,
+                  sent: false,
+                  reason: 'already_sent',
+                  message: 'Notificação já enviada concorrentemente.',
+                  event_key: eventKey,
+                }),
+                {
+                  status: 200,
+                  headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                },
+              )
+            }
+
             return new Response(
               JSON.stringify({
                 triggered: true,
                 sent: false,
-                reason: 'already_sent',
-                message: 'Notificação já enviada concorrentemente.',
+                reason: 'in_progress',
+                message: 'Disparo concorrente detectado para o mesmo evento.',
                 event_key: eventKey,
               }),
               {
@@ -823,12 +881,82 @@ Deno.serve(async (req: Request) => {
             )
           }
 
+          acquiredEvent = raceAcquired
+        } else {
+          // Qualquer outro erro de banco ao registrar: IMPEDIR SMTP
+          console.error(
+            'Erro impeditivo ao registrar evento em task_email_eventos:',
+            insertEventError,
+          )
+          return new Response(
+            JSON.stringify({
+              success: false,
+              sent: false,
+              error:
+                'Falha técnica ao registrar controle de evento no banco de dados. Envio cancelado por segurança.',
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
+      } else {
+        acquiredEvent = insertedEvent
+      }
+    } else {
+      // Re-tentativa em evento existente:
+      // Aquisição atômica com token de posse condicional ao estado anterior:
+      // Só adquire se status = 'error' OU (status = 'pending' com locked_at < lockCutoff)
+      const nowIso = new Date().toISOString()
+      const { data: updatedRows, error: updateErr } = await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'pending',
+          owner_token: callOwnerToken,
+          locked_at: nowIso,
+          to_email: toEmail,
+          cc_email: ccEmail,
+          data_referencia: nowIso.split('T')[0],
+        })
+        .eq('id', existingEvent.id)
+        .neq('status', 'success')
+        .neq('status', 'uncertain')
+        .neq('status', 'pending_reconciliation')
+        .or(`status.eq.error,locked_at.is.null,locked_at.lt.${lockCutoffIso}`)
+        .select('id, owner_token, status')
+
+      if (updateErr) {
+        console.error('Erro ao tentar adquirir bloqueio atômico:', updateErr)
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error: 'Falha técnica ao tentar adquirir bloqueio atômico para envio.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      // Verificação OBRIGATÓRIA de retorno de linhas adquiridas (Ponto 5)
+      if (!updatedRows || updatedRows.length === 0) {
+        // Zero linhas adquiridas: outra chamada já adquiriu ou o evento mudou para success/uncertain
+        const { data: latestState } = await supabase
+          .from('task_email_eventos')
+          .select('id, status')
+          .eq('id', existingEvent.id)
+          .maybeSingle()
+
+        if (latestState && latestState.status === 'success') {
           return new Response(
             JSON.stringify({
               triggered: true,
               sent: false,
-              reason: 'in_progress',
-              message: 'Disparo concorrente detectado para o mesmo evento.',
+              reason: 'already_sent',
+              message: 'Notificação já enviada anteriormente para este evento.',
               event_key: eventKey,
             }),
             {
@@ -838,56 +966,42 @@ Deno.serve(async (req: Request) => {
           )
         }
 
-        // Qualquer outro erro de banco ao registrar: IMPEDIR SMTP
-        console.error(
-          'Erro impeditivo ao registrar evento em task_email_eventos:',
-          insertEventError,
-        )
         return new Response(
           JSON.stringify({
-            success: false,
+            triggered: true,
             sent: false,
-            error:
-              'Falha técnica ao registrar controle de evento no banco de dados. Envio cancelado por segurança.',
+            reason: 'in_progress',
+            message:
+              'O envio deste evento já foi adquirido por outra requisição simultânea (aquisição de 0 linhas).',
+            event_key: eventKey,
           }),
           {
-            status: 500,
+            status: 200,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           },
         )
       }
 
-      eventoId = insertedEvent?.id || null
-    } else {
-      // Re-tentativa de evento em estado 'error' ou 'pending' expirado:
-      // Trava para pending antes de continuar
-      const { error: updatePendingErr } = await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'pending',
-          to_email: toEmail,
-          cc_email: ccEmail,
-          data_referencia: new Date().toISOString().split('T')[0],
-        })
-        .eq('id', existingEvent.id)
-        .neq('status', 'success')
-
-      if (updatePendingErr) {
-        console.error('Erro ao adquirir bloqueio de evento pendente:', updatePendingErr)
-        return new Response(
-          JSON.stringify({
-            success: false,
-            sent: false,
-            error: 'Falha ao travar evento para envio.',
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
-      }
-      eventoId = existingEvent.id
+      acquiredEvent = updatedRows[0]
     }
+
+    if (!acquiredEvent || acquiredEvent.owner_token !== callOwnerToken) {
+      return new Response(
+        JSON.stringify({
+          triggered: true,
+          sent: false,
+          reason: 'lock_acquisition_failed',
+          message: 'Falha ao adquirir exclusividade para envio do evento.',
+          event_key: eventKey,
+        }),
+        {
+          status: 409,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const eventoId = acquiredEvent.id
 
     // 7. Preparar conteúdo de e-mail de acordo com o tipo
     // Dados gerais: resolução exclusiva a partir dos registros validados no Gestor de Acessos (core_usuarios)
@@ -1097,29 +1211,44 @@ Deno.serve(async (req: Request) => {
       html: emailHtml,
     }
 
-    // 10. Envio e registro em email_send_logs e task_email_eventos
+    // 10. PONTOS 5 E 6: Envio e registro com tratamento de resultado incerto e posse exclusiva
+    let smtpSuccess = false
+    let sendErrorMessage: string | null = null
+
     try {
       await transporter.sendMail(mailOptions)
+      smtpSuccess = true
     } catch (sendError: any) {
       console.error('Erro no transporte SMTP:', sendError)
+      sendErrorMessage = sendError.message || String(sendError)
 
-      // Registrar erro em task_email_eventos
+      // Detecta se pode ter sido timeout ou erro de socket com resultado incerto
+      const isTimeoutOrNetwork =
+        sendError.code === 'ETIMEDOUT' ||
+        sendError.code === 'ESOCKET' ||
+        sendError.code === 'ECONNRESET' ||
+        /timeout/i.test(sendErrorMessage || '')
+
+      const errorStatus = isTimeoutOrNetwork ? 'uncertain' : 'error'
+
+      // Registrar erro ou estado incerto em task_email_eventos (apenas se formos o dono)
       if (eventoId) {
         await supabase
           .from('task_email_eventos')
           .update({
-            status: 'error',
-            erro: sendError.message || String(sendError),
+            status: errorStatus,
+            erro: sendErrorMessage,
           })
           .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
       }
 
       await supabase.from('email_send_logs').insert({
         type: `ricci_task_${dbTipoEvento}`,
         to_email: toEmail,
         subject: mailOptions.subject,
-        status: 'error',
-        error_message: sendError.message || String(sendError),
+        status: errorStatus,
+        error_message: sendErrorMessage,
         created_by: user.id,
         created_at: new Date().toISOString(),
       })
@@ -1128,7 +1257,10 @@ Deno.serve(async (req: Request) => {
         JSON.stringify({
           success: false,
           sent: false,
-          error: `Erro ao enviar e-mail pelo provedor: ${sendError.message}`,
+          status: errorStatus,
+          error: isTimeoutOrNetwork
+            ? 'Resultado incerto no transporte SMTP (timeout/conexão). Marcado para reconciliação manual.'
+            : `Erro ao enviar e-mail pelo provedor: ${sendErrorMessage}`,
         }),
         {
           status: 500,
@@ -1137,10 +1269,15 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // Sucesso no envio: atualizar task_email_eventos para 'success' com sent_at
+    // 11. PONTO 6: Persistência pós-SMTP com tratamento de falha
+    // Se o SMTP teve sucesso, mas a persistência de 'success' falhar:
+    // O evento NÃO pode ser deixado como 'error' para não permitir retry automático que duplicaria o e-mail!
+    // Deve ser gravado em estado 'uncertain' / 'pending_reconciliation' com o erro correspondente.
     const agoraIso = new Date().toISOString()
-    if (eventoId) {
-      await supabase
+    let persistenceFailed = false
+
+    try {
+      const { data: updatedSuccessRows, error: updateSuccessErr } = await supabase
         .from('task_email_eventos')
         .update({
           status: 'success',
@@ -1148,6 +1285,41 @@ Deno.serve(async (req: Request) => {
           erro: null,
         })
         .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .select('id, status')
+
+      if (updateSuccessErr || !updatedSuccessRows || updatedSuccessRows.length === 0) {
+        persistenceFailed = true
+        console.error(
+          'Falha crítica de persistência após envio SMTP com sucesso:',
+          updateSuccessErr,
+        )
+
+        // Registrar status incerto para bloquear retries automáticos
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'uncertain',
+            sent_at: agoraIso,
+            erro: `Enviado via SMTP mas falha na persistência de sucesso: ${updateSuccessErr?.message || '0 linhas atualizadas'}`,
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+      }
+    } catch (persErr: any) {
+      persistenceFailed = true
+      console.error('Exceção ao persistir status de sucesso pós-SMTP:', persErr)
+      try {
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'uncertain',
+            sent_at: agoraIso,
+            erro: `Exceção pós-SMTP: ${persErr?.message || String(persErr)}`,
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+      } catch (_ignored) {}
     }
 
     // Registrar em email_send_logs
@@ -1155,10 +1327,35 @@ Deno.serve(async (req: Request) => {
       type: `ricci_task_${dbTipoEvento}`,
       to_email: toEmail,
       subject: mailOptions.subject,
-      status: 'success',
+      status: persistenceFailed ? 'uncertain' : 'success',
       created_by: user.id,
       created_at: agoraIso,
+      error_message: persistenceFailed
+        ? 'Enviado via SMTP mas falha ao atualizar registro de evento.'
+        : null,
     })
+
+    if (logError) {
+      console.error('Erro ao registrar log em email_send_logs:', logError)
+    }
+
+    if (persistenceFailed) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: true,
+          status: 'uncertain',
+          reason: 'post_send_persistence_failure',
+          message:
+            'E-mail enviado via SMTP com sucesso, porém houve falha ao registrar confirmação final. Evento marcado como incerto (aguardando reconciliação) para evitar reenvio duplicado.',
+          event_key: eventKey,
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
 
     if (logError) {
       console.error('Erro ao registrar log em email_send_logs:', logError)

@@ -698,20 +698,39 @@ export async function checkProvidenciaEventAccess(
       }
     }
 
-    // Se houver versaoUpdatedAt na providência, confere correspondência
-    if (params.versaoUpdatedAt) {
-      const targetStamp = new Date(params.versaoUpdatedAt).getTime()
-      const matchingEvent = events.find((ev: any) => {
-        if (!ev.versao_updated_at) return true
-        const evStamp = new Date(ev.versao_updated_at).getTime()
-        return Math.abs(evStamp - targetStamp) < 5000 // tolerância de 5 segundos
-      })
-      if (!matchingEvent) {
-        return {
-          allowed: false,
-          status: 'denied',
-          error: 'A versão da providência não corresponde ao evento gravado pelo servidor.',
-        }
+    // Validação OBRIGATÓRIA da versão da providência (Ponto 4):
+    // Rejeita versão ausente OU divergente, SEM tolerância de cinco segundos e SEM aceitar versão nula.
+    // Uma auditoria antiga não pode autorizar alerta de uma atualização posterior feita por outro usuário.
+    if (!params.versaoUpdatedAt) {
+      return {
+        allowed: false,
+        status: 'denied',
+        error: 'Versão da providência não informada para validação de evento.',
+      }
+    }
+
+    const targetDate = new Date(params.versaoUpdatedAt)
+    if (isNaN(targetDate.getTime())) {
+      return {
+        allowed: false,
+        status: 'denied',
+        error: 'Versão da providência inválida.',
+      }
+    }
+    const targetStamp = targetDate.getTime()
+
+    const matchingEvent = events.find((ev: any) => {
+      if (!ev.versao_updated_at) return false
+      const evDate = new Date(ev.versao_updated_at)
+      if (isNaN(evDate.getTime())) return false
+      return evDate.getTime() === targetStamp
+    })
+
+    if (!matchingEvent) {
+      return {
+        allowed: false,
+        status: 'denied',
+        error: 'A versão da providência não corresponde ao evento gravado pelo servidor.',
       }
     }
 
@@ -822,13 +841,21 @@ export async function checkTransitionNotificationAccess(
         return false
       }
 
-      // Se possui versao_resultante_updated_at registrada, ela deve bater com a versão atual da tarefa
-      if (t.versao_resultante_updated_at && tarefaUpdatedStamp) {
-        const transResultStamp = new Date(t.versao_resultante_updated_at).getTime()
-        const currentStamp = new Date(tarefaUpdatedStamp).getTime()
-        if (transResultStamp !== currentStamp) {
-          return false
-        }
+      // Validação estrita de versão resultante da transição (Ponto 4):
+      // A transição DEVE possuir versao_resultante_updated_at válida e ela DEVE coincidir
+      // exatamente com o timestamp atual da tarefa (sem tolerância, rejeita ausente ou divergente).
+      if (!t.versao_resultante_updated_at || !tarefaUpdatedStamp) {
+        return false
+      }
+
+      const transResultDate = new Date(t.versao_resultante_updated_at)
+      const currentDate = new Date(tarefaUpdatedStamp)
+      if (isNaN(transResultDate.getTime()) || isNaN(currentDate.getTime())) {
+        return false
+      }
+
+      if (transResultDate.getTime() !== currentDate.getTime()) {
+        return false
       }
 
       return true

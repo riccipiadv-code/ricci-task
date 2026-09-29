@@ -628,8 +628,28 @@ Deno.serve(async (req: Request) => {
         ccEmail = respEmailRaw
       }
 
-      // Inserir registro com status 'pending' antes de disparar o e-mail (lock de idempotência)
-      let eventoId = existingEvent?.id
+      // PONTOS 5 E 6: Aquisição atômica com token de posse (owner_token)
+      // Se estiver em estado 'uncertain' ou 'pending_reconciliation', bloquear retry automático
+      if (
+        existingEvent &&
+        (existingEvent.status === 'uncertain' || existingEvent.status === 'pending_reconciliation')
+      ) {
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'skipped',
+          reason: 'uncertain_status_reconciliation_required',
+        })
+        totalSkipped++
+        continue
+      }
+
+      const overdueOwnerToken = crypto.randomUUID()
+      const nowIso = new Date().toISOString()
+      const lockCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+      let acquiredEvent: any = null
+
       if (!existingEvent) {
         const { data: insertedEvent, error: insertEventError } = await supabase
           .from('task_email_eventos')
@@ -641,42 +661,103 @@ Deno.serve(async (req: Request) => {
             to_email: toEmail,
             cc_email: ccEmail,
             status: 'pending',
+            owner_token: overdueOwnerToken,
+            locked_at: nowIso,
             data_referencia: todayStr,
           })
-          .select('id')
+          .select('id, owner_token, status')
           .maybeSingle()
 
         if (insertEventError) {
-          // Em caso de concorrência simultânea (unique violation 23505)
           if (insertEventError.code === '23505' || insertEventError.message?.includes('23505')) {
-            const { data: raceEvent } = await supabase
+            const { data: raceAcquired } = await supabase
               .from('task_email_eventos')
-              .select('id, status')
+              .update({
+                status: 'pending',
+                owner_token: overdueOwnerToken,
+                locked_at: nowIso,
+                to_email: toEmail,
+                cc_email: ccEmail,
+              })
               .eq('event_key', eventKey)
+              .in('status', ['error'])
+              .select('id, owner_token, status')
               .maybeSingle()
 
-            if (raceEvent && raceEvent.status === 'success') {
+            if (!raceAcquired) {
               results.push({
                 providencia_id: prov.id,
                 tarefa_id: tarefa.id,
                 event_key: eventKey,
                 status: 'skipped',
-                reason: 'already_sent_today',
+                reason: 'in_progress_or_already_sent',
               })
               totalSkipped++
               continue
             }
-            eventoId = raceEvent?.id
+            acquiredEvent = raceAcquired
           } else {
-            console.warn(
-              `Aviso ao registrar evento pendente para chave ${eventKey}:`,
-              insertEventError,
-            )
+            console.error(`Erro ao registrar evento pendente para ${eventKey}:`, insertEventError)
+            results.push({
+              providencia_id: prov.id,
+              tarefa_id: tarefa.id,
+              event_key: eventKey,
+              status: 'error',
+              error: 'Falha técnica ao registrar evento.',
+            })
+            totalErrors++
+            continue
           }
-        } else if (insertedEvent) {
-          eventoId = insertedEvent.id
+        } else {
+          acquiredEvent = insertedEvent
         }
+      } else {
+        // Re-tentativa em evento existente
+        const { data: updatedRows, error: updateErr } = await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'pending',
+            owner_token: overdueOwnerToken,
+            locked_at: nowIso,
+            to_email: toEmail,
+            cc_email: ccEmail,
+            data_referencia: todayStr,
+          })
+          .eq('id', existingEvent.id)
+          .neq('status', 'success')
+          .neq('status', 'uncertain')
+          .neq('status', 'pending_reconciliation')
+          .or(`status.eq.error,locked_at.is.null,locked_at.lt.${lockCutoffIso}`)
+          .select('id, owner_token, status')
+
+        if (updateErr || !updatedRows || updatedRows.length === 0) {
+          results.push({
+            providencia_id: prov.id,
+            tarefa_id: tarefa.id,
+            event_key: eventKey,
+            status: 'skipped',
+            reason: 'lock_acquisition_failed_or_already_sent',
+          })
+          totalSkipped++
+          continue
+        }
+
+        acquiredEvent = updatedRows[0]
       }
+
+      if (!acquiredEvent || acquiredEvent.owner_token !== overdueOwnerToken) {
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'skipped',
+          reason: 'owner_token_mismatch',
+        })
+        totalSkipped++
+        continue
+      }
+
+      const eventoId = acquiredEvent.id
 
       // Resolver nome do controle
       let nomeControle = ''
@@ -765,14 +846,16 @@ Deno.serve(async (req: Request) => {
         html: emailHtml,
       }
 
-      // Disparar envio via transporter SMTP
+      // Disparar envio via transporter SMTP com tratamento de incerteza e persistência
       try {
         await transporter.sendMail(mailOptions)
 
-        // Atualizar evento para 'success' com sent_at
+        // Sucesso no SMTP: atualizar task_email_eventos como dono exclusivo
         const agoraIso = new Date().toISOString()
+        let persFailed = false
+
         if (eventoId) {
-          await supabase
+          const { data: updatedSuccessRows, error: updateSuccessErr } = await supabase
             .from('task_email_eventos')
             .update({
               status: 'success',
@@ -780,6 +863,25 @@ Deno.serve(async (req: Request) => {
               erro: null,
             })
             .eq('id', eventoId)
+            .eq('owner_token', overdueOwnerToken)
+            .select('id, status')
+
+          if (updateSuccessErr || !updatedSuccessRows || updatedSuccessRows.length === 0) {
+            persFailed = true
+            console.error(
+              'Falha de persistência pós-SMTP em notify-task-overdue:',
+              updateSuccessErr,
+            )
+            await supabase
+              .from('task_email_eventos')
+              .update({
+                status: 'uncertain',
+                sent_at: agoraIso,
+                erro: `Enviado via SMTP mas falha na persistência de sucesso: ${updateSuccessErr?.message || '0 linhas atualizadas'}`,
+              })
+              .eq('id', eventoId)
+              .eq('owner_token', overdueOwnerToken)
+          }
         }
 
         // Registrar em email_send_logs com type próprio do Ricci Task
@@ -787,24 +889,40 @@ Deno.serve(async (req: Request) => {
           type: 'ricci_task_providencia_atraso',
           to_email: toEmail,
           subject: mailOptions.subject,
-          status: 'success',
+          status: persFailed ? 'uncertain' : 'success',
           created_by: callerUserId,
           created_at: agoraIso,
+          error_message: persFailed
+            ? 'Enviado via SMTP mas falha ao atualizar registro de evento.'
+            : null,
         })
 
         if (logError) {
           console.error('Erro ao inserir email_send_logs de atraso:', logError)
         }
 
-        results.push({
-          providencia_id: prov.id,
-          tarefa_id: tarefa.id,
-          event_key: eventKey,
-          status: 'sent',
-          to: toEmail,
-          cc: ccEmail,
-        })
-        totalSent++
+        if (persFailed) {
+          results.push({
+            providencia_id: prov.id,
+            tarefa_id: tarefa.id,
+            event_key: eventKey,
+            status: 'uncertain',
+            error: 'Enviado via SMTP porém persistência falhou; marcado como incerto.',
+            to: toEmail,
+            cc: ccEmail,
+          })
+          totalErrors++
+        } else {
+          results.push({
+            providencia_id: prov.id,
+            tarefa_id: tarefa.id,
+            event_key: eventKey,
+            status: 'sent',
+            to: toEmail,
+            cc: ccEmail,
+          })
+          totalSent++
+        }
       } catch (sendError: any) {
         console.error(
           `Erro no transporte SMTP ao enviar alerta de atraso para providência ${prov.id}:`,
@@ -812,16 +930,23 @@ Deno.serve(async (req: Request) => {
         )
 
         const errMsg = sendError.message || String(sendError)
+        const isTimeoutOrNetwork =
+          sendError.code === 'ETIMEDOUT' ||
+          sendError.code === 'ESOCKET' ||
+          sendError.code === 'ECONNRESET' ||
+          /timeout/i.test(errMsg)
+        const errorStatus = isTimeoutOrNetwork ? 'uncertain' : 'error'
 
-        // Registrar status 'error' em task_email_eventos
+        // Registrar status 'error' ou 'uncertain' em task_email_eventos
         if (eventoId) {
           await supabase
             .from('task_email_eventos')
             .update({
-              status: 'error',
+              status: errorStatus,
               erro: errMsg,
             })
             .eq('id', eventoId)
+            .eq('owner_token', overdueOwnerToken)
         }
 
         // Registrar em email_send_logs
@@ -829,7 +954,7 @@ Deno.serve(async (req: Request) => {
           type: 'ricci_task_providencia_atraso',
           to_email: toEmail,
           subject: mailOptions.subject,
-          status: 'error',
+          status: errorStatus,
           error_message: errMsg,
           created_by: callerUserId,
           created_at: new Date().toISOString(),
@@ -839,7 +964,7 @@ Deno.serve(async (req: Request) => {
           providencia_id: prov.id,
           tarefa_id: tarefa.id,
           event_key: eventKey,
-          status: 'error',
+          status: errorStatus,
           error: errMsg,
           to: toEmail,
           cc: ccEmail,
