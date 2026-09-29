@@ -182,27 +182,29 @@ export const controleService = {
   },
 
   // --------------------------------------------------------------------------
-  // GESTÃO DE USUÁRIOS DO RICCI TASK (task_usuarios)
+  // GESTÃO DE USUÁRIOS DO RICCI TASK (core_* como fonte central)
   // Única fonte para Responsável e Executor nos controles e providências
   // --------------------------------------------------------------------------
   /**
    * Retorna os usuários disponíveis para seleção em NOVOS Responsáveis e Executores:
-   * Usa a função SQL RPC public.task_listar_usuarios_elegiveis() para listar e provisionar
-   * candidatos elegíveis validados centralmente no Gestor de Acessos Ricci (sistema RICCI_TASK).
+   * Usa a função SQL RPC public.task_listar_usuarios_core_elegiveis() como ÚNICA fonte
+   * de elegibilidade, retornando IDs, nomes e e-mails centrais diretamente do Gestor de Acessos (core_*).
    *
-   * Fail-Closed estrito: se a RPC falhar, lança erro para a interface e NÃO oferece candidatos
-   * não validados, nem recorre ao cadastro local.
+   * Resolve a ponte operacional task_usuarios.id via vínculo core_usuario_id para cada pessoa.
+   * Se a ponte não for encontrada para algum usuário, atribui task_usuario_id = null (ou preserva o
+   * registro sinalizado para que salvamentos que tentem usá-lo sejam bloqueados).
    *
-   * Preserva task_usuarios.id retornado pela RPC como vínculo operacional das tarefas.
-   * Apresenta nome e e-mail centrais validados quando disponíveis.
-   * Ordenado alfabeticamente por nome.
+   * Fail-Closed estrito: se a RPC falhar ou a consulta de ponte falhar tecnicamente, lança erro
+   * e bloqueia novas atribuições sem fallback para listas legadas.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
-    // 1. Chama a RPC para provisionar e listar os IDs operacionais elegíveis
-    const { data: rpcData, error: rpcError } = await supabase.rpc('task_listar_usuarios_elegiveis')
+    // 1. Chama a RPC task_listar_usuarios_core_elegiveis como ÚNICA fonte de elegibilidade
+    const { data: rpcData, error: rpcError } = await supabase.rpc(
+      'task_listar_usuarios_core_elegiveis',
+    )
 
     if (rpcError) {
-      console.error('Falha na RPC task_listar_usuarios_elegiveis:', rpcError)
+      console.error('Falha na RPC task_listar_usuarios_core_elegiveis:', rpcError)
       throw new Error(
         rpcError.message ||
           'Falha técnica ao consultar usuários elegíveis no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
@@ -213,73 +215,47 @@ export const controleService = {
       return []
     }
 
-    // 2. Consulta complementar às tabelas centrais via cliente Supabase (leitura apenas):
-    // Resolve e exibe o NOME e E-MAIL atuais de core_usuarios via vínculo task_usuarios.core_usuario_id.
-    // Se a leitura central falhar, NÃO apresenta dados locais como se fossem atuais (fail-closed estrito).
-    const taskIds = rpcData.map((item: any) => item.id).filter(Boolean)
+    // 2. Resolve a ponte temporária de gravação em task_usuarios (pelo vínculo core_usuario_id)
+    const coreUserIds = rpcData.map((item: any) => item.id).filter(Boolean)
 
     const { data: bridgedUsers, error: bridgeError } = await supabase
       .from('task_usuarios')
-      .select(`
-        id,
-        ativo,
-        core_usuario_id,
-        core_usuarios!inner(id, nome, email, ativo)
-      `)
-      .in('id', taskIds)
+      .select('id, core_usuario_id, ativo')
+      .in('core_usuario_id', coreUserIds)
 
     if (bridgeError) {
-      console.error('Falha técnica ao consultar dados centrais de core_usuarios:', bridgeError)
+      console.error('Falha técnica ao consultar ponte em task_usuarios:', bridgeError)
       throw new Error(
-        'Falha técnica ao carregar dados centrais dos usuários (core_usuarios). Novos vínculos estão temporariamente suspensos.',
+        'Falha técnica ao verificar a ponte operacional dos usuários no Ricci Task. Novos vínculos estão temporariamente suspensos.',
       )
     }
 
-    const centralMap = new Map<string, { nome: string; email: string; ativo: boolean }>()
+    // Mapeia core_usuario_id -> task_usuarios correspondente
+    // Dando preferência a registro ativo caso haja mais de um
+    const bridgeMap = new Map<string, { id: string; ativo: boolean }>()
     for (const b of bridgedUsers || []) {
-      const cu = (b as any).core_usuarios
-      if (cu && cu.email) {
-        centralMap.set(b.id, {
-          nome: cu.nome || '',
-          email: cu.email || '',
-          ativo: Boolean(b.ativo && cu.ativo),
-        })
+      if (b.core_usuario_id) {
+        const existing = bridgeMap.get(b.core_usuario_id)
+        if (!existing || (!existing.ativo && b.ativo)) {
+          bridgeMap.set(b.core_usuario_id, { id: b.id, ativo: Boolean(b.ativo) })
+        }
       }
     }
 
-    // Validação estrita (Fail-Closed):
-    // TODOS os IDs retornados pela RPC devem ser resolvidos com nome, e-mail e situação central válidos.
-    // Se a leitura vier parcial ou vazia (por exemplo por restrição de RLS ou falha silenciosa sem erro HTTP),
-    // deve ser tratada como falha de validação, não oferecendo lista parcial nem usando dados locais como substituto.
-    const idsNaoResolvidos = taskIds.filter((id: string) => {
-      const c = centralMap.get(id)
-      return !c || !c.nome || !c.nome.trim() || !c.email || !c.email.trim()
-    })
-
-    if (idsNaoResolvidos.length > 0) {
-      console.error(
-        `Falha de validação central: ${idsNaoResolvidos.length} de ${taskIds.length} usuários elegíveis não foram resolvidos em core_usuarios (retorno parcial/vazio via RLS sem erro HTTP):`,
-        idsNaoResolvidos,
-      )
-      throw new Error(
-        'Falha na validação central de usuários elegíveis: retorno parcial ou incompleto do Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
-      )
-    }
-
-    // Monta a lista elegível usando EXCLUSIVAMENTE nome e e-mail centrais validados,
-    // preservando o vínculo operacional task_usuarios.id e o ID central core_usuario_id
+    // 3. Monta a lista de candidatos centrais elegíveis
+    // O ID exposto para a UI é o task_usuarios.id (quando existe ponte) ou o core_usuario_id caso contrário
+    // preservando nome e e-mail CENTRAIS retornados pela RPC nova.
     const lista: TaskUsuarioAtivoRecord[] = []
     for (const item of rpcData) {
-      const central = centralMap.get(item.id)!
-      const bridged = (bridgedUsers || []).find((b: any) => b.id === item.id)
-      const coreUsuarioId =
-        (bridged as any)?.core_usuario_id || (bridged as any)?.core_usuarios?.id || null
+      const bridge = bridgeMap.get(item.id)
+      const operationalId = bridge ? bridge.id : item.id
       lista.push({
-        id: item.id,
-        nome: central.nome.trim(),
-        email: central.email.trim().toLowerCase(),
-        ativo: central.ativo,
-        core_usuario_id: coreUsuarioId,
+        id: operationalId,
+        nome: (item.nome || '').trim(),
+        email: (item.email || '').trim().toLowerCase(),
+        ativo: item.ativo ?? true,
+        core_usuario_id: item.id,
+        task_usuario_id: bridge ? bridge.id : null,
       })
     }
 
@@ -900,9 +876,10 @@ export const controleService = {
       resolvedExecCoreId = existingRecord.executor_core_usuario_id
     }
 
-    // Resolução dos IDs centrais para os casos que não foram preservados:
-    // 1. Busca na lista informada de usuários elegíveis validados (usuariosParam)
-    // 2. Se ausente, busca direto em task_usuarios (bridge lookup)
+    // Resolução dos IDs centrais e validação estrita da ponte operacional task_usuarios:
+    // Para novos vínculos ou edições com alteração:
+    // 1. Busca primeiro nos candidatos informados (usuariosParam)
+    // 2. Se ausente, busca direto em task_usuarios
     const needBridgeLookup: string[] = []
 
     if (!resolvedRespCoreId && input.responsavel_usuario_id) {
@@ -958,6 +935,23 @@ export const controleService = {
       )
     }
 
+    // Validação da ponte operacional task_usuarios:
+    // O input.responsavel_usuario_id e executor_usuario_id devem existir em task_usuarios com o mesmo core_usuario_id
+    // Se usuariosParam apontar que falta a ponte (task_usuario_id === null), bloqueia imediatamente com erro claro
+    const paramResp = (usuariosParam || []).find((u) => u.id === input.responsavel_usuario_id)
+    if (paramResp && paramResp.task_usuario_id === null) {
+      throw new Error(
+        `Gravação bloqueada: a pessoa selecionada como Responsável (${paramResp.nome}) não possui registro operacional (ponte) no Ricci Task. Novos vínculos operacionais locais não podem ser criados pelo frontend.`,
+      )
+    }
+
+    const paramExec = (usuariosParam || []).find((u) => u.id === input.executor_usuario_id)
+    if (paramExec && paramExec.task_usuario_id === null) {
+      throw new Error(
+        `Gravação bloqueada: a pessoa selecionada como Executor (${paramExec.nome}) não possui registro operacional (ponte) no Ricci Task. Novos vínculos operacionais locais não podem ser criados pelo frontend.`,
+      )
+    }
+
     // Regra 4: Valide que cada ID central enviado corresponde ao task_usuarios.core_usuario_id do respectivo ID operacional.
     // NÃO aceite uma dupla divergente (ex.: responsavel_usuario_id de pessoa A com responsavel_core_usuario_id de pessoa B).
     if (
@@ -969,6 +963,45 @@ export const controleService = {
       )
     }
     if (input.executor_core_usuario_id && input.executor_core_usuario_id !== resolvedExecCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
+      )
+    }
+
+    // Validação de correspondência real em task_usuarios para o ID operacional enviado
+    // Caso a pessoa tenha sido selecionada sem ponte comprovada em task_usuarios
+    const opIdsToCheck = [input.responsavel_usuario_id, input.executor_usuario_id].filter(Boolean)
+    const { data: dbOpUsers, error: dbOpErr } = await supabase
+      .from('task_usuarios')
+      .select('id, core_usuario_id')
+      .in('id', opIdsToCheck)
+
+    if (dbOpErr) {
+      console.error('Erro ao verificar existência dos IDs operacionais em task_usuarios:', dbOpErr)
+      throw new Error(
+        'Gravação bloqueada: falha técnica ao validar a ponte operacional em task_usuarios.',
+      )
+    }
+
+    const opRespRecord = (dbOpUsers || []).find((u) => u.id === input.responsavel_usuario_id)
+    if (!opRespRecord) {
+      throw new Error(
+        'Gravação bloqueada: o Responsável selecionado não possui ponte operacional correspondente em task_usuarios. Não é permitida a criação local pelo frontend.',
+      )
+    }
+    if (opRespRecord.core_usuario_id !== resolvedRespCoreId) {
+      throw new Error(
+        'Gravação bloqueada: o ID central do Responsável diverge do vínculo correspondente em task_usuarios.',
+      )
+    }
+
+    const opExecRecord = (dbOpUsers || []).find((u) => u.id === input.executor_usuario_id)
+    if (!opExecRecord) {
+      throw new Error(
+        'Gravação bloqueada: o Executor selecionado não possui ponte operacional correspondente em task_usuarios. Não é permitida a criação local pelo frontend.',
+      )
+    }
+    if (opExecRecord.core_usuario_id !== resolvedExecCoreId) {
       throw new Error(
         'Gravação bloqueada: o ID central do Executor diverge do vínculo correspondente em task_usuarios.',
       )

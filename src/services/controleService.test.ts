@@ -2,29 +2,29 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { controleService } from '@/services/controleService'
 import { supabase } from '@/lib/supabase/client'
 
-describe('controleService.getUsuariosAtivos (Fail-Closed na integração central)', () => {
+describe('controleService.getUsuariosAtivos (Nova fonte central: task_listar_usuarios_core_elegiveis)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('sucesso: chama RPC task_listar_usuarios_elegiveis, resolve nome e e-mail centrais e retorna usuários ordenados alfabeticamente', async () => {
-    const mockRpcData = [
+  it('sucesso: chama RPC task_listar_usuarios_core_elegiveis como ÚNICA fonte de elegibilidade e resolve ponte task_usuarios', async () => {
+    const mockCoreRpcData = [
       {
-        id: 'tu-1',
-        nome: 'Beto Silva Operacional',
-        email: 'beto.velho@antigo.com',
+        id: 'cu-1',
+        nome: 'Beto Silva Central',
+        email: 'beto.novo@riccipi.com.br',
         ativo: true,
       },
       {
-        id: 'tu-2',
-        nome: 'Ana Lima Operacional',
-        email: 'ana.velho@antigo.com',
+        id: 'cu-2',
+        nome: 'Ana Lima Central',
+        email: 'ana.novo@riccipi.com.br',
         ativo: true,
       },
     ]
 
     vi.spyOn(supabase, 'rpc').mockResolvedValue({
-      data: mockRpcData,
+      data: mockCoreRpcData,
       error: null,
     } as any)
 
@@ -39,23 +39,11 @@ describe('controleService.getUsuariosAtivos (Fail-Closed na integração central
                     id: 'tu-1',
                     ativo: true,
                     core_usuario_id: 'cu-1',
-                    core_usuarios: {
-                      id: 'cu-1',
-                      nome: 'Beto Silva Central',
-                      email: 'beto.novo@riccipi.com.br',
-                      ativo: true,
-                    },
                   },
                   {
                     id: 'tu-2',
                     ativo: true,
                     core_usuario_id: 'cu-2',
-                    core_usuarios: {
-                      id: 'cu-2',
-                      nome: 'Ana Lima Central',
-                      email: 'ana.novo@riccipi.com.br',
-                      ativo: true,
-                    },
                   },
                 ],
                 error: null,
@@ -68,31 +56,75 @@ describe('controleService.getUsuariosAtivos (Fail-Closed na integração central
 
     const usuarios = await controleService.getUsuariosAtivos()
 
-    expect(supabase.rpc).toHaveBeenCalledWith('task_listar_usuarios_elegiveis')
+    // Regra 1: usa task_listar_usuarios_core_elegiveis como ÚNICA fonte
+    expect(supabase.rpc).toHaveBeenCalledWith('task_listar_usuarios_core_elegiveis')
+    expect(supabase.rpc).not.toHaveBeenCalledWith('task_listar_usuarios_elegiveis')
     expect(usuarios).toHaveLength(2)
-    // Ordenado alfabeticamente por nome central: Ana Lima primeiro, Beto Silva depois
+
+    // Ordenação alfabética pelo nome central: Ana Lima primeiro, Beto Silva depois
     expect(usuarios[0].id).toBe('tu-2')
     expect(usuarios[0].nome).toBe('Ana Lima Central')
     expect(usuarios[0].email).toBe('ana.novo@riccipi.com.br')
     expect(usuarios[0].core_usuario_id).toBe('cu-2')
+    expect(usuarios[0].task_usuario_id).toBe('tu-2')
+
     expect(usuarios[1].id).toBe('tu-1')
     expect(usuarios[1].nome).toBe('Beto Silva Central')
     expect(usuarios[1].email).toBe('beto.novo@riccipi.com.br')
     expect(usuarios[1].core_usuario_id).toBe('cu-1')
+    expect(usuarios[1].task_usuario_id).toBe('tu-1')
   })
 
-  it('falha na leitura de core_usuarios: fail-closed estrito — não usa dados locais antigos e rejeita', async () => {
-    const mockRpcData = [
+  it('pessoa elegível no core SEM ponte task_usuarios: preserva usuário na lista com task_usuario_id null', async () => {
+    const mockCoreRpcData = [
       {
-        id: 'tu-1',
-        nome: 'Beto Silva Operacional',
-        email: 'beto.velho@antigo.com',
+        id: 'cu-sem-ponte',
+        nome: 'Carlos Sem Ponte',
+        email: 'carlos@riccipi.com.br',
         ativo: true,
       },
     ]
 
     vi.spyOn(supabase, 'rpc').mockResolvedValue({
-      data: mockRpcData,
+      data: mockCoreRpcData,
+      error: null,
+    } as any)
+
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [], // sem ponte em task_usuarios
+                error: null,
+              }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    const usuarios = await controleService.getUsuariosAtivos()
+    expect(usuarios).toHaveLength(1)
+    expect(usuarios[0].id).toBe('cu-sem-ponte')
+    expect(usuarios[0].nome).toBe('Carlos Sem Ponte')
+    expect(usuarios[0].core_usuario_id).toBe('cu-sem-ponte')
+    expect(usuarios[0].task_usuario_id).toBeNull()
+  })
+
+  it('falha técnica na consulta da ponte: fail-closed estrito — rejeita e não recorre a fallback', async () => {
+    const mockCoreRpcData = [
+      {
+        id: 'cu-1',
+        nome: 'Beto Silva Central',
+        email: 'beto@riccipi.com.br',
+        ativo: true,
+      },
+    ]
+
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: mockCoreRpcData,
       error: null,
     } as any)
 
@@ -103,7 +135,7 @@ describe('controleService.getUsuariosAtivos (Fail-Closed na integração central
             in: () =>
               Promise.resolve({
                 data: null,
-                error: { message: 'connection timeout ao consultar core_usuarios' },
+                error: { message: 'connection timeout' },
               }),
           }),
         }
@@ -112,107 +144,18 @@ describe('controleService.getUsuariosAtivos (Fail-Closed na integração central
     }) as any)
 
     await expect(controleService.getUsuariosAtivos()).rejects.toThrow(
-      'Falha técnica ao carregar dados centrais',
+      'Falha técnica ao verificar a ponte operacional',
     )
   })
 
-  it('retorno parcial/vazio de core_usuarios sem erro HTTP (ex: RLS restritivo): fail-closed estrito — rejeita e não oferece lista parcial', async () => {
-    const mockRpcData = [
-      {
-        id: 'tu-1',
-        nome: 'Beto Silva Operacional',
-        email: 'beto.velho@antigo.com',
-        ativo: true,
-      },
-      {
-        id: 'tu-2',
-        nome: 'Ana Lima Operacional',
-        email: 'ana.velho@antigo.com',
-        ativo: true,
-      },
-    ]
-
-    vi.spyOn(supabase, 'rpc').mockResolvedValue({
-      data: mockRpcData,
-      error: null,
-    } as any)
-
-    // Simula retorno parcial por RLS: tu-1 retornado, tu-2 omitido silenciosamente sem erro HTTP (error: null)
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [
-                  {
-                    id: 'tu-1',
-                    ativo: true,
-                    core_usuario_id: 'cu-1',
-                    core_usuarios: {
-                      id: 'cu-1',
-                      nome: 'Beto Silva Central',
-                      email: 'beto.novo@riccipi.com.br',
-                      ativo: true,
-                    },
-                  },
-                ],
-                error: null,
-              }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
-
-    await expect(controleService.getUsuariosAtivos()).rejects.toThrow(
-      'Falha na validação central de usuários elegíveis: retorno parcial ou incompleto',
-    )
-  })
-
-  it('retorno vazio de core_usuarios sem erro HTTP: fail-closed estrito — rejeita se a RPC retornou candidatos', async () => {
-    const mockRpcData = [
-      {
-        id: 'tu-1',
-        nome: 'Beto Silva Operacional',
-        email: 'beto.velho@antigo.com',
-        ativo: true,
-      },
-    ]
-
-    vi.spyOn(supabase, 'rpc').mockResolvedValue({
-      data: mockRpcData,
-      error: null,
-    } as any)
-
-    // Retorno vazio silencioso (ex: RLS bloqueou leitura de core_usuarios)
-    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-      if (table === 'task_usuarios') {
-        return {
-          select: () => ({
-            in: () =>
-              Promise.resolve({
-                data: [],
-                error: null,
-              }),
-          }),
-        }
-      }
-      return {}
-    }) as any)
-
-    await expect(controleService.getUsuariosAtivos()).rejects.toThrow(
-      'Falha na validação central de usuários elegíveis: retorno parcial ou incompleto',
-    )
-  })
-  it('falha na RPC: fail-closed estrito — não oferece candidatos não validados e lança erro amigável', async () => {
+  it('falha na RPC nova: fail-closed estrito — lança erro e bloqueia candidatos', async () => {
     vi.spyOn(supabase, 'rpc').mockResolvedValue({
       data: null,
-      error: { message: 'relation core_usuarios does not exist' },
+      error: { message: 'permission denied for function task_listar_usuarios_core_elegiveis' },
     } as any)
 
     await expect(controleService.getUsuariosAtivos()).rejects.toThrow(
-      'relation core_usuarios does not exist',
+      'permission denied for function task_listar_usuarios_core_elegiveis',
     )
   })
 
@@ -262,6 +205,20 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
             eq: () => ({
               single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
             }),
+          }),
+        }
+      }
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [
+                  { id: 'tu-resp', core_usuario_id: 'cu-resp' },
+                  { id: 'tu-exec', core_usuario_id: 'cu-exec' },
+                ],
+                error: null,
+              }),
           }),
         }
       }
@@ -365,6 +322,20 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
             eq: () => ({
               single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
             }),
+          }),
+        }
+      }
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [
+                  { id: 'tu-resp-novo', core_usuario_id: 'cu-resp-novo' },
+                  { id: 'tu-exec-novo', core_usuario_id: 'cu-exec-novo' },
+                ],
+                error: null,
+              }),
           }),
         }
       }
@@ -814,5 +785,63 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         [],
       ),
     ).rejects.toThrow('Gravação bloqueada: o Responsável selecionado não possui vínculo central')
+  })
+
+  it('bloqueia gravação se a pessoa elegível do core NÃO possuir ponte operacional em task_usuarios (sem fallback e sem criação local)', async () => {
+    vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+      if (table === 'task_status') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({ data: { finaliza: false }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'task_usuarios') {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [], // não existe em task_usuarios!
+                error: null,
+              }),
+          }),
+        }
+      }
+      return {}
+    }) as any)
+
+    const usuariosListaComPessoaSemPonte = [
+      {
+        id: 'cu-sem-ponte',
+        nome: 'Maria Sem Ponte',
+        email: 'maria@riccipi.com.br',
+        core_usuario_id: 'cu-sem-ponte',
+        task_usuario_id: null,
+      },
+      {
+        id: 'tu-exec',
+        nome: 'Executor Válido',
+        email: 'exec@riccipi.com.br',
+        core_usuario_id: 'cu-exec',
+        task_usuario_id: 'tu-exec',
+      },
+    ]
+
+    await expect(
+      controleService.saveControle(
+        {
+          nome_controle_id: 'nc-1',
+          identificacao_caso: 'Caso Bloqueado Ponte',
+          status_id: 'st-aberto',
+          responsavel_usuario_id: 'cu-sem-ponte',
+          executor_usuario_id: 'tu-exec',
+        },
+        usuariosListaComPessoaSemPonte,
+      ),
+    ).rejects.toThrow(
+      'Gravação bloqueada: a pessoa selecionada como Responsável (Maria Sem Ponte) não possui registro operacional (ponte) no Ricci Task.',
+    )
   })
 })

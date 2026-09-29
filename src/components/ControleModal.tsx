@@ -676,42 +676,68 @@ export function ControleModal({
     if (!responsavelUsuarioId) {
       setResponsavelError(true)
       hasError = true
-    } else if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
-      // Bloqueia nova atribuição enquanto carregando ou falhou
+    } else {
       const isHistoricoPreservado =
         controleToEdit && responsavelUsuarioId === controleToEdit.responsavel_usuario_id
       if (!isHistoricoPreservado) {
-        setResponsavelError(true)
-        hasError = true
-        toast({
-          variant: 'destructive',
-          title: 'Atribuição bloqueada',
-          description:
-            validacaoUsuariosStatus === 'carregando' || loadingListas
-              ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
-              : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo responsável.',
-        })
+        if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
+          setResponsavelError(true)
+          hasError = true
+          toast({
+            variant: 'destructive',
+            title: 'Atribuição bloqueada',
+            description:
+              validacaoUsuariosStatus === 'carregando' || loadingListas
+                ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
+                : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo responsável.',
+          })
+        } else {
+          // Verifica se a pessoa selecionada possui ponte operacional em task_usuarios
+          const candResp = usuariosLista.find((u) => u.id === responsavelUsuarioId)
+          if (candResp && candResp.task_usuario_id === null) {
+            setResponsavelError(true)
+            hasError = true
+            toast({
+              variant: 'destructive',
+              title: 'Ponte operacional ausente',
+              description: `A pessoa "${candResp.nome}" está elegível no Gestor de Acessos, mas não possui ponte operacional (task_usuarios) no Ricci Task. Atribuição bloqueada.`,
+            })
+          }
+        }
       }
     }
 
     if (!executorUsuarioId) {
       setExecutorError(true)
       hasError = true
-    } else if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
-      // Bloqueia nova atribuição enquanto carregando ou falhou
+    } else {
       const isHistoricoPreservado =
         controleToEdit && executorUsuarioId === controleToEdit.executor_usuario_id
       if (!isHistoricoPreservado) {
-        setExecutorError(true)
-        hasError = true
-        toast({
-          variant: 'destructive',
-          title: 'Atribuição bloqueada',
-          description:
-            validacaoUsuariosStatus === 'carregando' || loadingListas
-              ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
-              : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo executor.',
-        })
+        if (validacaoUsuariosStatus !== 'válida' || loadingListas) {
+          setExecutorError(true)
+          hasError = true
+          toast({
+            variant: 'destructive',
+            title: 'Atribuição bloqueada',
+            description:
+              validacaoUsuariosStatus === 'carregando' || loadingListas
+                ? 'A validação central de usuários ou carregamento das listas está em andamento. Aguarde para salvar novas atribuições.'
+                : 'A validação de usuários ou listas auxiliares falhou. Não é possível alterar ou atribuir novo executor.',
+          })
+        } else {
+          // Verifica se a pessoa selecionada possui ponte operacional em task_usuarios
+          const candExec = usuariosLista.find((u) => u.id === executorUsuarioId)
+          if (candExec && candExec.task_usuario_id === null) {
+            setExecutorError(true)
+            hasError = true
+            toast({
+              variant: 'destructive',
+              title: 'Ponte operacional ausente',
+              description: `A pessoa "${candExec.nome}" está elegível no Gestor de Acessos, mas não possui ponte operacional (task_usuarios) no Ricci Task. Atribuição bloqueada.`,
+            })
+          }
+        }
       }
     }
 
@@ -1377,6 +1403,14 @@ export function ControleModal({
                                           Inativo
                                         </span>
                                       )}
+                                      {r.task_usuario_id === null && (
+                                        <span
+                                          className="text-[10px] px-1.5 py-0.2 rounded bg-destructive/10 text-destructive border border-destructive/20 font-medium"
+                                          title="Sem vínculo operacional task_usuarios"
+                                        >
+                                          Sem ponte
+                                        </span>
+                                      )}
                                     </div>
                                     {r.email && (
                                       <span className="text-[11px] text-muted-foreground font-normal">
@@ -1513,6 +1547,14 @@ export function ControleModal({
                                       {isInativoLocal && (
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
                                           Inativo
+                                        </span>
+                                      )}
+                                      {e.task_usuario_id === null && (
+                                        <span
+                                          className="text-[10px] px-1.5 py-0.2 rounded bg-destructive/10 text-destructive border border-destructive/20 font-medium"
+                                          title="Sem vínculo operacional task_usuarios"
+                                        >
+                                          Sem ponte
                                         </span>
                                       )}
                                     </div>

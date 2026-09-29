@@ -58,6 +58,7 @@ export interface TaskUsuarioAtivoRecord {
   email?: string
   ativo?: boolean
   core_usuario_id?: string | null
+  task_usuario_id?: string | null
 }
 
 export interface TaskUsuarioRecord {

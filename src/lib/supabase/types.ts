@@ -2654,6 +2654,15 @@ export type Database = {
           nome: string
         }[]
       }
+      task_listar_usuarios_core_elegiveis: {
+        Args: never
+        Returns: {
+          ativo: boolean
+          email: string
+          id: string
+          nome: string
+        }[]
+      }
       task_listar_usuarios_elegiveis: {
         Args: never
         Returns: {

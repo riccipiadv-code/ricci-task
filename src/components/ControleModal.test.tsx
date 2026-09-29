@@ -131,4 +131,88 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     expect(screen.getByText('Editar Controle de Caso')).toBeDefined()
     expect(screen.getByDisplayValue('Caso Histórico Com Usuário Inativo')).toBeDefined()
   })
+
+  it('quando a validação central de usuários falha, exibe aviso e bloqueia novo salvamento', async () => {
+    vi.mocked(controleService.getUsuariosAtivos).mockRejectedValueOnce(
+      new Error('Falha na validação central de usuários elegíveis: retorno parcial'),
+    )
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        statusList={[
+          {
+            id: 'st-aberto',
+            codigo: 'pendente',
+            nome: 'Pendente',
+            ordem: 1,
+            ativo: true,
+            finaliza: false,
+          },
+        ]}
+        tiposPrazoList={[
+          { id: 'tp-1', codigo: 'dias_uteis', nome: 'Dias Úteis', ordem: 1, ativo: true },
+        ]}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(controleService.getUsuariosAtivos).toHaveBeenCalledTimes(1)
+    })
+
+    const warning = await screen.findByText(/Validação central de usuários indisponível/i)
+    expect(warning).toBeDefined()
+
+    const salvarBtn = screen.getByRole('button', { name: /Salvar/i })
+    expect(salvarBtn).toBeDefined()
+
+    salvarBtn.click()
+    expect(controleService.saveControle).not.toHaveBeenCalled()
+  })
+
+  it('bloqueia salvamento se a pessoa selecionada estiver sem ponte operacional em task_usuarios (task_usuario_id null)', async () => {
+    vi.mocked(controleService.getUsuariosAtivos).mockResolvedValueOnce([
+      {
+        id: 'cu-sem-ponte',
+        nome: 'Pessoa Sem Ponte',
+        email: 'semponte@riccipi.com.br',
+        ativo: true,
+        core_usuario_id: 'cu-sem-ponte',
+        task_usuario_id: null,
+      },
+    ])
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        statusList={[
+          {
+            id: 'st-aberto',
+            codigo: 'pendente',
+            nome: 'Pendente',
+            ordem: 1,
+            ativo: true,
+            finaliza: false,
+          },
+        ]}
+        tiposPrazoList={[
+          { id: 'tp-1', codigo: 'dias_uteis', nome: 'Dias Úteis', ordem: 1, ativo: true },
+        ]}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(controleService.getUsuariosAtivos).toHaveBeenCalledTimes(1)
+    })
+
+    const salvarBtn = screen.getByRole('button', { name: /Salvar/i })
+    salvarBtn.click()
+
+    // Não deve chamar saveControle pois a validação de campos / ponte bloqueia
+    expect(controleService.saveControle).not.toHaveBeenCalled()
+  })
 })
