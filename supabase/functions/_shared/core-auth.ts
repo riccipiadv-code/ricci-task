@@ -485,6 +485,113 @@ export async function verifyCoreAdmin(
  *
  * NÃO utiliza profiles.legaldesk_usuario_id nem profiles.gestor_id.
  */
+/**
+ * Validação de escopo de acesso a um caso (tarefa):
+ * - ADMINISTRADOR: acessa qualquer caso.
+ * - GESTOR: acessa caso próprio (é responsável ou executor pelo ID central) OU caso cuja equipe direta
+ *   seja liderada pelo gestor (responsável ou executor tem core_usuarios.gestor_id = gestorCoreId).
+ *   Para casos históricos sem IDs centrais, o gestor também acessa para não quebrar compatibilidade.
+ * - OPERACIONAL: acessa exclusivamente casos onde é Responsável ou Executor pelo ID central.
+ *
+ * Retorna { allowed: boolean; status: 'ok' | 'denied' | 'technical_failure'; error?: string }
+ */
+export async function checkTaskAccessScope(
+  supabase: SupabaseClient,
+  callerCoreUser: { id: string },
+  callerPerfil: string,
+  tarefa: {
+    id: string
+    responsavel_core_usuario_id?: string | null
+    executor_core_usuario_id?: string | null
+    responsavel_usuario_id?: string | null
+    executor_usuario_id?: string | null
+  },
+): Promise<{ allowed: boolean; status: 'ok' | 'denied' | 'technical_failure'; error?: string }> {
+  const perfilUpper = (callerPerfil || '').toUpperCase()
+
+  // 1. ADMINISTRADOR tem acesso irrestrito
+  if (perfilUpper === ROLE_CODE_ADMINISTRADOR) {
+    return { allowed: true, status: 'ok' }
+  }
+
+  const callerCoreId = callerCoreUser.id
+  const respCore = tarefa.responsavel_core_usuario_id || null
+  const execCore = tarefa.executor_core_usuario_id || null
+
+  // "Próprio" = ser Responsável ou Executor pelo ID central
+  const isProprio = Boolean(
+    (respCore && respCore === callerCoreId) || (execCore && execCore === callerCoreId),
+  )
+
+  if (isProprio) {
+    return { allowed: true, status: 'ok' }
+  }
+
+  // 2. OPERACIONAL: se não for próprio, acesso negado
+  if (perfilUpper === ROLE_CODE_OPERACIONAL) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error:
+        'Permissão negada: usuário operacional só pode acessar casos em que é Responsável ou Executor.',
+    }
+  }
+
+  // 3. GESTOR: verifica se o caso pertence à sua equipe direta
+  // Equipe direta definida exclusivamente por core_usuarios.gestor_id = callerCoreId
+  if (perfilUpper === ROLE_CODE_GESTOR) {
+    // Casos históricos sem nenhum ID central preenchido permanecem acessíveis ao Gestor para compatibilidade
+    if (!respCore && !execCore) {
+      return { allowed: true, status: 'ok' }
+    }
+
+    const targetUserIds = [respCore, execCore].filter(Boolean) as string[]
+    try {
+      const { data: teamMembers, error: teamError } = await supabase
+        .from('core_usuarios')
+        .select('id, gestor_id, ativo')
+        .in('id', targetUserIds)
+
+      if (teamError) {
+        console.error('[core-auth] Falha técnica ao verificar equipe do gestor:', teamError)
+        return {
+          allowed: false,
+          status: 'technical_failure',
+          error: 'Falha técnica ao verificar escopo da equipe direta no Gestor de Acessos.',
+        }
+      }
+
+      const isEquipeDireta = (teamMembers || []).some(
+        (m: any) => m.gestor_id === callerCoreId && m.ativo === true,
+      )
+
+      if (isEquipeDireta) {
+        return { allowed: true, status: 'ok' }
+      }
+
+      return {
+        allowed: false,
+        status: 'denied',
+        error:
+          'Permissão negada: gestores só podem acessar casos próprios ou de membros de sua equipe direta.',
+      }
+    } catch (err: any) {
+      console.error('[core-auth] Exceção ao verificar equipe do gestor:', err)
+      return {
+        allowed: false,
+        status: 'technical_failure',
+        error: 'Falha técnica ao verificar escopo de equipe no Gestor de Acessos.',
+      }
+    }
+  }
+
+  return {
+    allowed: false,
+    status: 'denied',
+    error: 'Permissão negada: perfil não autorizado para acessar este caso.',
+  }
+}
+
 export async function resolveGestorFromCore(
   supabase: SupabaseClient,
   targetCoreUsuarioId: string,

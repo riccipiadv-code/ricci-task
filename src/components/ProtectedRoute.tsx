@@ -160,3 +160,22 @@ export function PublicRoute({ children }: { children: React.ReactNode }) {
   // 4. Se não tem sessão, ou sessão com no_access/disabled (que deve ver a tela de login), renderiza login
   return <>{children}</>
 }
+
+/**
+ * Guarda de rota administrativa estrita:
+ * Permite renderização apenas para perfil ADMINISTRADOR.
+ * Usuários com perfis GESTOR ou OPERACIONAL são redirecionados para a tela principal ("/").
+ */
+export function AdminOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { corePerfil, loadingAccess } = useAuth()
+
+  if (loadingAccess) {
+    return <SplashScreen />
+  }
+
+  if (corePerfil !== 'ADMINISTRADOR') {
+    return <Navigate to="/" replace />
+  }
+
+  return <>{children}</>
+}

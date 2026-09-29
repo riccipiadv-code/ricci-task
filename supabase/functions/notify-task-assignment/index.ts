@@ -227,6 +227,39 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    // 3.1. Validação estrita de escopo do chamador sobre o caso:
+    // A chave SERVICE_ROLE_KEY ignora RLS; portanto a Edge Function deve validar o escopo
+    // com base nas regras canônicas do sistema:
+    // - ADMINISTRADOR: acessa qualquer caso.
+    // - GESTOR: próprio (responsável ou executor) OU equipe direta via core_usuarios.gestor_id.
+    // - OPERACIONAL: apenas se for Responsável ou Executor pelo ID central.
+    // Fora do escopo -> bloquear com 403 antes de qualquer consulta auxiliar ou envio SMTP.
+    if (callerCheck.coreUser && callerCheck.perfil) {
+      const scopeCheck = await checkTaskAccessScope(
+        supabase,
+        callerCheck.coreUser,
+        callerCheck.perfil,
+        tarefa,
+      )
+
+      if (!scopeCheck.allowed) {
+        console.warn(
+          `Disparo bloqueado: chamador ${callerCheck.coreUser.id} (${callerCheck.perfil}) fora do escopo da tarefa ${tarefa.id}. Motivo: ${scopeCheck.error}`,
+        )
+        return new Response(
+          JSON.stringify({
+            error:
+              scopeCheck.error ||
+              'Permissão negada: você não possui acesso a este caso para disparar notificações.',
+          }),
+          {
+            status: scopeCheck.status === 'technical_failure' ? 500 : 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+    }
+
     // REGRA DE ATRIBUIÇÃO:
     // A CRIAÇÃO de um caso NÃO deve enviar e-mail.
     // Se a requisição for para evento de atribuição e o caso for uma criação nova

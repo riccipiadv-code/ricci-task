@@ -4,7 +4,7 @@ import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AuthProvider } from '@/hooks/use-auth'
-import { ProtectedLayout, PublicRoute } from './components/ProtectedRoute'
+import { ProtectedLayout, PublicRoute, AdminOnlyRoute } from './components/ProtectedRoute'
 import Index from './pages/Index'
 import TarefasPage from './pages/Tarefas'
 import NomesControlePage from './pages/NomesControle'
@@ -37,9 +37,23 @@ const App = () => (
           <Route element={<ProtectedLayout />}>
             <Route path="/" element={<Index />} />
             <Route path="/tarefas" element={<TarefasPage />} />
-            <Route path="/tabelas/nomes" element={<NomesControlePage />} />
+            <Route
+              path="/tabelas/nomes"
+              element={
+                <AdminOnlyRoute>
+                  <NomesControlePage />
+                </AdminOnlyRoute>
+              }
+            />
             <Route path="/tabelas/arquivados" element={<ControlesArquivadosPage />} />
-            <Route path="/configuracoes" element={<ConfiguracoesPage />} />
+            <Route
+              path="/configuracoes"
+              element={
+                <AdminOnlyRoute>
+                  <ConfiguracoesPage />
+                </AdminOnlyRoute>
+              }
+            />
           </Route>
 
           <Route path="*" element={<NotFound />} />
