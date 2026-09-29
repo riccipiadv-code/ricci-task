@@ -1,3 +1,7 @@
+/**
+ * Edge Function: notify-task-assignment (v0.0.61)
+ * Autorização centralizada via verifyRicciTaskCaller (_shared/core-auth.ts)
+ */
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
