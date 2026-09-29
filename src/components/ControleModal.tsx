@@ -177,12 +177,13 @@ export function ControleModal({
       const [nomes, users, stProv] = await Promise.all([
         controleService.getNomesControle({ incluirInativos: true }),
         controleService.getUsuariosAtivos().catch((fetchErr) => {
-          console.error('Falha ao carregar usuários de task_usuarios:', fetchErr)
+          console.error('Falha ao carregar usuários elegíveis via RPC:', fetchErr)
           toast({
             variant: 'destructive',
-            title: 'Erro ao carregar usuários',
+            title: 'Erro ao carregar usuários elegíveis',
             description:
-              'Não foi possível obter a lista de usuários disponíveis. Verifique a conexão.',
+              fetchErr?.message ||
+              'Não foi possível obter a lista de usuários disponíveis no Gestor de Acessos.',
           })
           return [] as TaskUsuarioAtivoRecord[]
         }),

@@ -39,10 +39,9 @@ export default function Layout({ children }: LayoutProps) {
   const [loggingOut, setLoggingOut] = useState(false)
 
   // Submenu Tabelas expansível:
-  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes, /tabelas/usuarios ou /tabelas/arquivados)
+  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes ou /tabelas/arquivados)
   const isTabelasChildActive =
     location.pathname.startsWith('/tabelas/nomes') ||
-    location.pathname.startsWith('/tabelas/usuarios') ||
     location.pathname.startsWith('/tabelas/arquivados')
 
   const [tabelasExpanded, setTabelasExpanded] = useState(isTabelasChildActive)
@@ -287,20 +286,6 @@ export default function Layout({ children }: LayoutProps) {
                 >
                   <FolderKanban className="w-4 h-4 shrink-0" />
                   <span className="truncate">Nomes dos Controles</span>
-                </NavLink>
-
-                <NavLink
-                  to="/tabelas/usuarios"
-                  className={cn(
-                    'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
-                    location.pathname === '/tabelas/usuarios'
-                      ? 'bg-primary/15 text-primary font-semibold'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-                  )}
-                  title="Usuários"
-                >
-                  <Users className="w-4 h-4 shrink-0" />
-                  <span className="truncate">Usuários</span>
                 </NavLink>
 
                 <NavLink

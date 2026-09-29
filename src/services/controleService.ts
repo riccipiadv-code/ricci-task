@@ -187,96 +187,37 @@ export const controleService = {
   // --------------------------------------------------------------------------
   /**
    * Retorna os usuários disponíveis para seleção em NOVOS Responsáveis e Executores:
-   * Regra Central (Etapa 1):
-   * - task_usuarios.ativo = true
-   * - task_usuarios.core_usuario_id preenchido
-   * - usuário central ativo (core_usuarios.ativo = true)
-   * - vínculo ativo ao sistema 'RICCI_TASK' (core_usuario_sistemas.ativo = true)
-   * - sistema 'RICCI_TASK' ativo e perfil central ativo
-   * Mantém o formato TaskUsuarioAtivoRecord (id, nome, email, ativo) preservando task_usuarios.id.
+   * Usa a função SQL RPC public.task_listar_usuarios_elegiveis() para listar e provisionar
+   * candidatos elegíveis validados centralmente no Gestor de Acessos Ricci (sistema RICCI_TASK).
+   *
+   * Fail-Closed estrito: se a RPC falhar, lança erro para a interface e NÃO oferece candidatos
+   * não validados, nem recorre ao cadastro local.
+   *
+   * Preserva task_usuarios.id retornado pela RPC como vínculo operacional das tarefas.
+   * Apresenta nome e e-mail centrais validados quando disponíveis.
    * Ordenado alfabeticamente por nome.
    */
   async getUsuariosAtivos(): Promise<TaskUsuarioAtivoRecord[]> {
-    // 1. Busca usuários de task_usuarios ativos e com core_usuario_id preenchido
-    const { data: taskUsers, error: taskError } = await supabase
-      .from('task_usuarios')
-      .select('id, nome, email, ativo, core_usuario_id')
-      .eq('ativo', true)
-      .not('core_usuario_id', 'is', null)
+    const { data, error } = await supabase.rpc('task_listar_usuarios_elegiveis')
 
-    if (taskError) {
-      console.error('Erro ao buscar task_usuarios ativos:', taskError)
+    if (error) {
+      console.error('Falha na RPC task_listar_usuarios_elegiveis:', error)
       throw new Error(
-        'Não foi possível carregar a lista de usuários disponíveis. Verifique sua conexão.',
+        error.message ||
+          'Falha técnica ao consultar usuários elegíveis no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
       )
     }
 
-    if (!taskUsers || taskUsers.length === 0) {
+    if (!data || !Array.isArray(data)) {
       return []
     }
 
-    // Extrai core_usuario_ids distintos
-    const coreUserIds = Array.from(
-      new Set(taskUsers.map((u) => u.core_usuario_id).filter((id): id is string => Boolean(id))),
-    )
-
-    if (coreUserIds.length === 0) {
-      return []
-    }
-
-    // 2. Busca sistema RICCI_TASK
-    const { data: sistemaData, error: sistemaError } = await supabase
-      .from('core_sistemas')
-      .select('id, codigo, ativo')
-      .eq('codigo', 'RICCI_TASK')
-      .maybeSingle()
-
-    if (sistemaError) {
-      console.error('Erro ao consultar core_sistemas para RICCI_TASK:', sistemaError)
-      // Fail-closed: falha técnica na leitura central NÃO deve disponibilizar candidatos não confirmados
-      throw new Error(
-        'Falha técnica ao validar permissões no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
-      )
-    }
-
-    if (!sistemaData || !sistemaData.ativo) {
-      return []
-    }
-
-    // 3. Valida quais core_usuarios possuem usuário central ativo e vínculo ativo com perfil ativo em RICCI_TASK
-    const { data: validLinks, error: linksError } = await supabase
-      .from('core_usuario_sistemas')
-      .select(`
-        usuario_id,
-        ativo,
-        core_usuarios!inner(id, ativo),
-        core_perfis!inner(id, ativo)
-      `)
-      .in('usuario_id', coreUserIds)
-      .eq('sistema_id', sistemaData.id)
-      .eq('ativo', true)
-      .eq('core_usuarios.ativo', true)
-      .eq('core_perfis.ativo', true)
-
-    if (linksError) {
-      console.error('Erro ao consultar vínculos de core_usuario_sistemas:', linksError)
-      // Fail-closed: falha técnica na leitura central NÃO deve disponibilizar candidatos não confirmados
-      throw new Error(
-        'Falha técnica ao consultar vínculos no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.',
-      )
-    }
-
-    const authorizedCoreIds = new Set((validLinks || []).map((l: any) => l.usuario_id))
-
-    // 4. Filtra exclusivamente os task_usuarios com core_usuario_id autorizado
-    const lista: TaskUsuarioAtivoRecord[] = taskUsers
-      .filter((u) => u.core_usuario_id && authorizedCoreIds.has(u.core_usuario_id))
-      .map((u) => ({
-        id: u.id,
-        nome: u.nome,
-        email: u.email,
-        ativo: u.ativo,
-      }))
+    const lista: TaskUsuarioAtivoRecord[] = data.map((item: any) => ({
+      id: item.id,
+      nome: item.nome,
+      email: item.email,
+      ativo: Boolean(item.ativo),
+    }))
 
     return lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
   },

@@ -1,6 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
+import { verifyRicciTaskAdmin, resolveValidatedTaskUserEmail } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -168,45 +169,25 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      // Validar no backend se o usuário possui perfil administrativo.
-      // 1. Consulta em profiles por id = user.id
-      let isAdmin = false
-      const { data: profileData, error: profileErr } = await supabase
-        .from('profiles')
-        .select('id, perfil, ativo')
-        .eq('id', user.id)
-        .maybeSingle()
+      // Validar no backend se o usuário possui perfil ADMINISTRADOR central de RICCI_TASK:
+      // auth.users.id → core_usuarios.auth_user_id → core_usuario_sistemas → sistema RICCI_TASK → core_perfis.codigo = 'ADMINISTRADOR'
+      // Valida ativo em core_usuarios, core_usuario_sistemas, core_sistemas e core_perfis.
+      // Substitui integralmente a autorização legada local/profiles.
+      const adminCheck = await verifyRicciTaskAdmin(supabase, user.id)
 
-      if (profileErr) {
-        console.warn('Aviso ao consultar perfil em profiles para autorização manual:', profileErr)
-      }
-
-      if (profileData && profileData.ativo && profileData.perfil === 'administrador') {
-        isAdmin = true
-      } else if (user.email) {
-        // Fallback por e-mail em profiles
-        const { data: profileByEmail } = await supabase
-          .from('profiles')
-          .select('id, perfil, ativo')
-          .ilike('email', user.email.trim())
-          .maybeSingle()
-
-        if (profileByEmail && profileByEmail.ativo && profileByEmail.perfil === 'administrador') {
-          isAdmin = true
-        }
-      }
-
-      if (!isAdmin) {
+      if (!adminCheck.allowed || !adminCheck.coreUser) {
         console.warn(
-          `Acesso proibido: usuário ${user.id} (${user.email}) não possui perfil administrativo para execução manual de atrasos.`,
+          `Acesso proibido: usuário ${user.id} (${user.email}) não possui perfil central ADMINISTRADOR em RICCI_TASK.`,
+          adminCheck.error,
         )
         return new Response(
           JSON.stringify({
             error:
-              'Permissão negada. Apenas usuários administradores podem disparar manualmente a rotina de alertas de atraso.',
+              adminCheck.error ||
+              'Permissão negada. Apenas usuários com perfil ADMINISTRADOR do Ricci Task podem disparar manualmente a rotina de atrasos.',
           }),
           {
-            status: 403,
+            status: adminCheck.status || 403,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           },
         )
@@ -356,31 +337,38 @@ Deno.serve(async (req: Request) => {
       tarefasMap.set(t.id, t)
     }
 
-    // 6. Coletar IDs de usuários para buscar em task_usuarios
+    // 6. Cache de destinatários validados no Gestor de Acessos para otimizar chamadas
+    const validatedRecipientsCache = new Map<
+      string,
+      { taskUsuarioId: string; coreUsuarioId: string; nome: string; email: string } | null
+    >()
+
+    const getValidatedRecipient = async (taskUsuarioId?: string | null) => {
+      if (!taskUsuarioId) return null
+      if (validatedRecipientsCache.has(taskUsuarioId)) {
+        return validatedRecipientsCache.get(taskUsuarioId) || null
+      }
+      const resolved = await resolveValidatedTaskUserEmail(supabase, taskUsuarioId)
+      validatedRecipientsCache.set(taskUsuarioId, resolved)
+      return resolved
+    }
+
+    // Mapa de nomes locais para fallback na montagem do e-mail (caso histórico)
     const userIdsSet = new Set<string>()
     for (const t of tarefasList || []) {
       if (t.executor_usuario_id) userIdsSet.add(t.executor_usuario_id)
       if (t.responsavel_usuario_id) userIdsSet.add(t.responsavel_usuario_id)
     }
 
-    const usuariosMap = new Map<
-      string,
-      { id: string; nome: string | null; email: string | null; ativo: boolean | null }
-    >()
-
+    const localNamesMap = new Map<string, string>()
     if (userIdsSet.size > 0) {
-      const { data: usersList, error: usersError } = await supabase
+      const { data: usersList } = await supabase
         .from('task_usuarios')
-        .select('id, nome, email, ativo')
+        .select('id, nome')
         .in('id', Array.from(userIdsSet))
 
-      if (usersError) {
-        console.error('Erro ao consultar task_usuarios:', usersError)
-        throw new Error(`Erro ao consultar usuários: ${usersError.message}`)
-      }
-
       for (const u of usersList || []) {
-        usuariosMap.set(u.id, u)
+        if (u.nome) localNamesMap.set(u.id, u.nome)
       }
     }
 
@@ -433,37 +421,27 @@ Deno.serve(async (req: Request) => {
         continue
       }
 
-      // Obter dados atuais de Executor e Responsável em task_usuarios
-      const executorUser = tarefa.executor_usuario_id
-        ? usuariosMap.get(tarefa.executor_usuario_id) || null
-        : null
-      const responsavelUser = tarefa.responsavel_usuario_id
-        ? usuariosMap.get(tarefa.responsavel_usuario_id) || null
-        : null
+      // Obter dados do Executor validados no Gestor de Acessos
+      // A partir do ID gravado no caso: task_usuarios.core_usuario_id -> core_usuarios.email
+      // Validando usuário, vínculo com RICCI_TASK, sistema e perfil ativos.
+      // Sem vínculo válido ou falha central -> fail-closed: não envia para e-mail local antigo.
+      const validatedExec = await getValidatedRecipient(tarefa.executor_usuario_id)
 
-      // REGRA ÚNICA DO RICCI TASK:
-      // TO = Executor; CC = Responsável;
-      // Normalizar com trim().toLowerCase() antes de comparar/enviar;
-      // Se TO e CC forem iguais, CC = vazio;
-      // Executor sem e-mail válido -> não enviar (motivo controlado).
-      const toEmail = executorUser?.email?.trim().toLowerCase() || ''
-
-      if (!isValidEmail(toEmail)) {
+      if (!validatedExec || !isValidEmail(validatedExec.email)) {
         console.warn(
-          `Alerta de atraso ignorado: Executor sem e-mail válido para providência ${prov.id} (caso ${tarefa.numero_caso})`,
+          `Alerta de atraso ignorado: Executor sem vínculo central ativo válido para RICCI_TASK ou sem e-mail (caso ${tarefa.numero_caso}, providência ${prov.id})`,
         )
 
-        // Registrar em task_email_eventos com status 'skipped' para evitar reprocessamentos inúteis no dia
         if (!existingEvent) {
           await supabase.from('task_email_eventos').insert({
             tarefa_id: tarefa.id,
             providencia_id: prov.id,
             tipo_evento: 'providencia_atraso',
             event_key: eventKey,
-            to_email: toEmail || null,
+            to_email: null,
             cc_email: null,
             status: 'skipped',
-            erro: 'executor_sem_email_valido',
+            erro: 'executor_sem_vinculo_central_valido',
             data_referencia: todayStr,
           })
         }
@@ -473,13 +451,17 @@ Deno.serve(async (req: Request) => {
           tarefa_id: tarefa.id,
           event_key: eventKey,
           status: 'skipped',
-          reason: 'executor_sem_email_valido',
+          reason: 'executor_sem_vinculo_central_valido',
         })
         totalSkipped++
         continue
       }
 
-      const respEmailRaw = responsavelUser?.email?.trim().toLowerCase() || ''
+      const toEmail = validatedExec.email.trim().toLowerCase()
+
+      // Obter dados do Responsável validados centralmente
+      const validatedResp = await getValidatedRecipient(tarefa.responsavel_usuario_id)
+      const respEmailRaw = validatedResp?.email?.trim().toLowerCase() || ''
       let ccEmail: string | null = null
       if (isValidEmail(respEmailRaw) && respEmailRaw !== toEmail) {
         ccEmail = respEmailRaw
@@ -549,10 +531,16 @@ Deno.serve(async (req: Request) => {
         nomeControle = (ncData?.nome || '').trim()
       }
 
-      // Montar conteúdo do e-mail
-      const execNomeFull = (executorUser?.nome || '').trim()
+      // Montar conteúdo do e-mail (prioriza nome central; fallback para nome histórico local)
+      const execLocalName = tarefa.executor_usuario_id
+        ? localNamesMap.get(tarefa.executor_usuario_id)
+        : ''
+      const respLocalName = tarefa.responsavel_usuario_id
+        ? localNamesMap.get(tarefa.responsavel_usuario_id)
+        : ''
+      const execNomeFull = (validatedExec.nome || execLocalName || '').trim()
       const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
-      const respNomeFull = (responsavelUser?.nome || '').trim()
+      const respNomeFull = (validatedResp?.nome || respLocalName || '').trim()
       const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
       const identificacaoCasoStr = (tarefa.identificacao_caso || '').trim()
       const provDescricao = (prov.providencia || '').trim()

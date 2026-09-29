@@ -1,6 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
+import { resolveValidatedTaskUserEmail } from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -297,62 +298,19 @@ Deno.serve(async (req: Request) => {
       nomeControle = (ncData?.nome || '').trim()
     }
 
-    // 4. Buscar Executor e Responsável em task_usuarios (regra única de destinatários)
-    const userIdsToFetch: string[] = []
-    if (tarefa.executor_usuario_id) userIdsToFetch.push(tarefa.executor_usuario_id)
-    if (tarefa.responsavel_usuario_id && !userIdsToFetch.includes(tarefa.responsavel_usuario_id)) {
-      userIdsToFetch.push(tarefa.responsavel_usuario_id)
-    }
-
-    let executorUser: {
-      id: string
-      nome: string | null
-      email: string | null
-      ativo: boolean | null
-    } | null = null
-    let responsavelUser: {
-      id: string
-      nome: string | null
-      email: string | null
-      ativo: boolean | null
-    } | null = null
-
-    if (userIdsToFetch.length > 0) {
-      const { data: usersList, error: usersError } = await supabase
-        .from('task_usuarios')
-        .select('id, nome, email, ativo')
-        .in('id', userIdsToFetch)
-
-      if (usersError) {
-        console.error('Erro ao consultar task_usuarios:', usersError)
-        throw new Error(`Erro ao consultar usuários: ${usersError.message}`)
-      }
-
-      if (usersList) {
-        for (const u of usersList) {
-          if (u.id === tarefa.executor_usuario_id) executorUser = u
-          if (u.id === tarefa.responsavel_usuario_id) responsavelUser = u
-        }
-      }
-    }
-
-    // REGRA ÚNICA DE DESTINATÁRIOS:
-    // - TO = Executor, CC = Responsável. E-mails sempre obtidos de task_usuarios.
-    // - Normalizar endereços com trim().toLowerCase() antes de enviar.
-    // - Se TO e CC forem iguais: TO = Executor, CC = vazio (não duplicar).
-    const toEmail = executorUser?.email?.trim().toLowerCase() || ''
-    if (!isValidEmail(toEmail)) {
-      console.warn('Envio abortado: Executor não possui e-mail válido.', {
-        tarefa_id,
-        executor_usuario_id: tarefa.executor_usuario_id,
-        email: executorUser?.email,
-      })
+    // 4. Buscar Executor e Responsável validados centralmente no Gestor de Acessos:
+    // A partir de task_usuarios.id gravado no caso:
+    // - Obtém task_usuarios.core_usuario_id
+    // - Obtém o e-mail atual em core_usuarios
+    // - Valida: core_usuarios.ativo = true, core_usuario_sistemas.ativo = true (sistema RICCI_TASK ativo) e core_perfis.ativo = true
+    // - Sem vínculo válido ou em falha de leitura central: NÃO envia para o e-mail local antigo (fail-closed).
+    if (!tarefa.executor_usuario_id) {
       return new Response(
         JSON.stringify({
           triggered: true,
           sent: false,
-          reason: 'executor_sem_email_valido',
-          message: 'O Executor atribuído não possui e-mail cadastrado ou válido.',
+          reason: 'executor_ausente',
+          message: 'A tarefa não possui Executor atribuído.',
         }),
         {
           status: 200,
@@ -361,7 +319,51 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    const respEmailRaw = responsavelUser?.email?.trim().toLowerCase() || ''
+    const validatedExecutor = await resolveValidatedTaskUserEmail(
+      supabase,
+      tarefa.executor_usuario_id,
+    )
+
+    if (!validatedExecutor || !isValidEmail(validatedExecutor.email)) {
+      console.warn(
+        'Envio abortado: Executor sem vínculo central ativo válido no Gestor de Acessos para RICCI_TASK ou sem e-mail.',
+        {
+          tarefa_id,
+          executor_usuario_id: tarefa.executor_usuario_id,
+        },
+      )
+      return new Response(
+        JSON.stringify({
+          triggered: true,
+          sent: false,
+          reason: 'executor_sem_vinculo_central_valido',
+          message:
+            'O Executor atribuído não possui vínculo central ativo no RICCI_TASK ou e-mail corporativo válido.',
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const toEmail = validatedExecutor.email.trim().toLowerCase()
+
+    let validatedResponsavel: {
+      taskUsuarioId: string
+      coreUsuarioId: string
+      nome: string
+      email: string
+    } | null = null
+
+    if (tarefa.responsavel_usuario_id) {
+      validatedResponsavel = await resolveValidatedTaskUserEmail(
+        supabase,
+        tarefa.responsavel_usuario_id,
+      )
+    }
+
+    const respEmailRaw = validatedResponsavel?.email?.trim().toLowerCase() || ''
     let ccEmail: string | null = null
     if (isValidEmail(respEmailRaw) && respEmailRaw !== toEmail) {
       ccEmail = respEmailRaw
@@ -478,9 +480,30 @@ Deno.serve(async (req: Request) => {
 
     // 7. Preparar conteúdo de e-mail de acordo com o tipo
     // Dados gerais
-    const execNomeFull = (executorUser?.nome || '').trim()
+    // Busca nomes para exibição: prioriza nome central validado; fallback para nome histórico em task_usuarios
+    let execNomeLocal = ''
+    let respNomeLocal = ''
+    try {
+      const idsParaNomes = [tarefa.executor_usuario_id, tarefa.responsavel_usuario_id].filter(
+        Boolean,
+      )
+      if (idsParaNomes.length > 0) {
+        const { data: usersNames } = await supabase
+          .from('task_usuarios')
+          .select('id, nome')
+          .in('id', idsParaNomes)
+        for (const u of usersNames || []) {
+          if (u.id === tarefa.executor_usuario_id) execNomeLocal = u.nome || ''
+          if (u.id === tarefa.responsavel_usuario_id) respNomeLocal = u.nome || ''
+        }
+      }
+    } catch {
+      // noop
+    }
+
+    const execNomeFull = (validatedExecutor.nome || execNomeLocal || '').trim()
     const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
-    const respNomeFull = (responsavelUser?.nome || '').trim()
+    const respNomeFull = (validatedResponsavel?.nome || respNomeLocal || '').trim()
     const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
 
     let subject = ''

@@ -310,12 +310,12 @@ export default function ConfiguracoesPage() {
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">Responsável e Executor:</span>
-              <span className="text-foreground">task_usuarios (ativo = true)</span>
+              <span className="text-foreground">Gestor de Acessos Ricci (RICCI_TASK)</span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground text-[11px]">
               <span className="text-muted-foreground">Fonte:</span>
               <span className="text-muted-foreground">
-                Tabela task_usuarios (gerenciada no menu Tabelas &gt; Usuários).
+                Gestor central de usuários e acessos (RPC task_listar_usuarios_elegiveis).
               </span>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-muted-foreground">
