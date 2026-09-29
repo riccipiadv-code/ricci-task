@@ -977,34 +977,72 @@ export const controleService = {
         updatePayload.arquivado_at = existingRecord.arquivado_at || nowIso
       }
 
-      const { data, error } = await supabase
+      // Executa o update. Quando RLS estiver habilitado com política que restringe SELECT
+      // ao escopo do usuário, se houver transferência para fora do escopo, .select().single()
+      // retornará erro PGRST116 (0 rows returned) ou data nulo.
+      // Tratamos isso de forma resiliente para suportar transferência com perda de acesso.
+      const { data: updatedRows, error: updateErr } = await supabase
         .from('task_tarefas')
         .update(updatePayload)
         .eq('id', input.id)
         .select()
-        .single()
 
-      if (error) {
-        console.error('Erro ao atualizar task_tarefas:', error)
-        throw error
+      if (updateErr) {
+        console.error('Erro ao atualizar task_tarefas:', updateErr)
+        throw updateErr
       }
+
+      const data = updatedRows && updatedRows.length > 0 ? updatedRows[0] : null
+      const updatedTimestamp = data?.updated_at || nowIso
 
       // Notifica alteração global caso tenha sido arquivado automaticamente
       if (statusFinaliza && typeof window !== 'undefined') {
         window.dispatchEvent(
           new CustomEvent('ricci:controles-changed', {
-            detail: { action: 'auto-archive', controleId: data.id },
+            detail: { action: 'auto-archive', controleId: input.id },
           }),
         )
       }
 
-      const loaded = await this.getControleById(data.id, usuariosParam)
+      // Releitura pós-update resiliente: se getControleById retornar null (por perda de acesso via RLS
+      // ou escopo), monta um snapshot local consistente para que o fluxo conclua sem quebrar.
+      let loaded: TaskControleRecord | null = null
+      try {
+        loaded = await this.getControleById(input.id, usuariosParam)
+      } catch (loadErr) {
+        console.warn('Aviso ao reler controle pós-update (possível perda de escopo):', loadErr)
+      }
+
       if (loaded) {
-        // Assegura que o updated_at retornado pelo banco após o trigger prevaleça
-        loaded.updated_at = data.updated_at
+        loaded.updated_at = updatedTimestamp
         return loaded
       }
-      return data as TaskControleRecord
+
+      // Snapshot local seguro caso a releitura não retorne o registro (ex.: perda de acesso)
+      const snapshot: TaskControleRecord = {
+        ...(existingRecord || {}),
+        id: input.id,
+        nome_controle_id: input.nome_controle_id,
+        numero_caso: Number(existingRecord?.numero_caso ?? 0),
+        identificacao_caso: cleanNewIdent,
+        status_id: input.status_id,
+        data_autorizacao: cleanNewDataAut,
+        prazo_conclusao: cleanNewPrazo,
+        responsavel_usuario_id: opRespId || targetRespCoreId,
+        executor_usuario_id: opExecId || targetExecCoreId,
+        responsavel_core_usuario_id: targetRespCoreId,
+        executor_core_usuario_id: targetExecCoreId,
+        pasta_cliente: cleanNewPastaCliente,
+        pasta_ricci: cleanNewPastaRicci,
+        created_at: existingRecord?.created_at || nowIso,
+        updated_at: updatedTimestamp,
+        updated_by: userId,
+        arquivado_at: statusFinaliza
+          ? existingRecord?.arquivado_at || nowIso
+          : existingRecord?.arquivado_at || null,
+        providencias: existingRecord?.providencias || [],
+      }
+      return snapshot
     } else {
       const insertPayload: any = {
         nome_controle_id: input.nome_controle_id,

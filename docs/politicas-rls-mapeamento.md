@@ -112,12 +112,17 @@ Para garantir alto desempenho e evitar reconsultas pesadas em cada linha avaliad
     ```
 
 - **UPDATE** (`task_tarefas_update_policy`):
+  - **Atenção Técnica Crítica sobre o PostgreSQL**:
+    - No PostgreSQL, quando a cláusula `WITH CHECK` é **omitida** em uma política de `UPDATE`, ela **NÃO equivale a `WITH CHECK (true)`**. Pelo padrão do PostgreSQL RLS, a expressão de `USING` é **automaticamente reaproveitada** como `WITH CHECK`.
+    - Isso significa que, se uma política de `UPDATE` padrão omitir `WITH CHECK`, uma tentativa de reatribuição para um terceiro fora do escopo do editor falhará com violação de RLS na linha resultante, impedindo a transferência segura e gerando inconsistências no cliente.
+    - Portanto, se a operação for feita via UPDATE direto:
+      - Deve-se especificar explicitamente `WITH CHECK (true)` para permitir que o usuário com acesso prévio (validado em `USING`) conclua a transferência mesmo perdendo acesso posterior.
+      - OU, preferencialmente e de forma recomendada pela arquitetura, utilizar a função RPC `SECURITY DEFINER` (`public.task_transferir_atribuicao`), que bloqueia a linha (`FOR UPDATE`), valida a autorização estrita no estado anterior real da linha, executa o update, grava auditoria em `task_transicoes_atribuicao` e devolve os metadados de transição sem depender de permissões diretas na API REST.
   - **USING**: Mesma expressão do `SELECT` (o chamador só pode atualizar casos que já estejam dentro do seu escopo atual prévio ao salvamento).
-  - **WITH CHECK**:
-    - Não deve exigir que o editor continue no novo escopo resultante (`WITH CHECK (true)` ou omitido para o escopo de destino). A autorização é avaliada exclusivamente no escopo ANTERIOR (`USING`).
-    - **Reatribuição com perda de acesso**: O salvamento da reatribuição DEVE concluir com sucesso (a autorização já foi atestada na leitura prévia e no `USING`).
-    - Após o commit, o caso naturalmente sai da listagem do editor na próxima leitura/refresh (já que não atende mais ao `SELECT`).
-    - As notificações por e-mail disparam para os novos responsáveis sem conceder acesso retroativo nem bloquear o salvamento realizado pelo editor anterior.
+  - **WITH CHECK explícito**: `WITH CHECK (true)` para políticas de UPDATE direto de dados gerais da tarefa, permitindo transferências autorizadas pelo estado prévio.
+  - **Reatribuição com perda de acesso**: O salvamento da reatribuição conclui com sucesso (autorização atestada no estado anterior). Após o commit, o caso sai da listagem do editor na próxima leitura/refresh (já que não atende mais ao `SELECT`).
+  - **Notificações**: As notificações por e-mail disparam para os novos responsáveis sem conceder acesso retroativo nem bloquear o salvamento realizado pelo editor anterior.
+  - **Filtros de Frontend NÃO são Proteção Suficiente**: A proteção deve ser estritamente garantida no servidor (RLS no banco e `checkTaskAccessScope` nas Edge Functions), cobrindo requisições diretas à API REST/PostgREST.
 
 - **DELETE** (`task_tarefas_delete_policy`):
   - Restrito a `ADMINISTRADOR` (a exclusão padrão no Ricci Task é lógica via `deleted_at`, que passa por `UPDATE`).

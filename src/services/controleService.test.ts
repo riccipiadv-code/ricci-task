@@ -1145,5 +1145,75 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(depois.map((c) => c.id)).not.toContain('t-2')
       expect(depois).toHaveLength(0)
     })
+
+    it('saveControle: transferência com perda de acesso conclui com sucesso mesmo quando a releitura pós-update (getControleById) retorna null', async () => {
+      // Simula saveControle chamando supabase.from('task_tarefas').update(...)
+      // e depois getControleById retornando null (simulando RLS bloqueando o SELECT para o autor que perdeu acesso)
+      const existingControle = {
+        id: 't-transf-1',
+        identificacao_caso: 'Caso Transferência',
+        numero_caso: 101,
+        nome_controle_id: 'nc-1',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-op-autor',
+        executor_core_usuario_id: 'cu-op-autor',
+        responsavel_usuario_id: 'op-autor',
+        executor_usuario_id: 'op-autor',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        arquivado_at: null,
+      }
+
+      vi.spyOn(controleService, 'getControleById')
+        // 1ª chamada: existingRecord antes do update
+        .mockResolvedValueOnce(existingControle as any)
+        // 2ª chamada: releitura pós-update retorna null (perda de acesso pelo RLS)
+        .mockResolvedValueOnce(null)
+
+      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+        if (table === 'task_tarefas') {
+          return {
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockResolvedValue({
+                  data: [
+                    {
+                      id: 't-transf-1',
+                      responsavel_core_usuario_id: 'cu-novo-resp',
+                      executor_core_usuario_id: 'cu-novo-exec',
+                      updated_at: '2025-05-10T12:00:00Z',
+                    },
+                  ],
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }) as any)
+
+      const result = await controleService.saveControle({
+        id: 't-transf-1',
+        identificacao_caso: 'Caso Transferência',
+        nome_controle_id: 'nc-1',
+        status_id: 'st-1',
+        responsavel_usuario_id: 'cu-novo-resp',
+        executor_usuario_id: 'cu-novo-exec',
+        responsavel_core_usuario_id: 'cu-novo-resp',
+        executor_core_usuario_id: 'cu-novo-exec',
+      })
+
+      // Operação CONCLUI INTEGRALMENTE, sem jogar exceção, retornando snapshot consistente
+      expect(result).toBeDefined()
+      expect(result.id).toBe('t-transf-1')
+      expect(result.responsavel_core_usuario_id).toBe('cu-novo-resp')
+      expect(result.executor_core_usuario_id).toBe('cu-novo-exec')
+
+      // Na releitura subsequente por este mesmo usuário, o controle não é mais acessível
+      vi.spyOn(controleService, 'getControleById').mockResolvedValue(null)
+      const leituraPosterior = await controleService.getControleById('t-transf-1')
+      expect(leituraPosterior).toBeNull()
+    })
   })
 })

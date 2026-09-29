@@ -497,8 +497,8 @@ export async function verifyCoreAdmin(
  */
 export async function checkTaskAccessScope(
   supabase: SupabaseClient,
-  callerCoreUser: { id: string },
-  callerPerfil: string,
+  callerCoreUser: { id: string } | null | undefined,
+  callerPerfil: string | null | undefined,
   tarefa: {
     id: string
     responsavel_core_usuario_id?: string | null
@@ -507,38 +507,8 @@ export async function checkTaskAccessScope(
     executor_usuario_id?: string | null
   },
 ): Promise<{ allowed: boolean; status: 'ok' | 'denied' | 'technical_failure'; error?: string }> {
-  const perfilUpper = (callerPerfil || '').toUpperCase()
-
-  // 1. ADMINISTRADOR tem acesso irrestrito
-  if (perfilUpper === ROLE_CODE_ADMINISTRADOR) {
-    return { allowed: true, status: 'ok' }
-  }
-
-  const callerCoreId = callerCoreUser.id
-  const respCore = tarefa.responsavel_core_usuario_id || null
-  const execCore = tarefa.executor_core_usuario_id || null
-
-  // "Próprio" = ser Responsável ou Executor pelo ID central
-  const isProprio = Boolean(
-    (respCore && respCore === callerCoreId) || (execCore && execCore === callerCoreId),
-  )
-
-  if (isProprio) {
-    return { allowed: true, status: 'ok' }
-  }
-
-  // 2. OPERACIONAL: se não for próprio, acesso negado
-  if (perfilUpper === ROLE_CODE_OPERACIONAL) {
-    return {
-      allowed: false,
-      status: 'denied',
-      error:
-        'Permissão negada: usuário operacional só pode acessar casos em que é Responsável ou Executor.',
-    }
-  }
-
-  // Validação fail-closed do chamador:
-  // Se o chamador não possuir ID central válido, acesso negado
+  // (a) chamador sem ID central válido -> denied
+  const callerCoreId = (callerCoreUser?.id || '').trim()
   if (!callerCoreId) {
     return {
       allowed: false,
@@ -547,9 +517,24 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // Validação fail-closed do caso:
-  // Se o caso não tiver nenhum ID central válido (responsavel_core_usuario_id ou executor_core_usuario_id),
-  // acesso bloqueado imediatamente (fail-closed, sem fallback permissivo).
+  // (b) perfil não reconhecido (só ADMINISTRADOR, GESTOR, OPERACIONAL) -> denied, MESMO se ID bater com responsável/executor
+  const perfilUpper = (callerPerfil || '').trim().toUpperCase()
+  if (
+    perfilUpper !== ROLE_CODE_ADMINISTRADOR &&
+    perfilUpper !== ROLE_CODE_GESTOR &&
+    perfilUpper !== ROLE_CODE_OPERACIONAL
+  ) {
+    return {
+      allowed: false,
+      status: 'denied',
+      error: 'Permissão negada: perfil não autorizado para acessar este caso.',
+    }
+  }
+
+  // (c) tarefa sem IDs centrais -> denied (fail-closed, sem fallback permissivo)
+  const respCore = tarefa.responsavel_core_usuario_id || null
+  const execCore = tarefa.executor_core_usuario_id || null
+
   if (!respCore && !execCore) {
     return {
       allowed: false,
@@ -558,9 +543,35 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // 3. GESTOR: verifica se o caso pertence à sua equipe direta
-  // Equipe direta definida exclusivamente por core_usuarios.gestor_id = callerCoreId (1 nível)
+  // (d) ADMINISTRADOR -> irrestrito
+  if (perfilUpper === ROLE_CODE_ADMINISTRADOR) {
+    return { allowed: true, status: 'ok' }
+  }
+
+  // "Próprio" = ser Responsável ou Executor pelo ID central
+  const isProprio = Boolean(
+    (respCore && respCore === callerCoreId) || (execCore && execCore === callerCoreId),
+  )
+
+  // (e) OPERACIONAL -> só próprio
+  if (perfilUpper === ROLE_CODE_OPERACIONAL) {
+    if (isProprio) {
+      return { allowed: true, status: 'ok' }
+    }
+    return {
+      allowed: false,
+      status: 'denied',
+      error:
+        'Permissão negada: usuário operacional só pode acessar casos em que é Responsável ou Executor.',
+    }
+  }
+
+  // (f) GESTOR -> próprio + equipe direta ativa (gestor_id), falha de consulta -> technical_failure
   if (perfilUpper === ROLE_CODE_GESTOR) {
+    if (isProprio) {
+      return { allowed: true, status: 'ok' }
+    }
+
     const targetUserIds = [respCore, execCore].filter(Boolean) as string[]
     try {
       const { data: teamMembers, error: teamError } = await supabase
@@ -601,7 +612,6 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // Perfil desconhecido ou não autorizado -> denied
   return {
     allowed: false,
     status: 'denied',

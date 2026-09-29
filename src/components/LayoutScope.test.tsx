@@ -44,9 +44,15 @@ describe('Layout - Visibilidade de Menus por Perfil Central', () => {
     const configMobile = screen.queryByText('Ajustes')
     expect(configDesktop).not.toBeNull()
     expect(configMobile).not.toBeNull()
+
+    // Controles Arquivados deve estar visível
+    const arquivadosDesktop = screen.getAllByText('Controles Arquivados')
+    expect(arquivadosDesktop.length).toBeGreaterThan(0)
+    const arquivadosMobile = screen.getAllByText('Arquivados')
+    expect(arquivadosMobile.length).toBeGreaterThan(0)
   })
 
-  it('GESTOR: NÃO exibe "Tabelas" nem "Configurações" / "Ajustes"', () => {
+  it('GESTOR: exibe "Controles Arquivados" na navegação primária desktop e mobile, mas NÃO exibe "Tabelas" nem "Configurações" / "Ajustes"', () => {
     vi.spyOn(authHookModule, 'useAuth').mockReturnValue({
       user: { id: 'u-gestor', email: 'gestor@riccipi.com.br' } as any,
       corePerfil: 'GESTOR',
@@ -64,12 +70,19 @@ describe('Layout - Visibilidade de Menus por Perfil Central', () => {
       </MemoryRouter>,
     )
 
+    // Controles Arquivados DEVE estar visível para GESTOR
+    const arquivadosDesktop = screen.getAllByText('Controles Arquivados')
+    expect(arquivadosDesktop.length).toBeGreaterThan(0)
+    const arquivadosMobile = screen.getAllByText('Arquivados')
+    expect(arquivadosMobile.length).toBeGreaterThan(0)
+
+    // Tabelas e Configurações / Ajustes permanecem restritos ao ADMINISTRADOR
     expect(screen.queryByText('Tabelas')).toBeNull()
     expect(screen.queryByText('Configurações')).toBeNull()
     expect(screen.queryByText('Ajustes')).toBeNull()
   })
 
-  it('OPERACIONAL: NÃO exibe "Tabelas" nem "Configurações" / "Ajustes"', () => {
+  it('OPERACIONAL: exibe "Controles Arquivados" na navegação primária desktop e mobile, mas NÃO exibe "Tabelas" nem "Configurações" / "Ajustes"', () => {
     vi.spyOn(authHookModule, 'useAuth').mockReturnValue({
       user: { id: 'u-op', email: 'op@riccipi.com.br' } as any,
       corePerfil: 'OPERACIONAL',
@@ -87,6 +100,13 @@ describe('Layout - Visibilidade de Menus por Perfil Central', () => {
       </MemoryRouter>,
     )
 
+    // Controles Arquivados DEVE estar visível para OPERACIONAL
+    const arquivadosDesktop = screen.getAllByText('Controles Arquivados')
+    expect(arquivadosDesktop.length).toBeGreaterThan(0)
+    const arquivadosMobile = screen.getAllByText('Arquivados')
+    expect(arquivadosMobile.length).toBeGreaterThan(0)
+
+    // Tabelas e Configurações / Ajustes permanecem restritos ao ADMINISTRADOR
     expect(screen.queryByText('Tabelas')).toBeNull()
     expect(screen.queryByText('Configurações')).toBeNull()
     expect(screen.queryByText('Ajustes')).toBeNull()

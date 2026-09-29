@@ -41,11 +41,9 @@ export default function Layout({ children }: LayoutProps) {
   // Apenas perfil ADMINISTRADOR vê os menus "Tabelas" e "Configurações"
   const isAdmin = corePerfil === 'ADMINISTRADOR'
 
-  // Submenu Tabelas expansível:
-  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes ou /tabelas/arquivados)
-  const isTabelasChildActive =
-    location.pathname.startsWith('/tabelas/nomes') ||
-    location.pathname.startsWith('/tabelas/arquivados')
+  // Submenu Tabelas expansível (apenas ADMINISTRADOR):
+  // Fica aberto se a rota ativa for uma de suas subrotas (/tabelas/nomes)
+  const isTabelasChildActive = location.pathname.startsWith('/tabelas/nomes')
 
   const [tabelasExpanded, setTabelasExpanded] = useState(isTabelasChildActive)
 
@@ -239,6 +237,31 @@ export default function Layout({ children }: LayoutProps) {
             <span className="truncate">Controles</span>
           </NavLink>
 
+          {/* Controles Arquivados - Navegação primária para ADMINISTRADOR, GESTOR e OPERACIONAL */}
+          <NavLink
+            to="/tabelas/arquivados"
+            className={cn(
+              'group relative flex items-center gap-3.5 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-200',
+              location.pathname === '/tabelas/arquivados'
+                ? 'bg-primary/10 text-primary font-semibold shadow-xs'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+            )}
+            title="Controles Arquivados"
+          >
+            {location.pathname === '/tabelas/arquivados' && (
+              <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-primary rounded-r-full" />
+            )}
+            <Archive
+              className={cn(
+                'w-5 h-5 shrink-0 transition-transform duration-200 group-hover:scale-105',
+                location.pathname === '/tabelas/arquivados'
+                  ? 'text-primary stroke-[2.2]'
+                  : 'text-muted-foreground stroke-[1.8]',
+              )}
+            />
+            <span className="truncate">Controles Arquivados</span>
+          </NavLink>
+
           {/* Tabelas (Expansível) - Apenas ADMINISTRADOR */}
           {isAdmin && (
             <div className="space-y-1">
@@ -275,7 +298,7 @@ export default function Layout({ children }: LayoutProps) {
                 />
               </button>
 
-              {/* Subitens de Tabelas */}
+              {/* Subitens de Tabelas - exclusivo ADMINISTRADOR */}
               {tabelasExpanded && (
                 <div className="pl-6 pr-1 space-y-1 py-0.5 animate-fade-in">
                   <NavLink
@@ -290,20 +313,6 @@ export default function Layout({ children }: LayoutProps) {
                   >
                     <FolderKanban className="w-4 h-4 shrink-0" />
                     <span className="truncate">Nomes dos Controles</span>
-                  </NavLink>
-
-                  <NavLink
-                    to="/tabelas/arquivados"
-                    className={cn(
-                      'group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors',
-                      location.pathname === '/tabelas/arquivados'
-                        ? 'bg-primary/15 text-primary font-semibold'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-                    )}
-                    title="Controles Arquivados"
-                  >
-                    <Archive className="w-4 h-4 shrink-0" />
-                    <span className="truncate">Controles Arquivados</span>
                   </NavLink>
                 </div>
               )}
@@ -458,6 +467,23 @@ export default function Layout({ children }: LayoutProps) {
           )}
           <FileSpreadsheet className="w-4 h-4 mb-0.5" />
           <span>Controles</span>
+        </NavLink>
+
+        {/* Controles Arquivados - Disponível para ADMINISTRADOR, GESTOR e OPERACIONAL */}
+        <NavLink
+          to="/tabelas/arquivados"
+          className={cn(
+            'flex flex-col items-center justify-center py-1 px-2 rounded-lg font-medium transition-colors relative',
+            location.pathname === '/tabelas/arquivados'
+              ? 'text-primary font-semibold'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {location.pathname === '/tabelas/arquivados' && (
+            <span className="absolute -top-1.5 w-6 h-1 bg-primary rounded-full" />
+          )}
+          <Archive className="w-4 h-4 mb-0.5" />
+          <span>Arquivados</span>
         </NavLink>
 
         {/* Tabelas - Apenas ADMINISTRADOR */}

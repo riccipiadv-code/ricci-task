@@ -1283,20 +1283,24 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
     )
   }
 
-  // Validação de escopo de acesso central à tarefa
+  // Validação de escopo de acesso central à tarefa (fail-closed obrigatório)
+  if (!callerCheck.coreUser || !callerCheck.perfil) {
+    return new Response(
+      JSON.stringify({
+        error: 'Permissão negada: dados centrais de usuário ou perfil incompletos.',
+      }),
+      { status: 403, headers: corsHeaders },
+    )
+  }
+
   const callerUser = callerCheck.coreUser
-  const scopeCheck = await checkTaskAccessScope(
-    ctx.supabase,
-    { id: callerUser ? callerUser.id : '' },
-    callerCheck.perfil || '',
-    {
-      id: tarefa.id,
-      responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
-      executor_core_usuario_id: tarefa.executor_core_usuario_id,
-      responsavel_usuario_id: tarefa.responsavel_usuario_id,
-      executor_usuario_id: tarefa.executor_usuario_id,
-    },
-  )
+  const scopeCheck = await checkTaskAccessScope(ctx.supabase, callerUser, callerCheck.perfil, {
+    id: tarefa.id,
+    responsavel_core_usuario_id: tarefa.responsavel_core_usuario_id,
+    executor_core_usuario_id: tarefa.executor_core_usuario_id,
+    responsavel_usuario_id: tarefa.responsavel_usuario_id,
+    executor_usuario_id: tarefa.executor_usuario_id,
+  })
 
   if (!scopeCheck.allowed) {
     const isTech = scopeCheck.status === 'technical_failure'
@@ -4810,18 +4814,45 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(escapeHtml(null)).toBe('')
     })
 
-    it('ADMINISTRADOR: tem acesso a qualquer caso', async () => {
+    it('(a) Chamador sem ID central válido: bloqueia imediatamente (denied)', async () => {
       const mockSupabase = {} as any
-      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-admin' }, 'ADMINISTRADOR', {
+      const resNull = await checkTaskAccessScope(mockSupabase, null, 'GESTOR', {
         id: 't-1',
-        responsavel_core_usuario_id: 'cu-outro-1',
-        executor_core_usuario_id: 'cu-outro-2',
+        responsavel_core_usuario_id: 'cu-resp',
+        executor_core_usuario_id: 'cu-exec',
       })
-      expect(res.allowed).toBe(true)
-      expect(res.status).toBe('ok')
+      expect(resNull.allowed).toBe(false)
+      expect(resNull.status).toBe('denied')
+      expect(resNull.error).toContain('sem ID central corporativo válido')
+
+      const resEmpty = await checkTaskAccessScope(mockSupabase, { id: '   ' }, 'GESTOR', {
+        id: 't-1',
+        responsavel_core_usuario_id: 'cu-resp',
+        executor_core_usuario_id: 'cu-exec',
+      })
+      expect(resEmpty.allowed).toBe(false)
+      expect(resEmpty.status).toBe('denied')
     })
 
-    it('Caso sem IDs centrais válidos: bloqueia imediatamente (fail-closed, sem fallback permissivo)', async () => {
+    it('(b) Perfil não reconhecido: bloqueia imediatamente (denied), MESMO se ID bater com responsável ou executor', async () => {
+      const mockSupabase = {} as any
+      // ID do chamador bate com o responsável, mas o perfil é desconhecido
+      const res = await checkTaskAccessScope(
+        mockSupabase,
+        { id: 'cu-proprio' },
+        'CONVIDADO_OU_DESCONHECIDO',
+        {
+          id: 't-1',
+          responsavel_core_usuario_id: 'cu-proprio',
+          executor_core_usuario_id: 'cu-outro',
+        },
+      )
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toContain('perfil não autorizado')
+    })
+
+    it('(c) Caso sem IDs centrais válidos: bloqueia imediatamente (fail-closed, sem fallback permissivo)', async () => {
       const mockSupabase = {} as any
       // Para OPERACIONAL
       const resOp = await checkTaskAccessScope(mockSupabase, { id: 'cu-op' }, 'OPERACIONAL', {
@@ -4831,6 +4862,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       })
       expect(resOp.allowed).toBe(false)
       expect(resOp.status).toBe('denied')
+      expect(resOp.error).toContain('sem IDs centrais válidos')
 
       // Para GESTOR
       const resGestor = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor' }, 'GESTOR', {
@@ -4843,19 +4875,18 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(resGestor.error).toContain('sem IDs centrais válidos')
     })
 
-    it('Chamador sem ID central válido: bloqueia imediatamente', async () => {
+    it('(d) ADMINISTRADOR: tem acesso irrestrito', async () => {
       const mockSupabase = {} as any
-      const res = await checkTaskAccessScope(mockSupabase, { id: '' }, 'GESTOR', {
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-admin' }, 'ADMINISTRADOR', {
         id: 't-1',
-        responsavel_core_usuario_id: 'cu-resp',
-        executor_core_usuario_id: 'cu-exec',
+        responsavel_core_usuario_id: 'cu-outro-1',
+        executor_core_usuario_id: 'cu-outro-2',
       })
-      expect(res.allowed).toBe(false)
-      expect(res.status).toBe('denied')
-      expect(res.error).toContain('sem ID central corporativo válido')
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('ok')
     })
 
-    it('OPERACIONAL: permite apenas casos próprios (como responsável ou executor)', async () => {
+    it('(e) OPERACIONAL: permite apenas casos próprios (como responsável ou executor)', async () => {
       const mockSupabase = {} as any
       // Como responsável
       const resResp = await checkTaskAccessScope(mockSupabase, { id: 'cu-op-1' }, 'OPERACIONAL', {
@@ -4883,7 +4914,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(resOutro.status).toBe('denied')
     })
 
-    it('GESTOR: permite casos próprios', async () => {
+    it('(f) GESTOR: permite casos próprios', async () => {
       const mockSupabase = {} as any
       const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
         id: 't-gestor-propria',
@@ -4893,7 +4924,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(res.allowed).toBe(true)
     })
 
-    it('GESTOR: permite casos de membros de sua equipe direta (core_usuarios.gestor_id = idCentralDoGestor, ativo = true)', async () => {
+    it('(f) GESTOR: permite casos de membros de sua equipe direta ativa (core_usuarios.gestor_id = gestorCoreId)', async () => {
       const mockSupabase = {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -4914,7 +4945,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(res.status).toBe('ok')
     })
 
-    it('GESTOR: nega casos de membros inativos ou de outro gestor', async () => {
+    it('(f) GESTOR: nega casos de membros inativos ou subordinados a outro gestor', async () => {
       const mockSupabase = {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -4938,7 +4969,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(res.status).toBe('denied')
     })
 
-    it('GESTOR: falha de consulta em core_usuarios retorna technical_failure (fail-closed)', async () => {
+    it('(f) GESTOR: falha de consulta em core_usuarios retorna technical_failure (fail-closed)', async () => {
       const mockSupabase = {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -4957,22 +4988,6 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       })
       expect(res.allowed).toBe(false)
       expect(res.status).toBe('technical_failure')
-    })
-
-    it('Perfil desconhecido retorna denied', async () => {
-      const mockSupabase = {} as any
-      const res = await checkTaskAccessScope(
-        mockSupabase,
-        { id: 'cu-user' },
-        'CONVIDADO_DESCONHECIDO',
-        {
-          id: 't-1',
-          responsavel_core_usuario_id: 'cu-resp',
-          executor_core_usuario_id: 'cu-exec',
-        },
-      )
-      expect(res.allowed).toBe(false)
-      expect(res.status).toBe('denied')
     })
   })
 
@@ -5064,6 +5079,70 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(res.status).toBe(403)
       const data = await res.json()
       expect(data.error).toContain('não possui permissão para disparar notificações deste caso')
+    })
+
+    it('retorna 403 imediatamente se dados centrais de usuário ou perfil forem incompletos (remoção do wrapper permissivo)', async () => {
+      const ctx = createMockEdgeContext()
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-incompleto' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: null, // Sem coreUser!
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-101',
+                        numero_caso: 101,
+                        responsavel_core_usuario_id: 'cu-1',
+                        executor_core_usuario_id: 'cu-2',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-incompleto',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-101',
+          tipo: 'alteracao_atribuicao',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(403)
+      const data = await res.json()
+      expect(data.error).toBe('Permissão negada: dados centrais de usuário ou perfil incompletos.')
     })
   })
 })
