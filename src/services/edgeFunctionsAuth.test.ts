@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   verifyRicciTaskAdmin,
+  verifyRicciTaskCaller,
   resolveValidatedTaskUserEmailDetailed,
   resolveValidatedTaskUserEmail,
   SYSTEM_CODE_CONECTAI,
   SYSTEM_CODE_RICCI_TASK,
   ROLE_CODE_ADMINISTRADOR,
+  ROLE_CODE_GESTOR,
+  ROLE_CODE_OPERACIONAL,
+  RICCI_TASK_ALLOWED_CALLER_ROLES,
 } from '../../supabase/functions/_shared/core-auth'
 
 describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ricci)', () => {
@@ -18,6 +22,9 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
       expect(SYSTEM_CODE_RICCI_TASK).toBe('RICCI_TASK')
       expect(SYSTEM_CODE_CONECTAI).toBe('CONECTAI')
       expect(ROLE_CODE_ADMINISTRADOR).toBe('ADMINISTRADOR')
+      expect(ROLE_CODE_GESTOR).toBe('GESTOR')
+      expect(ROLE_CODE_OPERACIONAL).toBe('OPERACIONAL')
+      expect(RICCI_TASK_ALLOWED_CALLER_ROLES).toEqual(['ADMINISTRADOR', 'GESTOR', 'OPERACIONAL'])
     })
   })
 
@@ -299,6 +306,344 @@ describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ri
     })
   })
 
+  describe('verifyRicciTaskCaller (Autorização central do chamador de notify-task-assignment)', () => {
+    it('rejeita com status unauthorized (401) se authUserId for vazio', async () => {
+      const mockSupabase = {} as any
+      const res = await verifyRicciTaskCaller(mockSupabase, '')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('unauthorized')
+      expect(res.httpStatus).toBe(401)
+    })
+
+    it('rejeita com status invalid_link (403) se o chamador não for localizado em core_usuarios', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: null,
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-inexistente')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('invalid_link')
+      expect(res.httpStatus).toBe(403)
+      expect(res.error).toContain('usuário corporativo não localizado')
+    })
+
+    it('rejeita com status invalid_link (403) se o chamador estiver inativo em core_usuarios', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: {
+                  id: 'cu-inativo',
+                  auth_user_id: 'auth-user-inativo',
+                  nome: 'Chamador Inativo',
+                  email: 'inativo@riccipi.com.br',
+                  ativo: false,
+                },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-inativo')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('invalid_link')
+      expect(res.httpStatus).toBe(403)
+      expect(res.error).toContain('usuário corporativo inativo')
+    })
+
+    it('rejeita com status technical_failure (500) se houver erro técnico de banco ao buscar core_usuarios', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: null,
+                error: { message: 'Database connection failed' },
+              }),
+            }),
+          }),
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-err')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('technical_failure')
+      expect(res.httpStatus).toBe(500)
+      expect(res.error).toContain('Falha de comunicação com o Gestor de Acessos')
+    })
+
+    it('rejeita com status technical_failure (500) se houver erro ao buscar vínculos em core_usuario_sistemas', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-chamador',
+                        auth_user_id: 'auth-user-chamador',
+                        nome: 'Chamador',
+                        email: 'chamador@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: null,
+                  error: { message: 'Connection timeout' },
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          return {}
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-chamador')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('technical_failure')
+      expect(res.httpStatus).toBe(500)
+      expect(res.error).toContain('Falha de comunicação com o Gestor de Acessos')
+    })
+
+    it('rejeita com status invalid_link (403) se o chamador não possuir vínculo ativo com RICCI_TASK', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-sem-vinculo',
+                        auth_user_id: 'auth-user-sem-vinculo',
+                        nome: 'Sem Vínculo',
+                        email: 'sem.vinculo@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [], // sem vínculos
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          return {}
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-sem-vinculo')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('invalid_link')
+      expect(res.httpStatus).toBe(403)
+      expect(res.error).toContain('vínculo ou perfil não autorizado')
+    })
+
+    it('autoriza chamador com perfil ADMINISTRADOR ativo em RICCI_TASK', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-admin',
+                        auth_user_id: 'auth-user-admin',
+                        nome: 'Admin User',
+                        email: 'admin@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'link-admin',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          return {}
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-admin')
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('valid')
+      expect(res.httpStatus).toBe(200)
+      expect(res.perfil).toBe('ADMINISTRADOR')
+      expect(res.coreUser?.id).toBe('cu-admin')
+    })
+
+    it('autoriza chamador com perfil GESTOR ativo em RICCI_TASK', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-gestor',
+                        auth_user_id: 'auth-user-gestor',
+                        nome: 'Gestor User',
+                        email: 'gestor@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'link-gestor',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'GESTOR', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          return {}
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-gestor')
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('valid')
+      expect(res.httpStatus).toBe(200)
+      expect(res.perfil).toBe('GESTOR')
+      expect(res.coreUser?.id).toBe('cu-gestor')
+    })
+
+    it('autoriza chamador com perfil OPERACIONAL ativo em RICCI_TASK', async () => {
+      const mockSupabase = {
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Op User',
+                        email: 'op@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'link-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          return {}
+        }),
+      } as any
+
+      const res = await verifyRicciTaskCaller(mockSupabase, 'auth-user-op')
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('valid')
+      expect(res.httpStatus).toBe(200)
+      expect(res.perfil).toBe('OPERACIONAL')
+      expect(res.coreUser?.id).toBe('cu-op')
+    })
+  })
+
   describe('verifyRicciTaskAdmin (Autorização central no RICCI_TASK)', () => {
     it('rejeita com status 401 se authUserId for vazio', async () => {
       const mockSupabase = {} as any
@@ -524,12 +869,35 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
   }
 
   const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (!token) {
+    return new Response(JSON.stringify({ error: 'Token de autenticação não encontrado' }), {
+      status: 401,
+      headers: corsHeaders,
+    })
+  }
+
   const { data: userData, error: userError } = await ctx.supabase.auth.getUser(token)
   if (userError || !userData?.user) {
     return new Response(JSON.stringify({ error: 'Não autorizado.' }), {
       status: 401,
       headers: corsHeaders,
     })
+  }
+
+  // Validação central do chamador via verifyRicciTaskCaller
+  const callerCheck = await verifyRicciTaskCaller(ctx.supabase, userData.user.id)
+  if (!callerCheck.allowed) {
+    return new Response(
+      JSON.stringify({
+        error:
+          callerCheck.error ||
+          'Permissão negada: usuário sem permissão ativa para o sistema Ricci Task.',
+      }),
+      {
+        status: callerCheck.httpStatus || (callerCheck.status === 'technical_failure' ? 500 : 403),
+        headers: corsHeaders,
+      },
+    )
   }
 
   const body = await req.json().catch(() => ({}))
@@ -1022,6 +1390,418 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
   })
 
   describe('Pipeline notify-task-assignment (Atribuição com módulo real core-auth)', () => {
+    describe('Validação do Chamador (Proteção contra disparos não autorizados)', () => {
+      it('rejeita com 401 quando Authorization header não for enviado', async () => {
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tarefa_id: 'tarefa-1', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(401)
+        const body = await res.json()
+        expect(body.error).toContain('Token de autenticação não encontrado')
+      })
+
+      it('rejeita com 403 quando chamador não tem vínculo central com RICCI_TASK', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-sem-vinculo' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-sem-vinculo',
+                          auth_user_id: 'auth-sem-vinculo',
+                          nome: 'Sem Vínculo',
+                          email: 'sem.vinculo@empresa.com',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) => resolve({ data: [], error: null }),
+              }
+              return { select: () => chain }
+            }
+            // Não deve consultar tarefas nem task_email_eventos
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tarefa_id: 'tarefa-1', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(403)
+        const body = await res.json()
+        expect(body.error).toContain('sem permissão ativa para o sistema Ricci Task')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('rejeita com 403 quando chamador está inativo em core_usuarios', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-inativo' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-inativo',
+                          auth_user_id: 'auth-inativo',
+                          nome: 'Inativo Central',
+                          email: 'inativo@empresa.com',
+                          ativo: false,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tarefa_id: 'tarefa-1', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(403)
+        const body = await res.json()
+        expect(body.error).toContain('usuário corporativo inativo')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('retorna 500 (erro recuperável) quando ocorre falha técnica na consulta central do chamador', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-chamador-tech-err' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: null,
+                        error: { message: 'Database connection failed' },
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tarefa_id: 'tarefa-1', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(500)
+        const body = await res.json()
+        expect(body.error).toContain('Falha de comunicação com o Gestor de Acessos')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('permite disparo com chamador ADMINISTRADOR ativo', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-caller-admin' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-admin',
+                          auth_user_id: 'auth-caller-admin',
+                          nome: 'Admin Caller',
+                          email: 'admin.caller@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-admin',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-admin-test',
+                          numero_caso: 111,
+                          executor_usuario_id: null,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tarefa_id: 'tarefa-admin-test', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        // Passou da validação de autorização (200, com executor_ausente)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.reason).toBe('executor_ausente')
+      })
+
+      it('permite disparo com chamador GESTOR ativo', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-caller-gestor' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-gestor',
+                          auth_user_id: 'auth-caller-gestor',
+                          nome: 'Gestor Caller',
+                          email: 'gestor.caller@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-gestor',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'GESTOR', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-gestor-test',
+                          numero_caso: 112,
+                          executor_usuario_id: null,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tarefa_id: 'tarefa-gestor-test', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.reason).toBe('executor_ausente')
+      })
+
+      it('permite disparo com chamador OPERACIONAL ativo', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-caller-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-op',
+                          auth_user_id: 'auth-caller-op',
+                          nome: 'Op Caller',
+                          email: 'op.caller@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-op',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-op-test',
+                          numero_caso: 113,
+                          executor_usuario_id: null,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tarefa_id: 'tarefa-op-test', tipo: 'nova_atribuicao' }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.reason).toBe('executor_ausente')
+      })
+    })
+
     it('1. Deduplicação TO/CC: quando Executor e Responsável têm o mesmo e-mail, TO recebe e CC fica vazio', async () => {
       // Configura mock do Supabase
       ctx.supabase = {
@@ -1032,6 +1812,25 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
           }),
         },
         from: vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-chamador-valido',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Chamador Válido',
+                        email: 'chamador@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
           if (table === 'task_tarefas') {
             return {
               select: () => ({
@@ -1074,6 +1873,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               select: () => {
                 const chain: any = {
                   eq: () => chain,
+                  in: () => chain,
                   maybeSingle: () =>
                     Promise.resolve({
                       data: {
@@ -1086,8 +1886,20 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                           ativo: true,
                         },
                         core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                        core_perfis: { codigo: 'COLABORADOR', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
                       },
+                      error: null,
+                    }),
+                  then: (resolve: any) =>
+                    resolve({
+                      data: [
+                        {
+                          id: 'link-caller',
+                          ativo: true,
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                      ],
                       error: null,
                     }),
                 }
@@ -1151,6 +1963,25 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
           }),
         },
         from: vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-chamador-valido',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Chamador Válido',
+                        email: 'chamador@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
           if (table === 'task_tarefas') {
             return {
               select: () => ({
@@ -1211,11 +2042,24 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                           ativo: true,
                         },
                         core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                        core_perfis: { codigo: 'COLABORADOR', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
                       },
                       error: null,
                     })
                   },
+                  in: () => chain,
+                  then: (resolve: any) =>
+                    resolve({
+                      data: [
+                        {
+                          id: 'link-caller',
+                          ativo: true,
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                      ],
+                      error: null,
+                    }),
                 }
                 return chain
               },
@@ -1276,6 +2120,36 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
           }),
         },
         from: vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: (col: string, val: string) => ({
+                  maybeSingle: () => {
+                    if (val === 'auth-user-op') {
+                      return Promise.resolve({
+                        data: {
+                          id: 'cu-chamador-valido',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador Válido',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      })
+                    }
+                    return Promise.resolve({
+                      data: {
+                        id: val,
+                        core_usuario_id: 'cu-timeout',
+                        ativo: true,
+                      },
+                      error: null,
+                    })
+                  },
+                }),
+              }),
+            }
+          }
           if (table === 'task_tarefas') {
             return {
               select: () => ({
@@ -1315,12 +2189,30 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
             return {
               select: () => {
                 const chain: any = {
-                  eq: () => chain,
+                  eq: (col: string, val: string) => {
+                    chain._target = val
+                    return chain
+                  },
+                  in: () => chain,
                   maybeSingle: () =>
                     Promise.resolve({
                       data: null,
                       error: { message: '504 Gateway Timeout' },
                     }),
+                  then: (resolve: any) => {
+                    // Para o chamador da função, autorização é válida
+                    resolve({
+                      data: [
+                        {
+                          id: 'link-caller',
+                          ativo: true,
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                      ],
+                      error: null,
+                    })
+                  },
                 }
                 return chain
               },
@@ -1360,6 +2252,25 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
           }),
         },
         from: vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-chamador-valido',
+                        auth_user_id: 'auth-user-op',
+                        nome: 'Chamador Válido',
+                        email: 'chamador@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
           if (table === 'task_tarefas') {
             return {
               select: () => ({
@@ -1396,6 +2307,7 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
               select: () => {
                 const chain: any = {
                   eq: () => chain,
+                  in: () => chain,
                   maybeSingle: () =>
                     Promise.resolve({
                       data: {
@@ -1408,8 +2320,20 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                           ativo: true,
                         },
                         core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                        core_perfis: { codigo: 'COLABORADOR', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
                       },
+                      error: null,
+                    }),
+                  then: (resolve: any) =>
+                    resolve({
+                      data: [
+                        {
+                          id: 'link-caller',
+                          ativo: true,
+                          core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                          core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                        },
+                      ],
                       error: null,
                     }),
                 }

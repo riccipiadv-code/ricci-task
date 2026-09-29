@@ -3,6 +3,30 @@ import { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 export const SYSTEM_CODE_CONECTAI = 'CONECTAI'
 export const SYSTEM_CODE_RICCI_TASK = 'RICCI_TASK'
 export const ROLE_CODE_ADMINISTRADOR = 'ADMINISTRADOR'
+export const ROLE_CODE_GESTOR = 'GESTOR'
+export const ROLE_CODE_OPERACIONAL = 'OPERACIONAL'
+
+export const RICCI_TASK_ALLOWED_CALLER_ROLES = [
+  ROLE_CODE_ADMINISTRADOR,
+  ROLE_CODE_GESTOR,
+  ROLE_CODE_OPERACIONAL,
+] as const
+
+export type CallerResolutionStatus = 'valid' | 'unauthorized' | 'invalid_link' | 'technical_failure'
+
+export interface CallerResolutionResult {
+  status: CallerResolutionStatus
+  allowed: boolean
+  httpStatus: number
+  error?: string
+  coreUser?: {
+    id: string
+    auth_user_id: string | null
+    nome: string
+    email: string
+  }
+  perfil?: string
+}
 
 export interface CoreAdminAuthResult {
   allowed: boolean
@@ -52,6 +76,160 @@ export async function verifyRicciTaskAdmin(
   authUserId: string,
 ): Promise<CoreAdminAuthResult> {
   return verifyCoreAdmin(supabase, authUserId, [SYSTEM_CODE_RICCI_TASK])
+}
+
+/**
+ * Validação central estrita para autorização de chamador no Ricci Task:
+ * auth.users.id → core_usuarios.auth_user_id → core_usuario_sistemas → sistema RICCI_TASK → core_perfis
+ *
+ * Exige:
+ * - core_usuarios.ativo = true
+ * - vínculo ativo em core_usuario_sistemas
+ * - core_sistemas.codigo = 'RICCI_TASK' AND core_sistemas.ativo = true
+ * - core_perfis.ativo = true AND core_perfis.codigo IN ('ADMINISTRADOR', 'GESTOR', 'OPERACIONAL')
+ *
+ * Distingue com precisão:
+ * - 'valid': usuário ativo, vínculo ativo com RICCI_TASK ativo e perfil permitido ativo
+ * - 'unauthorized': authUserId ausente (401)
+ * - 'invalid_link': usuário não localizado, inativo, sem vínculo com RICCI_TASK, sistema inativo, vínculo inativo ou perfil não permitido/inativo (403)
+ * - 'technical_failure': falha técnica de rede/consulta no Gestor de Acessos Ricci (500)
+ */
+export async function verifyRicciTaskCaller(
+  supabase: SupabaseClient,
+  authUserId: string,
+  allowedRoles: readonly string[] = RICCI_TASK_ALLOWED_CALLER_ROLES,
+): Promise<CallerResolutionResult> {
+  if (!authUserId) {
+    return {
+      status: 'unauthorized',
+      allowed: false,
+      httpStatus: 401,
+      error: 'Token de autenticação não encontrado ou inválido.',
+    }
+  }
+
+  // 1. Localizar o usuário em core_usuarios
+  let userResult: any
+  try {
+    userResult = await supabase
+      .from('core_usuarios')
+      .select('id, auth_user_id, nome, email, ativo')
+      .eq('auth_user_id', authUserId)
+      .maybeSingle()
+  } catch (err: any) {
+    console.error('[core-auth] Falha técnica ao consultar core_usuarios para chamador:', err)
+    return {
+      status: 'technical_failure',
+      allowed: false,
+      httpStatus: 500,
+      error:
+        'Falha de comunicação com o Gestor de Acessos ao validar usuário. Tente novamente em instantes.',
+    }
+  }
+
+  const { data: coreUser, error: userError } = userResult
+
+  if (userError) {
+    console.error('[core-auth] Erro de banco ao consultar core_usuarios para chamador:', userError)
+    return {
+      status: 'technical_failure',
+      allowed: false,
+      httpStatus: 500,
+      error:
+        'Falha de comunicação com o Gestor de Acessos ao consultar usuário. Tente novamente em instantes.',
+    }
+  }
+
+  if (!coreUser) {
+    return {
+      status: 'invalid_link',
+      allowed: false,
+      httpStatus: 403,
+      error:
+        'Usuário sem permissão ativa para o sistema Ricci Task (usuário corporativo não localizado).',
+    }
+  }
+
+  if (!coreUser.ativo) {
+    return {
+      status: 'invalid_link',
+      allowed: false,
+      httpStatus: 403,
+      error: 'Usuário sem permissão ativa para o sistema Ricci Task (usuário corporativo inativo).',
+    }
+  }
+
+  // 2. Localizar vínculo com o sistema RICCI_TASK ativo e perfil permitido ativo
+  let linkResult: any
+  try {
+    linkResult = await supabase
+      .from('core_usuario_sistemas')
+      .select(`
+        id,
+        ativo,
+        core_sistemas!inner(codigo, ativo),
+        core_perfis!inner(codigo, ativo)
+      `)
+      .eq('usuario_id', coreUser.id)
+      .eq('ativo', true)
+      .eq('core_sistemas.codigo', SYSTEM_CODE_RICCI_TASK)
+      .eq('core_sistemas.ativo', true)
+      .in('core_perfis.codigo', [...allowedRoles])
+      .eq('core_perfis.ativo', true)
+  } catch (err: any) {
+    console.error(
+      '[core-auth] Falha técnica ao consultar core_usuario_sistemas para chamador:',
+      err,
+    )
+    return {
+      status: 'technical_failure',
+      allowed: false,
+      httpStatus: 500,
+      error:
+        'Falha de comunicação com o Gestor de Acessos ao validar permissões do sistema. Tente novamente em instantes.',
+    }
+  }
+
+  const { data: userLinks, error: linkError } = linkResult
+
+  if (linkError) {
+    console.error(
+      '[core-auth] Erro de banco ao consultar core_usuario_sistemas para chamador:',
+      linkError,
+    )
+    return {
+      status: 'technical_failure',
+      allowed: false,
+      httpStatus: 500,
+      error:
+        'Falha de comunicação com o Gestor de Acessos ao consultar vínculo de acesso. Tente novamente em instantes.',
+    }
+  }
+
+  if (!userLinks || userLinks.length === 0) {
+    return {
+      status: 'invalid_link',
+      allowed: false,
+      httpStatus: 403,
+      error:
+        'Usuário sem permissão ativa para o sistema Ricci Task (vínculo ou perfil não autorizado).',
+    }
+  }
+
+  const matchedPerfil = (userLinks[0] as any)?.core_perfis?.codigo || undefined
+
+  return {
+    status: 'valid',
+    allowed: true,
+    httpStatus: 200,
+    coreUser: {
+      id: coreUser.id,
+      auth_user_id: coreUser.auth_user_id,
+      nome: coreUser.nome,
+      email: coreUser.email,
+    },
+    perfil: matchedPerfil,
+  }
 }
 
 export interface ValidatedRecipient {

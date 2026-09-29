@@ -1,7 +1,10 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer'
-import { resolveValidatedTaskUserEmailDetailed } from '../_shared/core-auth.ts'
+import {
+  resolveValidatedTaskUserEmailDetailed,
+  verifyRicciTaskCaller,
+} from '../_shared/core-auth.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -60,7 +63,14 @@ Deno.serve(async (req: Request) => {
 
   try {
     // 1. Validar autenticação do usuário
-    const token = authHeader.replace('Bearer ', '')
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+    if (!token) {
+      return new Response(JSON.stringify({ error: 'Token de autenticação não encontrado' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
     const {
       data: { user },
       error: userError,
@@ -71,6 +81,36 @@ Deno.serve(async (req: Request) => {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
+    }
+
+    // 1.1. Validar autorização central do chamador no Gestor de Acessos Ricci:
+    // Exige:
+    // - core_usuarios.ativo = true
+    // - vínculo ativo em core_usuario_sistemas
+    // - core_sistemas.codigo = 'RICCI_TASK' e sistema ativo
+    // - perfil ativo em core_perfis
+    // Aceita os perfis centrais: ADMINISTRADOR, GESTOR e OPERACIONAL.
+    // Sem vínculo válido ou perfil não autorizado -> 403
+    // Falha técnica na consulta central -> 500 (erro recuperável)
+    // Nada é consultado, enviado ou gravado antes dessa aprovação.
+    const callerCheck = await verifyRicciTaskCaller(supabase, user.id)
+
+    if (!callerCheck.allowed) {
+      console.warn(
+        `Disparo bloqueado: chamador ${user.id} (${user.email}) não possui permissão ativa no RICCI_TASK. Status: ${callerCheck.status}, Motivo: ${callerCheck.error}`,
+      )
+      return new Response(
+        JSON.stringify({
+          error:
+            callerCheck.error ||
+            'Permissão negada: usuário sem permissão ativa para o sistema Ricci Task.',
+        }),
+        {
+          status:
+            callerCheck.httpStatus || (callerCheck.status === 'technical_failure' ? 500 : 403),
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
     // 2. Extrair parâmetros
