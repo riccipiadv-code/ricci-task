@@ -1562,7 +1562,9 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
 
   if (
     existingEvent &&
-    (existingEvent.status === 'uncertain' || existingEvent.status === 'pending_reconciliation')
+    (existingEvent.status === 'uncertain' ||
+      existingEvent.status === 'pending_reconciliation' ||
+      existingEvent.status === 'smtp_maybe_sent')
   ) {
     return new Response(
       JSON.stringify({
@@ -1666,6 +1668,7 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
       .neq('status', 'success')
       .neq('status', 'uncertain')
       .neq('status', 'pending_reconciliation')
+      .neq('status', 'smtp_maybe_sent')
       .or(`status.eq.error,locked_at.is.null,locked_at.lt.${lockCutoffIso}`)
       .select('id, owner_token, status')
 
@@ -1797,6 +1800,30 @@ async function handleNotifyTaskAssignment(req: Request, ctx: MockEdgeContext): P
         </p>
       </div>
     `
+
+  // Antes de chamar o envio SMTP, gravar atomicamente status 'smtp_maybe_sent'
+  const preSmtpIso = new Date().toISOString()
+  const { data: maybeSentRows, error: maybeSentErr } = await ctx.supabase
+    .from('task_email_eventos')
+    .update({
+      status: 'smtp_maybe_sent',
+      locked_at: preSmtpIso,
+    })
+    .eq('id', eventoId)
+    .eq('owner_token', callOwnerToken)
+    .select('id, status, owner_token')
+
+  if (maybeSentErr || !maybeSentRows || maybeSentRows.length === 0) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        sent: false,
+        error:
+          'Falha técnica ao assegurar pré-registro de envio (smtp_maybe_sent). Envio cancelado por segurança.',
+      }),
+      { status: 500, headers: corsHeaders },
+    )
+  }
 
   // Disparo SMTP
   try {
@@ -6207,6 +6234,24 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
                 }),
               }),
               update: (updatePayload: any) => {
+                if (updatePayload.status === 'smtp_maybe_sent') {
+                  return {
+                    eq: () => ({
+                      eq: () => ({
+                        select: () => ({
+                          data: [
+                            {
+                              id: 'evt-pers',
+                              status: 'smtp_maybe_sent',
+                              owner_token: 'valid-owner',
+                            },
+                          ],
+                          error: null,
+                        }),
+                      }),
+                    }),
+                  }
+                }
                 if (updatePayload.status === 'uncertain') {
                   recordedStatus = 'uncertain'
                 }
@@ -6244,6 +6289,214 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(data.status).toBe('uncertain')
       expect(data.reason).toBe('post_send_persistence_failure')
       expect(recordedStatus).toBe('uncertain')
+    })
+
+    it('v0.0.84: cenário crítico: SMTP bem-sucedido -> todas as gravações posteriores falham -> passam >5 minutos -> nova chamada NÃO envia (estado smtp_maybe_sent bloqueia reaquisição)', async () => {
+      // 1. O envio anterior concluiu o pré-registro 'smtp_maybe_sent' e o SMTP disparou com sucesso,
+      // mas TODAS as gravações posteriores falharam (rede caiu, banco caiu).
+      // O registro em task_email_eventos ficou como 'smtp_maybe_sent' com locked_at de 10 minutos atrás (> 5 min).
+      let smtpSentAttempts = 0
+      const dezMinutosAtras = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+
+      const ctx = createMockEdgeContext()
+      ctx.transporter.sendMail = vi.fn().mockImplementation(async () => {
+        smtpSentAttempts++
+        return { messageId: 'msg-should-never-reach' }
+      })
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-user-op' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-op',
+                          email: 'op@ricci.com',
+                          nome: 'Operador',
+                          ativo: true,
+                          auth_user_id: 'auth-user-op',
+                        },
+                        error: null,
+                      }),
+                  }),
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op',
+                        email: 'op@ricci.com',
+                        nome: 'Operador',
+                        ativo: true,
+                        auth_user_id: 'auth-user-op',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    eq: () => ({
+                      maybeSingle: () =>
+                        Promise.resolve({
+                          data: {
+                            id: 'cus-1',
+                            usuario_id: 'cu-op',
+                            sistema_id: 's-task',
+                            perfil_id: 'p-op',
+                            ativo: true,
+                          },
+                          error: null,
+                        }),
+                    }),
+                  }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_sistemas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: { id: 's-task', codigo: 'RICCI_TASK', ativo: true },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_perfis') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: { id: 'p-op', codigo: 'OPERACIONAL', ativo: true },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-test-smtp-maybe-sent',
+                        numero_caso: 9910,
+                        identificacao_caso: 'Caso Teste Smtp Maybe Sent',
+                        executor_core_usuario_id: 'cu-op',
+                        responsavel_core_usuario_id: 'cu-op',
+                        updated_at: '2025-05-10T10:00:00Z',
+                        created_at: '2025-05-10T10:00:00Z',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_transicoes_atribuicao') {
+            const chain: any = {
+              eq: () => chain,
+              order: () => chain,
+              limit: () =>
+                Promise.resolve({
+                  data: [
+                    {
+                      id: 'trans-smtp-maybe-sent',
+                      tarefa_id: 'task-test-smtp-maybe-sent',
+                      autor_core_id: 'cu-op',
+                      novo_responsavel_core_id: 'cu-op',
+                      novo_executor_core_id: 'cu-op',
+                      versao_resultante_updated_at: '2025-05-10T10:00:00Z',
+                      created_at: '2025-05-10T10:00:00Z',
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  // Simula a consulta inicial do evento que já passou por SMTP anterior e ficou gravado como smtp_maybe_sent
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-smtp-maybe-sent',
+                        event_key:
+                          'atribuicao:task-test-smtp-maybe-sent:2025-05-10T10:00:00Z:cu-op:cu-op',
+                        status: 'smtp_maybe_sent',
+                        locked_at: dezMinutosAtras, // Passaram mais de 5 minutos (> 10min)
+                        owner_token: 'old-token-from-first-call',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => {
+                // Não deve atualizar nem re-adquirir
+                throw new Error(
+                  'task_email_eventos.update não deveria ser chamado para status smtp_maybe_sent!',
+                )
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      // Nova chamada mais de 5 minutos depois (locked_at vencido há 10 min)
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-test-smtp-maybe-sent',
+          tipo: 'alteracao_atribuicao',
+          transicao_id: 'trans-smtp-maybe-sent',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+
+      // Deve bloquear com 409 (status incerto aguarda reconciliação manual)
+      expect(res.status).toBe(409)
+      const data = await res.json()
+      expect(data.triggered).toBe(true)
+      expect(data.sent).toBe(false)
+      expect(data.reason).toBe('uncertain_status_reconciliation_required')
+
+      // O transporte SMTP NUNCA deve ser disparado nesta segunda chamada
+      expect(smtpSentAttempts).toBe(0)
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
     })
   })
 })

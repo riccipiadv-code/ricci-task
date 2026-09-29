@@ -783,10 +783,12 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // Ponto 6: Se o evento está em estado incerto / reconciliação pendente, NUNCA permite retry automático
+    // Ponto 6: Se o evento está em estado incerto / reconciliação pendente / smtp_maybe_sent, NUNCA permite retry automático
     if (
       existingEvent &&
-      (existingEvent.status === 'uncertain' || existingEvent.status === 'pending_reconciliation')
+      (existingEvent.status === 'uncertain' ||
+        existingEvent.status === 'pending_reconciliation' ||
+        existingEvent.status === 'smtp_maybe_sent')
     ) {
       return new Response(
         JSON.stringify({
@@ -923,6 +925,7 @@ Deno.serve(async (req: Request) => {
         .neq('status', 'success')
         .neq('status', 'uncertain')
         .neq('status', 'pending_reconciliation')
+        .neq('status', 'smtp_maybe_sent')
         .or(`status.eq.error,locked_at.is.null,locked_at.lt.${lockCutoffIso}`)
         .select('id, owner_token, status')
 
@@ -1212,6 +1215,39 @@ Deno.serve(async (req: Request) => {
     }
 
     // 10. PONTOS 5 E 6: Envio e registro com tratamento de resultado incerto e posse exclusiva
+    // ITEM 1/2: Antes de chamar o envio SMTP, gravar atomicamente status 'smtp_maybe_sent'
+    // com UPDATE condicionado ao owner_token atual e RETURNING obrigatório;
+    // zero linhas ou erro -> NÃO enviar (erro técnico recuperável).
+    const preSmtpIso = new Date().toISOString()
+    const { data: maybeSentRows, error: maybeSentErr } = await supabase
+      .from('task_email_eventos')
+      .update({
+        status: 'smtp_maybe_sent',
+        locked_at: preSmtpIso,
+      })
+      .eq('id', eventoId)
+      .eq('owner_token', callOwnerToken)
+      .select('id, status, owner_token')
+
+    if (maybeSentErr || !maybeSentRows || maybeSentRows.length === 0) {
+      console.error(
+        'Falha técnica ao marcar status smtp_maybe_sent antes do SMTP:',
+        maybeSentErr || '0 linhas afetadas',
+      )
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: false,
+          error:
+            'Falha técnica ao assegurar pré-registro de envio (smtp_maybe_sent). Envio cancelado por segurança.',
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
     let smtpSuccess = false
     let sendErrorMessage: string | null = null
 

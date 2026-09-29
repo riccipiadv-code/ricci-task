@@ -3,7 +3,8 @@
 -- Arquivo: docs/transicao-atribuicao-rpc.sql
 -- NOTA: Este script é manual e NÃO é executado automaticamente pelo build/migrações.
 -- O banco do Ricci Task só é alterado por ação manual do responsável técnico no Supabase.
--- Versão 0.0.83: Correção Integral dos 7 Bloqueios Comprovados:
+-- Versão 0.0.84: Proteção Efetiva por Privilégios (REVOKE), Trigger Anti-Bypass,
+--   DROP dinâmico de políticas via catálogo (pg_policies) e CHECK de status expandido ('smtp_maybe_sent').
 --   1. Refatoração da RPC: variável explícita de operação (v_operacao: 'CRIACAO'/'EDICAO'),
 --      eliminação total de acessos ao RECORD v_tarefa no ramo de criação e nas expressões
 --      de retorno. Numeração automática via trigger task_definir_numero_caso preservada.
@@ -26,12 +27,13 @@
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 0. Variável de Configuração / GUC Local de Proteção de Sessão
+-- 0. Proteção por Privilégios Efetivos de Coluna (REVOKE UPDATE)
 -- ----------------------------------------------------------------------------
--- O GUC 'ricci_task.atribuicao_autorizada' é configurado exclusivamente dentro da
--- RPC SECURITY DEFINER (SET LOCAL). Qualquer tentativa de UPDATE direto em
--- task_tarefas que altere responsavel_core_usuario_id, executor_core_usuario_id,
--- responsavel_usuario_id ou executor_usuario_id fora desse contexto é rejeitada.
+-- [Item 1]: REVOKE UPDATE nas 4 colunas de atribuição de task_tarefas para
+-- authenticated, anon e public. Atualização direta dessas colunas só é permitida
+-- quando a sessão executa como o proprietário da função SECURITY DEFINER.
+REVOKE UPDATE (responsavel_core_usuario_id, executor_core_usuario_id, responsavel_usuario_id, executor_usuario_id)
+  ON public.task_tarefas FROM authenticated, anon, public;
 
 -- ----------------------------------------------------------------------------
 -- 1. Funções Auxiliares de Contexto Corporativo Central
@@ -197,11 +199,26 @@ BEGIN
   END IF;
 END $$;
 
+-- 4.4 Atualização da CHECK constraint de status em task_email_eventos (Item 2)
+-- Inclui 'smtp_maybe_sent', preservando todos os estados utilizados pelas Edge Functions:
+-- 'pending', 'smtp_maybe_sent', 'success', 'error', 'uncertain', 'pending_reconciliation', 'skipped'.
+DO $$
+BEGIN
+  -- Remover constraint antiga se existir
+  ALTER TABLE public.task_email_eventos
+    DROP CONSTRAINT IF EXISTS task_email_eventos_status_check;
+
+  ALTER TABLE public.task_email_eventos
+    ADD CONSTRAINT task_email_eventos_status_check
+    CHECK (status IN ('pending', 'smtp_maybe_sent', 'success', 'error', 'uncertain', 'pending_reconciliation', 'skipped'));
+END $$;
+
 -- ----------------------------------------------------------------------------
--- 5. PONTO 2: Trigger de Proteção Efetiva Contra Transferência Direta de Atribuição
--- Impede que UPDATE direto (via cliente PostgREST/authenticated) altere
--- responsavel_core_usuario_id, executor_core_usuario_id, responsavel_usuario_id
--- ou executor_usuario_id sem o token de contexto da RPC autorizada (GUC SET LOCAL).
+-- 5. PONTO 1: Trigger de Proteção Efetiva Contra Transferência Direta de Atribuição
+-- [Item 1]: Bloqueia qualquer tentativa de alteração nas 4 colunas de atribuição
+-- (responsavel_core_usuario_id, executor_core_usuario_id, responsavel_usuario_id, executor_usuario_id)
+-- a menos que a sessão execute como o proprietário da função SECURITY DEFINER.
+-- O GUC 'ricci_task.atribuicao_autorizada' deixa de autorizar qualquer coisa.
 -- ----------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.task_tarefas_impedir_transferencia_direta()
@@ -211,10 +228,11 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_auth_context TEXT;
   v_mudou_atribuicao BOOLEAN;
+  v_func_owner TEXT;
+  v_is_authorized_context BOOLEAN := false;
 BEGIN
-  -- Detecta se houve tentativa de alteração em quaisquer das colunas centrais ou legadas de atribuição
+  -- Detecta se qualquer das 4 colunas mudou (IS DISTINCT FROM)
   v_mudou_atribuicao := (
     (OLD.responsavel_core_usuario_id IS DISTINCT FROM NEW.responsavel_core_usuario_id) OR
     (OLD.executor_core_usuario_id IS DISTINCT FROM NEW.executor_core_usuario_id) OR
@@ -223,11 +241,28 @@ BEGIN
   );
 
   IF v_mudou_atribuicao THEN
-    -- Consulta o GUC de sessão configurado exclusivamente pela RPC autorizada
-    v_auth_context := current_setting('ricci_task.atribuicao_autorizada', true);
+    -- Obtém o proprietário registrado da função SECURITY DEFINER da RPC
+    SELECT pg_get_userbyid(proowner)
+    INTO v_func_owner
+    FROM pg_proc
+    WHERE proname = 'task_salvar_controle_transacional'
+      AND pronamespace = 'public'::regnamespace
+    LIMIT 1;
 
-    IF v_auth_context IS NULL OR v_auth_context <> 'true' THEN
-      RAISE EXCEPTION 'Transferência direta de atribuição bloqueada. Atribuições só podem ser alteradas através da RPC autorizada task_salvar_controle_transacional.'
+    -- Se a função ainda não existir ou falhar a resolução, usa o proprietário do schema public ou postgres/current_user
+    IF v_func_owner IS NULL THEN
+      v_func_owner := 'postgres';
+    END IF;
+
+    -- Verifica se a execução atual roda como o proprietário da função SECURITY DEFINER (current_user)
+    -- ou se current_user é superusuário / membro da role proprietária
+    IF current_user = v_func_owner OR pg_has_role(current_user, v_func_owner, 'MEMBER') THEN
+      v_is_authorized_context := true;
+    END IF;
+
+    -- GUC 'ricci_task.atribuicao_autorizada' NÃO autoriza (critério estritamente removido)
+    IF NOT v_is_authorized_context THEN
+      RAISE EXCEPTION 'Transferência direta de atribuição bloqueada. Atribuições só podem ser alteradas através da RPC autorizada task_salvar_controle_transacional executada pelo proprietário autorizado.'
         USING ERRCODE = '42501';
     END IF;
   END IF;
@@ -323,9 +358,6 @@ DECLARE
   v_saved_caso RECORD;
   v_eventos_provs JSONB := '[]'::jsonb;
 BEGIN
-  -- PONTO 2: Define autorização local para alterações de atribuição desta transação
-  PERFORM set_config('ricci_task.atribuicao_autorizada', 'true', true);
-
   -- 1. Identifica o usuário corporativo logado
   v_caller_auth_id := auth.uid();
   IF v_caller_auth_id IS NULL THEN
@@ -980,23 +1012,47 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 8. PONTOS 2 E 3: INVENTÁRIO EXAUSTIVO E SUBSTITUIÇÃO INTEGRAL DE POLÍTICAS RLS
--- Remove todas as políticas antigas existentes por nome descoberto no catálogo
--- e recria o conjunto de políticas estritas para todas as tabelas exclusivas do Ricci Task.
--- Ponto 3: Remove liberação de casos sem ambos os IDs centrais para gestores:
--- casos legados sem correspondência central ficam restritos exclusivamente ao ADMINISTRADOR.
+-- 8. PONTOS 2 E 3: DROP DINÂMICO VIA pg_policies E SUBSTITUIÇÃO INTEGRAL DE RLS
+-- [Item 3]: Bloco DO $$ ... $$ que consulta pg_policies e derruba TODAS as
+-- políticas existentes das 8 tabelas tratadas pelo script dentro da mesma transação,
+-- sem COMMIT interno, e na sequência recria as políticas restritas já definidas.
+-- Tabelas tratadas:
+--   1. task_tarefas
+--   2. task_providencias
+--   3. task_transicoes_atribuicao
+--   4. task_transacao_providencias_eventos
+--   5. task_email_eventos
+--   6. task_nomes_controle
+--   7. task_status
+--   8. task_status_providencia
+--   (além de task_tipos_prazo e task_email_notificacoes se existirem)
 -- ----------------------------------------------------------------------------
 
--- 8.1 Inventário e DROP de políticas existentes em public.task_tarefas
-DROP POLICY IF EXISTS "task_tarefas_select_policy" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_insert_policy" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_update_policy" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_delete_policy" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_authenticated_all" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_select" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_insert" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_update" ON public.task_tarefas;
-DROP POLICY IF EXISTS "task_tarefas_delete" ON public.task_tarefas;
+DO $$
+DECLARE
+  r RECORD;
+  v_tabelas_alvo TEXT[] := ARRAY[
+    'task_tarefas',
+    'task_providencias',
+    'task_transicoes_atribuicao',
+    'task_transacao_providencias_eventos',
+    'task_email_eventos',
+    'task_nomes_controle',
+    'task_status',
+    'task_status_providencia',
+    'task_tipos_prazo',
+    'task_email_notificacoes'
+  ];
+BEGIN
+  FOR r IN (
+    SELECT schemaname, tablename, policyname
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = ANY(v_tabelas_alvo)
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', r.policyname, r.schemaname, r.tablename);
+  END LOOP;
+END $$;
 
 -- Novas Políticas para public.task_tarefas:
 -- SELECT: Admin vê tudo; Gestor vê próprios + equipe direta com ID central; Operacional vê próprios com ID central.
@@ -1096,16 +1152,8 @@ CREATE POLICY "task_tarefas_delete_policy" ON public.task_tarefas
   FOR DELETE TO authenticated
   USING (public.task_is_admin());
 
--- 8.2 Inventário e DROP de políticas em public.task_providencias
-DROP POLICY IF EXISTS "task_providencias_select_policy" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_insert_policy" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_update_policy" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_delete_policy" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_authenticated_all" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_select" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_insert" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_update" ON public.task_providencias;
-DROP POLICY IF EXISTS "task_providencias_delete" ON public.task_providencias;
+-- 8.2 Políticas para public.task_providencias
+ALTER TABLE public.task_providencias ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "task_providencias_select_policy" ON public.task_providencias
   FOR SELECT TO authenticated
@@ -1153,11 +1201,8 @@ CREATE POLICY "task_providencias_delete_policy" ON public.task_providencias
     )
   );
 
--- 8.3 Inventário e DROP de políticas em public.task_transicoes_atribuicao
-DROP POLICY IF EXISTS "task_transicoes_select_policy" ON public.task_transicoes_atribuicao;
-DROP POLICY IF EXISTS "task_transicoes_insert_policy" ON public.task_transicoes_atribuicao;
-DROP POLICY IF EXISTS "task_transicoes_update_policy" ON public.task_transicoes_atribuicao;
-DROP POLICY IF EXISTS "task_transicoes_delete_policy" ON public.task_transicoes_atribuicao;
+-- 8.3 Políticas para public.task_transicoes_atribuicao
+ALTER TABLE public.task_transicoes_atribuicao ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "task_transicoes_select_policy" ON public.task_transicoes_atribuicao
   FOR SELECT TO authenticated
@@ -1166,11 +1211,8 @@ CREATE POLICY "task_transicoes_select_policy" ON public.task_transicoes_atribuic
     OR public.task_is_admin()
   );
 
--- 8.4 Inventário e DROP de políticas em public.task_transacao_providencias_eventos
-DROP POLICY IF EXISTS "task_transacao_provs_select_policy" ON public.task_transacao_providencias_eventos;
-DROP POLICY IF EXISTS "task_transacao_provs_insert_policy" ON public.task_transacao_providencias_eventos;
-DROP POLICY IF EXISTS "task_transacao_provs_update_policy" ON public.task_transacao_providencias_eventos;
-DROP POLICY IF EXISTS "task_transacao_provs_delete_policy" ON public.task_transacao_providencias_eventos;
+-- 8.4 Políticas para public.task_transacao_providencias_eventos
+ALTER TABLE public.task_transacao_providencias_eventos ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "task_transacao_provs_select_policy" ON public.task_transacao_providencias_eventos
   FOR SELECT TO authenticated
@@ -1179,11 +1221,8 @@ CREATE POLICY "task_transacao_provs_select_policy" ON public.task_transacao_prov
     OR public.task_is_admin()
   );
 
--- 8.5 Inventário e DROP de políticas em public.task_email_eventos
-DROP POLICY IF EXISTS "task_email_eventos_select_policy" ON public.task_email_eventos;
-DROP POLICY IF EXISTS "task_email_eventos_insert_policy" ON public.task_email_eventos;
-DROP POLICY IF EXISTS "task_email_eventos_update_policy" ON public.task_email_eventos;
-DROP POLICY IF EXISTS "task_email_eventos_delete_policy" ON public.task_email_eventos;
+-- 8.5 Políticas para public.task_email_eventos
+ALTER TABLE public.task_email_eventos ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "task_email_eventos_select_policy" ON public.task_email_eventos
   FOR SELECT TO authenticated
@@ -1195,8 +1234,6 @@ ALTER TABLE public.task_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.task_status_providencia ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.task_tipos_prazo ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "task_nomes_controle_select_policy" ON public.task_nomes_controle;
-DROP POLICY IF EXISTS "task_nomes_controle_write_policy" ON public.task_nomes_controle;
 CREATE POLICY "task_nomes_controle_select_policy" ON public.task_nomes_controle
   FOR SELECT TO authenticated USING (true);
 CREATE POLICY "task_nomes_controle_write_policy" ON public.task_nomes_controle
@@ -1204,8 +1241,6 @@ CREATE POLICY "task_nomes_controle_write_policy" ON public.task_nomes_controle
   USING (public.task_is_admin())
   WITH CHECK (public.task_is_admin());
 
-DROP POLICY IF EXISTS "task_status_select_policy" ON public.task_status;
-DROP POLICY IF EXISTS "task_status_write_policy" ON public.task_status;
 CREATE POLICY "task_status_select_policy" ON public.task_status
   FOR SELECT TO authenticated USING (true);
 CREATE POLICY "task_status_write_policy" ON public.task_status
@@ -1213,8 +1248,6 @@ CREATE POLICY "task_status_write_policy" ON public.task_status
   USING (public.task_is_admin())
   WITH CHECK (public.task_is_admin());
 
-DROP POLICY IF EXISTS "task_status_providencia_select_policy" ON public.task_status_providencia;
-DROP POLICY IF EXISTS "task_status_providencia_write_policy" ON public.task_status_providencia;
 CREATE POLICY "task_status_providencia_select_policy" ON public.task_status_providencia
   FOR SELECT TO authenticated USING (true);
 CREATE POLICY "task_status_providencia_write_policy" ON public.task_status_providencia
@@ -1222,8 +1255,6 @@ CREATE POLICY "task_status_providencia_write_policy" ON public.task_status_provi
   USING (public.task_is_admin())
   WITH CHECK (public.task_is_admin());
 
-DROP POLICY IF EXISTS "task_tipos_prazo_select_policy" ON public.task_tipos_prazo;
-DROP POLICY IF EXISTS "task_tipos_prazo_write_policy" ON public.task_tipos_prazo;
 CREATE POLICY "task_tipos_prazo_select_policy" ON public.task_tipos_prazo
   FOR SELECT TO authenticated USING (true);
 CREATE POLICY "task_tipos_prazo_write_policy" ON public.task_tipos_prazo
