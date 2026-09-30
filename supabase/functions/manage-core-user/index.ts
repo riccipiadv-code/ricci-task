@@ -1,5 +1,90 @@
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { verifyCoreAdmin, SYSTEM_CODE_CONECTAI } from '../_shared/core-auth.ts'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
+
+const SYSTEM_CODE_CONECTAI = 'CONECTAI'
+const ROLE_CODE_ADMINISTRADOR = 'ADMINISTRADOR'
+
+interface CoreAdminAuthResult {
+  allowed: boolean
+  error?: string
+  status?: number
+  coreUser?: {
+    id: string
+    auth_user_id: string | null
+    nome: string
+    email: string
+  }
+}
+
+async function verifyCoreAdmin(
+  supabase: SupabaseClient,
+  authUserId: string,
+  allowedSystems: string[] = [SYSTEM_CODE_CONECTAI, 'GESTOR_ACESSO'],
+): Promise<CoreAdminAuthResult> {
+  if (!authUserId) {
+    return {
+      allowed: false,
+      error: 'Não autorizado.',
+      status: 401,
+    }
+  }
+
+  const { data: coreUser, error: userError } = await supabase
+    .from('core_usuarios')
+    .select('id, auth_user_id, nome, email, ativo')
+    .eq('auth_user_id', authUserId)
+    .maybeSingle()
+
+  if (userError || !coreUser) {
+    return {
+      allowed: false,
+      error: 'Permissão negada: usuário corporativo não localizado.',
+      status: 403,
+    }
+  }
+
+  if (!coreUser.ativo) {
+    return {
+      allowed: false,
+      error: 'Permissão negada: usuário inativo no sistema corporativo.',
+      status: 403,
+    }
+  }
+
+  const { data: adminLinks, error: linkError } = await supabase
+    .from('core_usuario_sistemas')
+    .select(`
+      id,
+      ativo,
+      core_sistemas!inner(codigo, ativo),
+      core_perfis!inner(codigo, ativo)
+    `)
+    .eq('usuario_id', coreUser.id)
+    .eq('ativo', true)
+    .in('core_sistemas.codigo', allowedSystems)
+    .eq('core_sistemas.ativo', true)
+    .eq('core_perfis.codigo', ROLE_CODE_ADMINISTRADOR)
+    .eq('core_perfis.ativo', true)
+
+  if (linkError || !adminLinks || adminLinks.length === 0) {
+    return {
+      allowed: false,
+      error: 'Permissão negada: apenas administradores possuem privilégios para esta operação.',
+      status: 403,
+    }
+  }
+
+  return {
+    allowed: true,
+    coreUser: {
+      id: coreUser.id,
+      auth_user_id: coreUser.auth_user_id,
+      nome: coreUser.nome,
+      email: coreUser.email,
+    },
+  }
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1500,11 +1585,12 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      const resetRedirectUrl = `${APP_URL}/login`
+      const recoveryRedirectUrl = 'https://acessos-ricci.goskip.app/redefinir-senha'
+      const inviteRedirectUrl = `${APP_URL}/login`
 
       if (usuario.auth_user_id) {
         const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(usuario.email, {
-          redirectTo: resetRedirectUrl,
+          redirectTo: recoveryRedirectUrl,
         })
         if (resetErr) throw resetErr
 
@@ -1529,7 +1615,7 @@ Deno.serve(async (req: Request) => {
         const { data: inviteData, error: inviteErr } =
           await adminClient.auth.admin.inviteUserByEmail(usuario.email, {
             data: { nome: usuario.nome },
-            redirectTo: resetRedirectUrl,
+            redirectTo: inviteRedirectUrl,
           })
 
         if (inviteErr) throw inviteErr

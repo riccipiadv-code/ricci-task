@@ -1,7 +1,7 @@
 {
   "_versions": {
-    "sync-manychat": 290,
-    "manychat-webhook": 289,
+    "sync-manychat": 294,
+    "manychat-webhook": 293,
     "send-test-email": 93,
     "save-email-settings": 89,
     "admin-user-access": 31,
@@ -11,6 +11,6 @@
     "notify-responsavel-transfer": 91,
     "notify-task-assignment": 55,
     "notify-task-overdue": 54,
-    "manage-core-user": 66
+    "manage-core-user": 67
   }
 }
