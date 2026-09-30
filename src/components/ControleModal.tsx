@@ -135,6 +135,7 @@ export function ControleModal({
 
   const [dataAutorizacao, setDataAutorizacao] = useState('')
   const [prazoConclusao, setPrazoConclusao] = useState('')
+  const [dataConclusaoCaso, setDataConclusaoCaso] = useState('')
   const [responsavelUsuarioId, setResponsavelUsuarioId] = useState('')
   const [executorUsuarioId, setExecutorUsuarioId] = useState('')
   const [executorIsResponsavel, setExecutorIsResponsavel] = useState(false)
@@ -392,6 +393,9 @@ export function ControleModal({
       setPrazoConclusao(
         controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
       )
+      setDataConclusaoCaso(
+        controleToEdit.data_conclusao ? controleToEdit.data_conclusao.split('T')[0] : '',
+      )
       const editRespId =
         controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id || ''
       const editExecId =
@@ -451,6 +455,7 @@ export function ControleModal({
       setStatusId(statusPadraoId)
       setDataAutorizacao(getTodayLocalDate())
       setPrazoConclusao('')
+      setDataConclusaoCaso('')
       setResponsavelUsuarioId('')
       setExecutorUsuarioId('')
       setExecutorIsResponsavel(false)
@@ -992,6 +997,21 @@ export function ControleModal({
       }
     }
 
+    // Proteção de data_conclusao do caso no formulário:
+    // Administrador: pode editar normalmente.
+    // Gestor e Operacional: não podem alterar manualmente pelo payload/formulário.
+    // Em edição, preserva o valor existente do caso; na criação, envia null.
+    let finalDataConclusaoCaso: string | null = dataConclusaoCaso.trim() || null
+    if (!isAdmin) {
+      if (controleToEdit?.id) {
+        finalDataConclusaoCaso = controleToEdit.data_conclusao
+          ? controleToEdit.data_conclusao.split('T')[0]
+          : null
+      } else {
+        finalDataConclusaoCaso = null
+      }
+    }
+
     const payload: SaveControleInput = {
       id: controleToEdit?.id,
       nome_controle_id: nomeControleId,
@@ -999,6 +1019,7 @@ export function ControleModal({
       status_id: statusId,
       data_autorizacao: dataAutorizacao || null,
       prazo_conclusao: prazoConclusao || null,
+      data_conclusao: finalDataConclusaoCaso,
       responsavel_usuario_id: opRespPreservado,
       executor_usuario_id: opExecPreservado,
       responsavel_core_usuario_id: respCoreId || null,
@@ -1405,6 +1426,42 @@ export function ControleModal({
                         onChange={(e) => setPrazoConclusao(e.target.value)}
                         className="h-10 rounded-xl bg-background"
                       />
+                    </div>
+
+                    {/* Data de Conclusão do Caso (data_conclusao) */}
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="data-conclusao-caso"
+                        className={cn(
+                          'text-xs font-semibold flex items-center gap-1',
+                          !isAdmin && 'text-muted-foreground',
+                        )}
+                      >
+                        <CalendarIcon className="w-3.5 h-3.5" />
+                        <span>Data de Conclusão</span>
+                      </Label>
+                      <Input
+                        id="data-conclusao-caso"
+                        type="date"
+                        value={dataConclusaoCaso}
+                        disabled={!isAdmin}
+                        onChange={(e) => setDataConclusaoCaso(e.target.value)}
+                        className={cn(
+                          'h-10 rounded-xl bg-background text-xs font-medium',
+                          !isAdmin &&
+                            'opacity-70 cursor-not-allowed bg-muted/50 border-border select-none text-muted-foreground',
+                        )}
+                        title={
+                          !isAdmin
+                            ? 'Somente Administradores podem editar a Data de Conclusão.'
+                            : undefined
+                        }
+                      />
+                      {!isAdmin && (
+                        <p className="text-[11px] text-muted-foreground italic">
+                          Somente o Administrador pode inserir ou alterar manualmente a Data de Conclusão.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>

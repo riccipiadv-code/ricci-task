@@ -864,6 +864,19 @@ export const controleService = {
       existingRecord = existingData
     }
 
+    const isCallerAdmin = callerPerfil?.toUpperCase() === 'ADMINISTRADOR'
+
+    // Se o chamador não for Administrador, protege data_conclusao do caso (se informada)
+    // Em edição por gestor/operacional, preserva o valor existente no banco (ou null); na criação, não permite definição manual (null).
+    let casoDataConclusao: string | null = (input as any).data_conclusao || null
+    if (!isCallerAdmin) {
+      if (input.id && existingRecord) {
+        casoDataConclusao = (existingRecord as any).data_conclusao ? (existingRecord as any).data_conclusao.split('T')[0] : null
+      } else {
+        casoDataConclusao = null
+      }
+    }
+
     // Monta dados do caso para a RPC
     const dadosCaso: any = {
       nome_controle_id: input.nome_controle_id,
@@ -877,11 +890,12 @@ export const controleService = {
       executor_usuario_id: input.executor_usuario_id || null,
       pasta_cliente: input.pasta_cliente?.trim() || null,
       pasta_ricci: input.pasta_ricci?.trim() || null,
+      ...((input as any).data_conclusao !== undefined ? { data_conclusao: casoDataConclusao } : {}),
     }
 
     // Se o chamador não for ADMINISTRADOR, busca os valores existentes no banco
-    // para garantir proteção contra adulteração manual de data_conclusao no payload da RPC
-    const isCallerAdmin = callerPerfil?.toUpperCase() === 'ADMINISTRADOR'
+    // para garantir proteção contra adulteração manual de data_conclusao no payload da RPC.
+    // Em edição, preserva estritamente o valor do banco; na criação por não-admin, não permite definição manual (envia null).
     let dbProvidenciasMap: Map<string, string | null> | null = null
 
     if (!isCallerAdmin && input.id && input.providencias && input.providencias.length > 0) {
@@ -909,9 +923,16 @@ export const controleService = {
     // Lista de providências para envio à transação (preservando temp_id para correlação explícita)
     const providenciasPayload = (input.providencias || []).map((p) => {
       let finalDataConclusao = p.data_conclusao || null
-      // Se não for admin e a providência já existe no banco, preserva estritamente o valor do banco
-      if (!isCallerAdmin && p.id && dbProvidenciasMap && dbProvidenciasMap.has(p.id)) {
-        finalDataConclusao = dbProvidenciasMap.get(p.id) ?? null
+      if (!isCallerAdmin) {
+        if (p.id) {
+          // Em edição por não-administrador: preserva o valor existente no banco
+          if (dbProvidenciasMap && dbProvidenciasMap.has(p.id)) {
+            finalDataConclusao = dbProvidenciasMap.get(p.id) ?? null
+          }
+        } else {
+          // Na criação por não-administrador: não permite definição manual
+          finalDataConclusao = null
+        }
       }
 
       return {

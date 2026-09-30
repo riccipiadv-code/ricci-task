@@ -111,6 +111,7 @@ export interface TaskControleRecord {
   status_id: string
   data_autorizacao: string | null
   prazo_conclusao: string | null
+  data_conclusao?: string | null
   responsavel_usuario_id?: string | null // opcional e nullable (tokens históricos)
   executor_usuario_id?: string | null // opcional e nullable (tokens históricos)
   responsavel_core_usuario_id: string // Autoridade definitiva obrigatória
@@ -146,6 +147,7 @@ export interface SaveControleInput {
   status_id: string
   data_autorizacao?: string | null
   prazo_conclusao?: string | null
+  data_conclusao?: string | null
   responsavel_usuario_id?: string | null // opcional e nullable (tokens históricos)
   executor_usuario_id?: string | null // opcional e nullable (tokens históricos)
   responsavel_core_usuario_id: string // Campo central obrigatório
