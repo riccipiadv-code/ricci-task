@@ -1296,5 +1296,68 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         }),
       ).rejects.toThrow(/Dados obrigatórios da providência incompletos/)
     })
+
+    it('saveControleTransacional: expõe eventos_providencias retornado pela RPC no formato estruturado', async () => {
+      const dbCaso = {
+        id: 'caso-eventos-1',
+        nome_controle_id: 'nc-1',
+        numero_caso: 105,
+        identificacao_caso: 'Caso com Eventos de Providências',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-resp',
+        executor_core_usuario_id: 'cu-exec',
+        updated_at: '2025-06-01T12:00:00Z',
+      }
+
+      const mockEventos = [
+        {
+          providencia_id: 'prov-uuid-1',
+          tipo_evento: 'providencia_inclusao' as const,
+          versao_updated_at: '2025-06-01T12:00:00Z',
+        },
+        {
+          providencia_id: 'prov-uuid-2',
+          tipo_evento: 'providencia_atualizacao' as const,
+          versao_updated_at: '2025-06-01T12:00:00Z',
+        },
+      ]
+
+      vi.spyOn(supabase, 'rpc').mockResolvedValue({
+        data: {
+          success: true,
+          mudanca_real: true,
+          tarefa_id: 'caso-eventos-1',
+          caso: dbCaso,
+          providencias: [
+            {
+              id: 'prov-uuid-1',
+              providencia: 'Prov 1',
+              email_alertas: true,
+              email_alerta_inclusao: true,
+            },
+            {
+              id: 'prov-uuid-2',
+              providencia: 'Prov 2',
+              email_alertas: true,
+              email_alerta_atualizacao: true,
+            },
+          ],
+          eventos_providencias: mockEventos,
+        },
+        error: null,
+      } as any)
+
+      const result = await controleService.saveControleTransacional({
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Caso com Eventos de Providências',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-resp',
+        executor_core_usuario_id: 'cu-exec',
+      })
+
+      expect(result.eventos_providencias).toBeDefined()
+      expect(result.eventos_providencias).toHaveLength(2)
+      expect(result.eventos_providencias).toEqual(mockEventos)
+    })
   })
 })

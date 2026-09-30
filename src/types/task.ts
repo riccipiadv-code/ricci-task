@@ -156,11 +156,18 @@ export interface SaveControleInput {
   motivo_transicao?: string | null
 }
 
+export interface EventoProvidenciaResult {
+  providencia_id: string
+  tipo_evento: 'providencia_inclusao' | 'providencia_atualizacao'
+  versao_updated_at: string
+}
+
 export interface SaveControleResult {
   controle: TaskControleRecord
   transicao_id?: string | null
   perda_acesso?: boolean
   providencias?: TaskProvidenciaRecord[]
+  eventos_providencias?: EventoProvidenciaResult[]
 }
 
 export interface SaveProvidenciaInput {

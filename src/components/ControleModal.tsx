@@ -906,9 +906,6 @@ export function ControleModal({
       }
     }
 
-    const providenciasNovasParaNotificar: string[] = [] // lista de tempIds das novas providências a notificar
-    const providenciasParaNotificarAtualizacao: string[] = []
-
     for (const p of providencias) {
       const st = statusProvLista.find((s) => s.id === p.status_id)
       const cod = st?.codigo?.toLowerCase() || ''
@@ -932,8 +929,6 @@ export function ControleModal({
 
       const isNovaProvidencia = !p.id || !p.isPersisted
       const pProvTrimmed = p.providencia.trim()
-      const pPrazoClean = p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : null
-      const dtConclusaoClean = dtConclusao ? dtConclusao.split('T')[0] : null
       const effectiveTempId = p.tempId || `temp_${Math.random().toString(36).substring(2, 9)}`
 
       provsToSave.push({
@@ -951,45 +946,6 @@ export function ControleModal({
         email_alerta_atraso: p.email_alerta_atraso ?? false,
         email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
       })
-
-      let houveMudancaReal = false
-      if (!isNovaProvidencia && p.id) {
-        const prev = prevProvidenciasMap.get(p.id)
-        if (prev) {
-          const mudouDesc = prev.providencia !== pProvTrimmed
-          const mudouPrazo = prev.prazo_conclusao !== pPrazoClean
-          const mudouTipo = prev.tipo_prazo_id !== p.tipo_prazo_id
-          const mudouStatus = prev.status_id !== p.status_id
-          const mudouOrdem = prev.ordem !== (p.ordem ?? 0)
-          const mudouDataConc = prev.data_conclusao !== dtConclusaoClean
-          const mudouAlertas = prev.email_alertas !== (p.email_alertas ?? false)
-          const mudouInc = prev.email_alerta_inclusao !== (p.email_alerta_inclusao ?? false)
-          const mudouAtr = prev.email_alerta_atraso !== (p.email_alerta_atraso ?? false)
-          const mudouAtu = prev.email_alerta_atualizacao !== (p.email_alerta_atualizacao ?? false)
-          houveMudancaReal =
-            mudouDesc ||
-            mudouPrazo ||
-            mudouTipo ||
-            mudouStatus ||
-            mudouOrdem ||
-            mudouDataConc ||
-            mudouAlertas ||
-            mudouInc ||
-            mudouAtr ||
-            mudouAtu
-        }
-      }
-
-      if (isNovaProvidencia) {
-        if (p.email_alertas && p.email_alerta_inclusao) {
-          // Registra o tempId específico para mapear no retorno da RPC
-          providenciasNovasParaNotificar.push(effectiveTempId)
-        }
-      } else if (p.id) {
-        if (p.email_alertas && p.email_alerta_atualizacao && houveMudancaReal) {
-          providenciasParaNotificarAtualizacao.push(p.id)
-        }
-      }
     }
 
     // Proteção de prazo_conclusao do caso no formulário:
@@ -1076,72 +1032,74 @@ export function ControleModal({
         }
       }
 
-      // 5.2. Alertas de Providência — Inclusão (Ponto 3: Notifica usando exclusivamente o UUID gravado)
-      // Resolve o UUID gravado a partir do temp_id retornado pela RPC
+      // 5.2. Alertas de Providência — Iteração sobre eventos_providencias (RPC como autoridade única)
       const provsGravadas = saveResult.providencias || []
-      const uuidToNotifyInclusao: string[] = []
+      const eventosProvidencias = saveResult.eventos_providencias || []
 
-      for (const tId of providenciasNovasParaNotificar) {
-        // Encontra a providência pelo temp_id retornado pela RPC
-        const match = provsGravadas.find((pg: any) => pg.temp_id === tId || pg.tempId === tId)
-        if (match?.id) {
-          uuidToNotifyInclusao.push(match.id)
+      for (const ev of eventosProvidencias) {
+        const provCorrespondente = provsGravadas.find((pg: any) => pg.id === ev.providencia_id)
+        if (!provCorrespondente) {
+          continue
         }
-      }
 
-      for (const realProvUuid of uuidToNotifyInclusao) {
-        try {
-          const resInclusao = await controleService.notifyProvidenciaInclusao(
-            savedControle.id,
-            realProvUuid,
-          )
-          if (!resInclusao.success) {
-            emailFalhou = true
-            console.error(
-              'Erro ao disparar notificação de inclusão de providência:',
-              resInclusao.error || resInclusao.reason || resInclusao.message,
-              resInclusao,
-            )
-          } else if (resInclusao.sent === false && resInclusao.reason) {
-            console.log(
-              'Notificação de inclusão de providência não enviada (motivo controlado):',
-              resInclusao.reason,
-              resInclusao.message,
-            )
+        if (ev.tipo_evento === 'providencia_inclusao') {
+          if (provCorrespondente.email_alertas && provCorrespondente.email_alerta_inclusao) {
+            try {
+              const resInclusao = await controleService.notifyProvidenciaInclusao(
+                savedControle.id,
+                ev.providencia_id,
+              )
+              if (!resInclusao.success) {
+                emailFalhou = true
+                console.error(
+                  'Erro ao disparar notificação de inclusão de providência:',
+                  resInclusao.error || resInclusao.reason || resInclusao.message,
+                  resInclusao,
+                )
+              } else if (resInclusao.sent === false && resInclusao.reason) {
+                console.log(
+                  'Notificação de inclusão de providência não enviada (motivo controlado):',
+                  resInclusao.reason,
+                  resInclusao.message,
+                )
+              }
+            } catch (errInclusao) {
+              emailFalhou = true
+              console.error(
+                'Falha segura ao disparar alerta de inclusão de providência:',
+                errInclusao,
+              )
+            }
           }
-        } catch (errInclusao) {
-          emailFalhou = true
-          console.error('Falha segura ao disparar alerta de inclusão de providência:', errInclusao)
-        }
-      }
-
-      // 5.3. Alertas de Providência — Atualização
-      for (const pId of providenciasParaNotificarAtualizacao) {
-        try {
-          const resAtualizacao = await controleService.notifyProvidenciaAtualizacao(
-            savedControle.id,
-            pId,
-          )
-          if (!resAtualizacao.success) {
-            emailFalhou = true
-            console.error(
-              'Erro ao disparar notificação de atualização de providência:',
-              resAtualizacao.error || resAtualizacao.reason || resAtualizacao.message,
-              resAtualizacao,
-            )
-          } else if (resAtualizacao.sent === false && resAtualizacao.reason) {
-            console.log(
-              'Notificação de atualização de providência não enviada (motivo controlado):',
-              resAtualizacao.reason,
-              resAtualizacao.message,
-            )
+        } else if (ev.tipo_evento === 'providencia_atualizacao') {
+          if (provCorrespondente.email_alertas && provCorrespondente.email_alerta_atualizacao) {
+            try {
+              const resAtualizacao = await controleService.notifyProvidenciaAtualizacao(
+                savedControle.id,
+                ev.providencia_id,
+              )
+              if (!resAtualizacao.success) {
+                emailFalhou = true
+                console.error(
+                  'Erro ao disparar notificação de atualização de providência:',
+                  resAtualizacao.error || resAtualizacao.reason || resAtualizacao.message,
+                  resAtualizacao,
+                )
+              } else if (resAtualizacao.sent === false && resAtualizacao.reason) {
+                console.log(
+                  'Notificação de atualização de providência não enviada (motivo controlado):',
+                  resAtualizacao.reason,
+                  resAtualizacao.message,
+                )
+              }
+            } catch (errAtualizacao) {
+              emailFalhou = true
+              console.error(
+                'Falha segura ao disparar alerta de atualização de providência:',
+                errAtualizacao,
+              )
+            }
           }
-        } catch (errAtualizacao) {
-          emailFalhou = true
-          console.error(
-            'Falha segura ao disparar alerta de atualização de providência:',
-            errAtualizacao,
-          )
         }
       }
 

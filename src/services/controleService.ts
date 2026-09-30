@@ -983,6 +983,9 @@ export const controleService = {
     const transicaoId = rpcResult.transicao_id || null
     const perdaAcesso = Boolean(rpcResult.perda_acesso)
     const provsDb = rpcResult.providencias || []
+    const eventosProvidencias = Array.isArray(rpcResult.eventos_providencias)
+      ? rpcResult.eventos_providencias
+      : []
 
     // Notifica auto-arquivamento se status finalizou
     if (savedCasoDb.arquivado_at && typeof window !== 'undefined') {
@@ -1023,6 +1026,7 @@ export const controleService = {
       transicao_id: transicaoId,
       perda_acesso: perdaAcesso,
       providencias: provsDb,
+      eventos_providencias: eventosProvidencias,
     }
   },
 
