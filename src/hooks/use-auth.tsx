@@ -33,6 +33,8 @@ interface AuthContextType {
   coreUserId: string | null
   coreUsuarioNome: string | null
   coreErrorMessage: string | null
+  recoveryBlocked: boolean
+  dismissRecoveryBlocked: () => void
   refreshAccess: () => Promise<CoreAccessResolution | null>
 }
 
@@ -58,6 +60,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [coreUserId, setCoreUserId] = useState<string | null>(null)
   const [coreUsuarioNome, setCoreUsuarioNome] = useState<string | null>(null)
   const [coreErrorMessage, setCoreErrorMessage] = useState<string | null>(null)
+  const [recoveryBlocked, setRecoveryBlocked] = useState<boolean>(false)
 
   // Refs de controle para isolamento de requisições concorrentes e deduplicação
   const currentUserIdRef = useRef<string | null>(null)
@@ -80,6 +83,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setCoreUsuarioNome(null)
     setCoreErrorMessage(null)
   }, [setAccessStatusState])
+
+  const handlePasswordRecoveryAttempt = useCallback(async () => {
+    // Sessões de recovery não podem operar no Ricci Task: encerra imediatamente no Supabase
+    try {
+      await supabase.auth.signOut()
+    } catch (err) {
+      console.error('[AuthProvider] Erro ao encerrar sessão de recuperação no Ricci Task:', err)
+    } finally {
+      clearAccessState()
+      setSession(null)
+      setUser(null)
+      setLoading(false)
+      setRecoveryBlocked(true)
+    }
+  }, [clearAccessState])
 
   /**
    * Executa a resolução assíncrona de autorização central protegida por:
@@ -247,6 +265,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } = supabase.auth.onAuthStateChange((event, newSession) => {
       // PROIBIDO async/await aqui dentro — estritamente síncrono conforme instrução de integração
       onAuthEventReceivedRef.current = true
+
+      // Requisito 4: Se o evento for PASSWORD_RECOVERY, bloquear o acesso, encerrar
+      // a sessão temporária e nunca promover a login normal nem autorizar telas internas
+      if (event === 'PASSWORD_RECOVERY') {
+        const currentSeq = ++authEventSeqRef.current
+        authEventSeqRef.current = currentSeq
+        void handlePasswordRecoveryAttempt()
+        return
+      }
+
       const currentSeq = ++authEventSeqRef.current
       applySessionAndAuthorize(newSession, 'onAuthStateChange', currentSeq, event)
     })
@@ -263,6 +291,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
         const currentSeq = ++authEventSeqRef.current
         if (!error && initialSession) {
+          // Checa se a URL contém indício de recovery (link antigo com hash/query type=recovery)
+          const hashOrSearch = `${window.location.hash}&${window.location.search}`
+          if (
+            hashOrSearch.includes('type=recovery') ||
+            hashOrSearch.includes('recovery_token') ||
+            hashOrSearch.includes('error_code=otp_expired')
+          ) {
+            void handlePasswordRecoveryAttempt()
+            return
+          }
+
           applySessionAndAuthorize(initialSession, 'getSession', currentSeq, 'INITIAL_SESSION')
         } else {
           applySessionAndAuthorize(null, 'getSession-error', currentSeq, 'INITIAL_SESSION')
@@ -280,7 +319,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       subscription.unsubscribe()
     }
-  }, [applySessionAndAuthorize])
+  }, [applySessionAndAuthorize, handlePasswordRecoveryAttempt])
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -294,7 +333,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const resetPassword = async (email: string) => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/`,
+      redirectTo: 'https://acessos-ricci.goskip.app/redefinir-senha',
     })
     return { error }
   }
@@ -316,6 +355,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         coreUserId,
         coreUsuarioNome,
         coreErrorMessage,
+        recoveryBlocked,
+        dismissRecoveryBlocked: () => setRecoveryBlocked(false),
         refreshAccess,
       }}
     >

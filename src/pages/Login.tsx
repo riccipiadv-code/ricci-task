@@ -33,7 +33,13 @@ import { useToast } from '@/hooks/use-toast'
 export default function LoginPage() {
   // Garante inicialização do tema
   useTheme()
-  const { signIn, resetPassword, loading: authLoading } = useAuth()
+  const {
+    signIn,
+    resetPassword,
+    loading: authLoading,
+    recoveryBlocked,
+    dismissRecoveryBlocked,
+  } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const { toast } = useToast()
@@ -49,6 +55,14 @@ export default function LoginPage() {
   const reasonParam = queryParams.get('reason')
 
   const accessReasonNotice = useMemo(() => {
+    if (recoveryBlocked || reasonParam === 'recovery_blocked') {
+      return {
+        title: 'Link de recuperação expirado ou inválido',
+        description:
+          'A redefinição de senha é centralizada no Gestor de Acessos Ricci. Links de recuperação não concedem acesso direto ao Ricci Task. Por favor, solicite um novo link de recuperação.',
+        type: 'warning' as const,
+      }
+    }
     if (reasonParam === 'no_access') {
       return {
         title: 'Acesso não autorizado',
@@ -66,13 +80,14 @@ export default function LoginPage() {
       }
     }
     return null
-  }, [reasonParam])
+  }, [reasonParam, recoveryBlocked])
 
   // Modal de Recuperação de Senha
   const [resetModalOpen, setResetModalOpen] = useState(false)
   const [resetEmail, setResetEmail] = useState('')
   const [resetting, setResetting] = useState(false)
   const [resetSent, setResetSent] = useState(false)
+  const [resetFeedbackMessage, setResetFeedbackMessage] = useState<string | null>(null)
 
   // Redireciona para onde o usuário tentou ir ou para o dashboard "/"
   const fromLocation = (location.state as { from?: { pathname?: string } })?.from?.pathname || '/'
@@ -88,6 +103,9 @@ export default function LoginPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setErrorMessage(null)
+    if (recoveryBlocked) {
+      dismissRecoveryBlocked()
+    }
 
     const trimmedEmail = email.trim()
     if (!trimmedEmail) {
@@ -141,6 +159,7 @@ export default function LoginPage() {
   const handleOpenResetModal = () => {
     setResetEmail(email.trim())
     setResetSent(false)
+    setResetFeedbackMessage(null)
     setResetModalOpen(true)
   }
 
@@ -160,16 +179,36 @@ export default function LoginPage() {
     try {
       const { error } = await resetPassword(trimmed)
       if (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Não foi possível enviar',
-          description: error.message || 'Erro ao solicitar recuperação de senha.',
-        })
+        const msg = (error.message || '').toLowerCase()
+        const isRateLimit =
+          error.status === 429 ||
+          msg.includes('rate limit') ||
+          msg.includes('too many requests') ||
+          msg.includes('over_email_send_rate_limit')
+
+        if (isRateLimit) {
+          toast({
+            variant: 'destructive',
+            title: 'Limite de tentativas atingido',
+            description:
+              'Muitas solicitações em sequência. Aguarde alguns instantes antes de tentar novamente.',
+          })
+        } else {
+          toast({
+            variant: 'destructive',
+            title: 'Falha técnica',
+            description:
+              'Não foi possível processar a solicitação no momento. Tente novamente mais tarde.',
+          })
+        }
       } else {
+        const NEUTRAL_MESSAGE =
+          'Se houver uma conta associada a este e-mail, você receberá instruções para redefinir sua senha nos Sistemas Ricci.'
+        setResetFeedbackMessage(NEUTRAL_MESSAGE)
         setResetSent(true)
         toast({
-          title: 'Link enviado com sucesso',
-          description: 'Se o e-mail existir, enviaremos as instruções de redefinição de senha.',
+          title: 'Solicitação processada',
+          description: NEUTRAL_MESSAGE,
         })
       }
     } catch {
@@ -352,9 +391,9 @@ export default function LoginPage() {
                 <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" />
                 <div>
                   <p className="font-semibold">Solicitação enviada!</p>
-                  <p className="mt-0.5 text-muted-foreground">
-                    Se o e-mail <strong className="text-foreground">{resetEmail}</strong> estiver
-                    cadastrado, enviamos as instruções de recuperação.
+                  <p className="mt-1 text-muted-foreground leading-relaxed">
+                    {resetFeedbackMessage ||
+                      'Se houver uma conta associada a este e-mail, você receberá instruções para redefinir sua senha nos Sistemas Ricci.'}
                   </p>
                 </div>
               </div>

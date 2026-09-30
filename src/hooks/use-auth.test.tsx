@@ -479,4 +479,48 @@ describe('Ciclo central de Autenticação e Autorização (useAuth)', () => {
     expect(result.current.hasSystemAccess).toBe(true)
     expect(result.current.accessStatus).toBe('ok')
   })
+
+  // 10. resetPassword utiliza explicitamente o destino central no Gestor de Acessos
+  it('10. resetPassword utiliza explicitamente redirectTo central no Gestor de Acessos', async () => {
+    const resetSpy = vi.spyOn(supabase.auth, 'resetPasswordForEmail').mockResolvedValue({
+      data: {},
+      error: null,
+    } as any)
+
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    await act(async () => {
+      const res = await result.current.resetPassword('colaborador@riccipi.com.br')
+      expect(res.error).toBeNull()
+    })
+
+    expect(resetSpy).toHaveBeenCalledTimes(1)
+    expect(resetSpy).toHaveBeenCalledWith('colaborador@riccipi.com.br', {
+      redirectTo: 'https://acessos-ricci.goskip.app/redefinir-senha',
+    })
+  })
+
+  // 11. evento PASSWORD_RECOVERY encerra sessão temporária e bloqueia promoção a login normal
+  it('11. evento PASSWORD_RECOVERY encerra sessão temporária e bloqueia acesso a rotas internas', async () => {
+    const signOutSpy = vi.spyOn(supabase.auth, 'signOut').mockResolvedValue({ error: null } as any)
+    const resolveAccessSpy = vi.spyOn(coreAccessModule, 'resolveUserCoreAccess')
+
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    const recoveryUser = { id: 'user-recovering', email: 'recovering@riccipi.com.br' }
+    const recoverySession = { user: recoveryUser, access_token: 'temp-recovery-token' }
+
+    await act(async () => {
+      authChangeCallback?.('PASSWORD_RECOVERY', recoverySession)
+    })
+
+    // Deve ter chamado signOut imediatamente para não manter sessão no Ricci Task
+    expect(signOutSpy).toHaveBeenCalledTimes(1)
+    // NÃO deve ter consultado autorização nem concedido acesso ao Ricci Task
+    expect(resolveAccessSpy).not.toHaveBeenCalled()
+    expect(result.current.session).toBeNull()
+    expect(result.current.user).toBeNull()
+    expect(result.current.hasSystemAccess).toBe(false)
+    expect(result.current.recoveryBlocked).toBe(true)
+  })
 })
