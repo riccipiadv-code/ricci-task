@@ -682,7 +682,7 @@ export async function processNotifyTaskAssignment(
     // 6.1 Consulta inicial do evento existente
     const { data: existingEvent, error: checkEventError } = await supabase
       .from('task_email_eventos')
-      .select('id, event_key, status, sent_at, updated_at, locked_at, owner_token')
+      .select('id, event_key, status, sent_at, locked_at, owner_token')
       .eq('event_key', eventKey)
       .maybeSingle()
 
