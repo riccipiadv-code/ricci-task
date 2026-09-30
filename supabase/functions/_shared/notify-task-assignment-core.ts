@@ -14,7 +14,7 @@
 // @ts-ignore
 import { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 // @ts-ignore
-import nodemailer from 'nodemailer'
+import nodemailer from 'npm:nodemailer'
 import {
   checkProvidenciaEventAccess,
   checkTaskAccessScope,
