@@ -239,6 +239,9 @@ export default function LoginPage() {
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
             Ricci Task
           </h1>
+          <span className="text-xs text-muted-foreground/70 font-medium tracking-wide mt-0.5">
+            v1.0.1
+          </span>
           <p className="text-sm text-muted-foreground mt-1 max-w-xs">
             Acesso ao sistema de gestão integrada
           </p>
