@@ -918,18 +918,15 @@ export function ControleModal({
       // Garantia de integridade no fluxo de salvamento:
       // Se não for Administrador, não aceita alteração manual de data_conclusao.
       // Preserva o valor já existente no banco de dados para a providência correspondente.
+      // Passo 3: se o perfil não for Administrador:
+      // em edição preserve o valor de data_conclusao já existente no registro (descarte o valor do formulário)
+      // e em criação envie null/vazio. Não mexa na lógica automática que define a data no encerramento do caso.
       if (!isAdmin) {
         if (p.id) {
           const prevItem = prevProvidenciasMap.get(p.id)
-          dtConclusao = prevItem
-            ? prevItem.data_conclusao
-            : p.data_conclusao
-              ? p.data_conclusao.trim()
-              : null
+          dtConclusao = prevItem ? prevItem.data_conclusao : null
         } else {
-          // Em novas providências adicionadas por Gestor/Operacional, se houver status que exige data
-          // definida automaticamente pela interface (ou prévia), mantém, mas impede inserção arbitrária manual
-          dtConclusao = dtConclusao || null
+          dtConclusao = null
         }
       }
 
