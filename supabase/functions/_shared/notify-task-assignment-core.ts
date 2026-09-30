@@ -11,8 +11,10 @@
  * o teste execute a IMPLEMENTAÇÃO REAL e não uma cópia.
  */
 
+// @ts-ignore
 import { SupabaseClient } from 'npm:@supabase/supabase-js@2'
-import nodemailer from 'npm:nodemailer'
+// @ts-ignore
+import nodemailer from 'nodemailer'
 import {
   checkProvidenciaEventAccess,
   checkTaskAccessScope,
