@@ -1698,34 +1698,7 @@ export default function TarefasPage() {
                               </button>
                             </th>
 
-                            {/* 9. Pasta Cliente */}
-                            <th className="py-2 px-1 w-[68px] text-center">
-                              <button
-                                type="button"
-                                onClick={(e) => handleSortColumn('pasta_cliente', e)}
-                                className={cn(
-                                  'group/sort inline-flex flex-col items-center justify-center font-bold uppercase tracking-wider transition-colors hover:text-foreground leading-tight w-full',
-                                  sortField === 'pasta_cliente' && 'text-primary font-extrabold',
-                                )}
-                                title="Ordenar por Pasta Cliente"
-                              >
-                                <span className="inline-flex items-center gap-0.5">
-                                  <span>PASTA</span>
-                                  {sortField === 'pasta_cliente' ? (
-                                    sortDirection === 'asc' ? (
-                                      <ArrowUp className="w-2.5 h-2.5 text-primary shrink-0" />
-                                    ) : (
-                                      <ArrowDown className="w-2.5 h-2.5 text-primary shrink-0" />
-                                    )
-                                  ) : (
-                                    <ArrowUpDown className="w-2.5 h-2.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
-                                  )}
-                                </span>
-                                <span>CLIENTE</span>
-                              </button>
-                            </th>
-
-                            {/* 10. Pasta Ricci */}
+                            {/* 9. Pasta Ricci */}
                             <th className="py-2 px-1 w-[68px] text-center">
                               <button
                                 type="button"
@@ -1749,6 +1722,30 @@ export default function TarefasPage() {
                                   )}
                                 </span>
                                 <span>RICCI</span>
+                              </button>
+                            </th>
+
+                            {/* 10. Prazo de Conclusão (do Caso) */}
+                            <th className="py-2 px-1 w-[88px] text-center">
+                              <button
+                                type="button"
+                                onClick={(e) => handleSortColumn('prazo_conclusao', e)}
+                                className={cn(
+                                  'group/sort inline-flex items-center justify-center gap-1 font-bold uppercase tracking-wider transition-colors hover:text-foreground leading-tight w-full',
+                                  sortField === 'prazo_conclusao' && 'text-primary font-extrabold',
+                                )}
+                                title="Ordenar por Prazo de Conclusão do Caso"
+                              >
+                                <span className="line-clamp-2">Prazo de Conclusão</span>
+                                {sortField === 'prazo_conclusao' ? (
+                                  sortDirection === 'asc' ? (
+                                    <ArrowUp className="w-2.5 h-2.5 text-primary shrink-0" />
+                                  ) : (
+                                    <ArrowDown className="w-2.5 h-2.5 text-primary shrink-0" />
+                                  )
+                                ) : (
+                                  <ArrowUpDown className="w-2.5 h-2.5 opacity-40 group-hover/sort:opacity-80 shrink-0" />
+                                )}
                               </button>
                             </th>
 
@@ -1926,23 +1923,7 @@ export default function TarefasPage() {
                                     </span>
                                   </td>
 
-                                  {/* 9. Pasta Cliente */}
-                                  <td className="py-2 px-1 font-mono font-medium text-foreground text-center">
-                                    {c.pasta_cliente ? (
-                                      <span
-                                        className="truncate block font-semibold text-[11px]"
-                                        title={c.pasta_cliente}
-                                      >
-                                        {c.pasta_cliente}
-                                      </span>
-                                    ) : (
-                                      <span className="text-muted-foreground/60 text-center block">
-                                        —
-                                      </span>
-                                    )}
-                                  </td>
-
-                                  {/* 10. Pasta Ricci */}
+                                  {/* 9. Pasta Ricci */}
                                   <td className="py-2 px-1 font-mono font-medium text-foreground text-center">
                                     {c.pasta_ricci ? (
                                       <span
@@ -1955,6 +1936,15 @@ export default function TarefasPage() {
                                       <span className="text-muted-foreground/60 text-center block">
                                         —
                                       </span>
+                                    )}
+                                  </td>
+
+                                  {/* 10. Prazo de Conclusão (do Caso) */}
+                                  <td className="py-2 px-1 text-center font-medium text-foreground whitespace-nowrap text-[11.5px]">
+                                    {c.prazo_conclusao ? (
+                                      <span>{formatDateBR(c.prazo_conclusao)}</span>
+                                    ) : (
+                                      <span className="text-muted-foreground/60">—</span>
                                     )}
                                   </td>
 
