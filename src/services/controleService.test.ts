@@ -865,9 +865,28 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(depois).toHaveLength(0)
     })
 
-    it('saveControleTransacional: preserva data_conclusao do banco quando o chamador é GESTOR ou OPERACIONAL e tenta adulterar', async () => {
-      // Mock do supabase.from('task_providencias').select('id, data_conclusao')
-      const mockSelect = vi.fn().mockReturnValue({
+    it('saveControleTransacional: preserva data_conclusao do caso e das providências quando chamador é GESTOR ou OPERACIONAL', async () => {
+      // Mock do registro anterior do caso em task_tarefas e da providência em task_providencias
+      const existingControle = {
+        id: 'caso-123',
+        nome_controle_id: 'nc-1',
+        numero_caso: 123,
+        identificacao_caso: 'Caso Teste Protegido',
+        status_id: 'st-1',
+        data_autorizacao: '2024-01-10',
+        prazo_conclusao: '2024-02-10',
+        data_conclusao: '2024-01-18',
+        responsavel_usuario_id: 'tu-1',
+        executor_usuario_id: 'tu-2',
+        responsavel_core_usuario_id: 'cu-1',
+        executor_core_usuario_id: 'cu-2',
+        pasta_cliente: null,
+        pasta_ricci: null,
+        updated_at: '2024-01-18T12:00:00Z',
+        arquivado_at: null,
+      }
+
+      const mockProvSelect = vi.fn().mockReturnValue({
         in: vi.fn().mockResolvedValue({
           data: [{ id: 'prov-fixa-1', data_conclusao: '2024-01-20' }],
           error: null,
@@ -876,17 +895,28 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
 
       const origFrom = supabase.from
       ;(supabase.from as any) = vi.fn((table: any) => {
+        if (table === 'task_tarefas') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: existingControle, error: null }),
+              }),
+            }),
+          }
+        }
         if (table === 'task_providencias') {
           return {
-            select: mockSelect,
+            select: mockProvSelect,
           }
         }
         return (origFrom as any)(table)
       })
 
+      let rpcPayloadCaso: any = null
       let rpcPayloadProvs: any = null
       ;(supabase.rpc as any) = vi.fn((fn: string, params: any) => {
         if (fn === 'task_salvar_controle_transacional') {
+          rpcPayloadCaso = params.p_dados_caso
           rpcPayloadProvs = params.p_providencias
           return Promise.resolve({
             data: {
@@ -910,10 +940,11 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       const input: SaveControleInput = {
         id: 'caso-123',
         nome_controle_id: 'nc-1',
-        identificacao_caso: 'Caso Teste',
+        identificacao_caso: 'Caso Teste Protegido',
         status_id: 'st-1',
         responsavel_core_usuario_id: 'cu-1',
         executor_core_usuario_id: 'cu-2',
+        data_conclusao: '2099-12-31', // Tentativa de adulteração manual de data_conclusao do caso por GESTOR
         providencias: [
           {
             id: 'prov-fixa-1',
@@ -921,19 +952,168 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
             prazo_conclusao: '2024-01-25',
             tipo_prazo_id: 'tp-1',
             status_id: 'st-1',
-            data_conclusao: '2099-12-31', // Tentativa de adulteração manual por não-admin
+            data_conclusao: '2099-12-31', // Tentativa de adulteração manual de providência por GESTOR
           },
         ],
       }
 
       await controleService.saveControleTransacional(input, undefined, 'GESTOR')
 
-      // O payload enviado à RPC DEVE conter '2024-01-20' (preservado do banco), e NÃO '2099-12-31'
+      // O payload enviado à RPC DEVE preservar '2024-01-18' do caso e '2024-01-20' da providência (valores do banco)
+      expect(rpcPayloadCaso).toBeDefined()
+      expect(rpcPayloadCaso.data_conclusao).toBe('2024-01-18')
+
       expect(rpcPayloadProvs).toBeDefined()
       expect(rpcPayloadProvs[0].data_conclusao).toBe('2024-01-20')
 
       // Restaura mocks
       ;(supabase.from as any) = origFrom
+    })
+
+    it('saveControleTransacional: na criação por GESTOR/OPERACIONAL, data_conclusao do caso e das providências é forçada para null', async () => {
+      let rpcPayloadCaso: any = null
+      let rpcPayloadProvs: any = null
+      const origRpc = supabase.rpc
+      ;(supabase.rpc as any) = vi.fn((fn: string, params: any) => {
+        if (fn === 'task_salvar_controle_transacional') {
+          rpcPayloadCaso = params.p_dados_caso
+          rpcPayloadProvs = params.p_providencias
+          return Promise.resolve({
+            data: {
+              success: true,
+              operacao: 'CRIACAO',
+              tarefa_id: 'caso-novo-1',
+              caso: {
+                id: 'caso-novo-1',
+                updated_at: '2024-01-20T12:00:00Z',
+                numero_caso: 124,
+              },
+              providencias: [],
+            },
+            error: null,
+          })
+        }
+        return Promise.resolve({ data: null, error: null })
+      })
+
+      const input: SaveControleInput = {
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Novo Caso Operacional',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-1',
+        executor_core_usuario_id: 'cu-2',
+        data_conclusao: '2024-01-20', // Não permitido na criação manual por OPERACIONAL
+        providencias: [
+          {
+            providencia: 'Nova Providência',
+            prazo_conclusao: '2024-01-25',
+            tipo_prazo_id: 'tp-1',
+            status_id: 'st-1',
+            data_conclusao: '2024-01-20',
+          },
+        ],
+      }
+
+      await controleService.saveControleTransacional(input, undefined, 'OPERACIONAL')
+
+      expect(rpcPayloadCaso).toBeDefined()
+      expect(rpcPayloadCaso.data_conclusao).toBeNull()
+
+      expect(rpcPayloadProvs).toBeDefined()
+      expect(rpcPayloadProvs[0].data_conclusao).toBeNull()
+
+      ;(supabase.rpc as any) = origRpc
+    })
+
+    it('saveControleTransacional: ADMINISTRADOR pode definir e alterar data_conclusao do caso e providências livremente', async () => {
+      const existingControle = {
+        id: 'caso-admin-1',
+        nome_controle_id: 'nc-1',
+        numero_caso: 125,
+        identificacao_caso: 'Caso Editado Por Admin',
+        status_id: 'st-1',
+        data_autorizacao: '2024-01-10',
+        prazo_conclusao: '2024-02-10',
+        data_conclusao: '2024-01-15',
+        responsavel_usuario_id: 'tu-1',
+        executor_usuario_id: 'tu-2',
+        responsavel_core_usuario_id: 'cu-1',
+        executor_core_usuario_id: 'cu-2',
+        pasta_cliente: null,
+        pasta_ricci: null,
+        updated_at: '2024-01-15T12:00:00Z',
+        arquivado_at: null,
+      }
+
+      const origFrom = supabase.from
+      ;(supabase.from as any) = vi.fn((table: any) => {
+        if (table === 'task_tarefas') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: existingControle, error: null }),
+              }),
+            }),
+          }
+        }
+        return (origFrom as any)(table)
+      })
+
+      let rpcPayloadCaso: any = null
+      let rpcPayloadProvs: any = null
+      const origRpc = supabase.rpc
+      ;(supabase.rpc as any) = vi.fn((fn: string, params: any) => {
+        if (fn === 'task_salvar_controle_transacional') {
+          rpcPayloadCaso = params.p_dados_caso
+          rpcPayloadProvs = params.p_providencias
+          return Promise.resolve({
+            data: {
+              success: true,
+              operacao: 'EDICAO',
+              tarefa_id: 'caso-admin-1',
+              caso: {
+                id: 'caso-admin-1',
+                updated_at: '2024-01-25T12:00:00Z',
+                numero_caso: 125,
+              },
+              providencias: [{ id: 'prov-admin-1', data_conclusao: '2024-01-22' }],
+            },
+            error: null,
+          })
+        }
+        return Promise.resolve({ data: null, error: null })
+      })
+
+      const input: SaveControleInput = {
+        id: 'caso-admin-1',
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Caso Editado Por Admin',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-1',
+        executor_core_usuario_id: 'cu-2',
+        data_conclusao: '2024-01-22',
+        providencias: [
+          {
+            id: 'prov-admin-1',
+            providencia: 'Providência editada por admin',
+            prazo_conclusao: '2024-01-25',
+            tipo_prazo_id: 'tp-1',
+            status_id: 'st-1',
+            data_conclusao: '2024-01-22',
+          },
+        ],
+      }
+
+      await controleService.saveControleTransacional(input, undefined, 'ADMINISTRADOR')
+
+      expect(rpcPayloadCaso).toBeDefined()
+      expect(rpcPayloadCaso.data_conclusao).toBe('2024-01-22')
+
+      expect(rpcPayloadProvs).toBeDefined()
+      expect(rpcPayloadProvs[0].data_conclusao).toBe('2024-01-22')
+
+      ;(supabase.from as any) = origFrom
+      ;(supabase.rpc as any) = origRpc
     })
 
     it('saveControle: transferência com perda de acesso chama RPC task_salvar_controle_transacional e conclui com dados reais retornados pelo servidor', async () => {

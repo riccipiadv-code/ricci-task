@@ -840,6 +840,7 @@ export const controleService = {
           status_id,
           data_autorizacao,
           prazo_conclusao,
+          data_conclusao,
           responsavel_usuario_id,
           executor_usuario_id,
           responsavel_core_usuario_id,
@@ -871,7 +872,9 @@ export const controleService = {
     let casoDataConclusao: string | null = (input as any).data_conclusao || null
     if (!isCallerAdmin) {
       if (input.id && existingRecord) {
-        casoDataConclusao = (existingRecord as any).data_conclusao ? (existingRecord as any).data_conclusao.split('T')[0] : null
+        casoDataConclusao = (existingRecord as any).data_conclusao
+          ? (existingRecord as any).data_conclusao.split('T')[0]
+          : null
       } else {
         casoDataConclusao = null
       }

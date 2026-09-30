@@ -1459,7 +1459,8 @@ export function ControleModal({
                       />
                       {!isAdmin && (
                         <p className="text-[11px] text-muted-foreground italic">
-                          Somente o Administrador pode inserir ou alterar manualmente a Data de Conclusão.
+                          Somente o Administrador pode inserir ou alterar manualmente a Data de
+                          Conclusão.
                         </p>
                       )}
                     </div>

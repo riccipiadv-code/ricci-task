@@ -465,4 +465,175 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     expect(inputDataOp).toBeDefined()
     expect(inputDataOp.disabled).toBe(true)
   })
+
+  it('Data de Conclusão do CASO: ADMINISTRADOR pode editar normalmente na criação e edição', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-admin' },
+      corePerfil: 'ADMINISTRADOR',
+      coreUserId: 'cu-admin-1',
+      hasSystemAccess: true,
+      loadingAccess: false,
+    })
+
+    const controleComData: TaskControleRecord = {
+      id: 'caso-admin-dt-1',
+      nome_controle_id: 'nc-1',
+      numero_caso: 60,
+      identificacao_caso: 'Caso com Data Admin',
+      status_id: 'st-aberto',
+      responsavel_usuario_id: 'tu-resp-ativo',
+      executor_usuario_id: 'tu-exec-ativo',
+      responsavel_core_usuario_id: 'cu-resp-ativo',
+      executor_core_usuario_id: 'cu-exec-ativo',
+      data_autorizacao: '2024-01-10',
+      prazo_conclusao: '2024-02-10',
+      data_conclusao: '2024-01-19',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2024-01-10T10:00:00Z',
+      created_by: null,
+      updated_at: '2024-01-10T10:00:00Z',
+      updated_by: null,
+      deleted_at: null,
+      deleted_by: null,
+      providencias: [],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        controleToEdit={controleComData}
+        initialTab="dados"
+        statusList={[
+          {
+            id: 'st-aberto',
+            codigo: 'pendente',
+            nome: 'Pendente',
+            ordem: 1,
+            ativo: true,
+            finaliza: false,
+          },
+        ]}
+        tiposPrazoList={[]}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(controleService.getUsuariosAtivos).toHaveBeenCalled()
+    })
+
+    const inputDataCaso = screen.getByDisplayValue('2024-01-19') as HTMLInputElement
+    expect(inputDataCaso).toBeDefined()
+    expect(inputDataCaso.id).toBe('data-conclusao-caso')
+    expect(inputDataCaso.disabled).toBe(false)
+  })
+
+  it('Data de Conclusão do CASO: GESTOR e OPERACIONAL veem campo desabilitado com aviso visual', async () => {
+    // 1. GESTOR
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-gestor' },
+      corePerfil: 'GESTOR',
+      coreUserId: 'cu-resp-ativo',
+      hasSystemAccess: true,
+      loadingAccess: false,
+    })
+
+    const controleComData: TaskControleRecord = {
+      id: 'caso-gestor-dt-1',
+      nome_controle_id: 'nc-1',
+      numero_caso: 61,
+      identificacao_caso: 'Caso com Data Gestor',
+      status_id: 'st-aberto',
+      responsavel_usuario_id: 'tu-resp-ativo',
+      executor_usuario_id: 'tu-exec-ativo',
+      responsavel_core_usuario_id: 'cu-resp-ativo',
+      executor_core_usuario_id: 'cu-exec-ativo',
+      data_autorizacao: '2024-01-10',
+      prazo_conclusao: '2024-02-10',
+      data_conclusao: '2024-01-17',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2024-01-10T10:00:00Z',
+      created_by: null,
+      updated_at: '2024-01-10T10:00:00Z',
+      updated_by: null,
+      deleted_at: null,
+      deleted_by: null,
+      providencias: [],
+    }
+
+    const { unmount } = render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        controleToEdit={controleComData}
+        initialTab="dados"
+        statusList={[
+          {
+            id: 'st-aberto',
+            codigo: 'pendente',
+            nome: 'Pendente',
+            ordem: 1,
+            ativo: true,
+            finaliza: false,
+          },
+        ]}
+        tiposPrazoList={[]}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(controleService.getUsuariosAtivos).toHaveBeenCalled()
+    })
+
+    const inputDataGestor = screen.getByDisplayValue('2024-01-17') as HTMLInputElement
+    expect(inputDataGestor).toBeDefined()
+    expect(inputDataGestor.id).toBe('data-conclusao-caso')
+    expect(inputDataGestor.disabled).toBe(true)
+    expect(
+      screen.getByText(
+        /Somente o Administrador pode inserir ou alterar manualmente a Data de Conclusão/i,
+      ),
+    ).toBeDefined()
+
+    unmount()
+
+    // 2. OPERACIONAL
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-op' },
+      corePerfil: 'OPERACIONAL',
+      coreUserId: 'cu-resp-ativo',
+      hasSystemAccess: true,
+      loadingAccess: false,
+    })
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        controleToEdit={controleComData}
+        initialTab="dados"
+        statusList={[
+          {
+            id: 'st-aberto',
+            codigo: 'pendente',
+            nome: 'Pendente',
+            ordem: 1,
+            ativo: true,
+            finaliza: false,
+          },
+        ]}
+        tiposPrazoList={[]}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    const inputDataOp = screen.getByDisplayValue('2024-01-17') as HTMLInputElement
+    expect(inputDataOp).toBeDefined()
+    expect(inputDataOp.id).toBe('data-conclusao-caso')
+    expect(inputDataOp.disabled).toBe(true)
+  })
 })
