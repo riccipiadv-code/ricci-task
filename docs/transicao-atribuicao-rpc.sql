@@ -551,8 +551,8 @@ BEGIN
       NULL,
       NULL,
       v_arquivado_at,
-      v_caller_auth_id::text,
-      v_caller_auth_id::text,
+      v_caller_auth_id,
+      v_caller_auth_id,
       v_now,
       v_now
     )
@@ -777,7 +777,7 @@ BEGIN
             email_alerta_atraso = v_prov_email_atraso,
             email_alerta_atualizacao = v_prov_email_atualizacao,
             updated_at = v_now,
-            updated_by = v_caller_auth_id::text
+            updated_by = v_caller_auth_id
           WHERE id = v_prov_id
           RETURNING * INTO v_saved_prov;
 
@@ -820,8 +820,8 @@ BEGIN
           v_prov_email_inclusao,
           v_prov_email_atraso,
           v_prov_email_atualizacao,
-          v_caller_auth_id::text,
-          v_caller_auth_id::text,
+          v_caller_auth_id,
+          v_caller_auth_id,
           v_now,
           v_now
         )
@@ -872,7 +872,7 @@ BEGIN
         executor_usuario_id = v_op_exec_id,
         arquivado_at = v_arquivado_at,
         updated_at = v_now,
-        updated_by = v_caller_auth_id::text
+        updated_by = v_caller_auth_id
       WHERE id = p_tarefa_id
       RETURNING * INTO v_saved_caso;
 
