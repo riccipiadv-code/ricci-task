@@ -16,6 +16,7 @@ import {
   checkProvidenciaEventAccess,
   escapeHtml,
 } from '../../supabase/functions/_shared/core-auth'
+import { processNotifyTaskAssignment } from '../../supabase/functions/_shared/notify-task-assignment-core'
 
 describe('Validação do Módulo Real _shared/core-auth.ts (Gestor de Acessos Ricci)', () => {
   beforeEach(() => {

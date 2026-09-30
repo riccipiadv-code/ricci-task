@@ -27,13 +27,35 @@
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 0. Proteção por Privilégios Efetivos de Coluna (REVOKE UPDATE)
+-- 0. Proteção por Privilégios Efetivos de Tabela e Coluna (REVOKE UPDATE / GRANT POR COLUNA)
 -- ----------------------------------------------------------------------------
--- [Item 1]: REVOKE UPDATE nas 4 colunas de atribuição de task_tarefas para
--- authenticated, anon e public. Atualização direta dessas colunas só é permitida
--- quando a sessão executa como o proprietário da função SECURITY DEFINER.
-REVOKE UPDATE (responsavel_core_usuario_id, executor_core_usuario_id, responsavel_usuario_id, executor_usuario_id)
-  ON public.task_tarefas FROM authenticated, anon, public;
+-- [Item 1]: REVOKE do UPDATE da TABELA task_tarefas inteira para authenticated, anon e PUBLIC.
+-- Revogar apenas por coluna não neutraliza um privilégio previamente concedido à tabela inteira.
+-- Em seguida, concede-se ao authenticated apenas as colunas necessárias às edições legítimas,
+-- EXCLUINDO as 4 colunas de atribuição (responsavel_core_usuario_id, executor_core_usuario_id,
+-- responsavel_usuario_id, executor_usuario_id).
+-- As 4 colunas de atribuição SÓ podem ser alteradas através da RPC SECURITY DEFINER
+-- executada pelo proprietário autorizado.
+REVOKE UPDATE ON public.task_tarefas FROM authenticated, anon, PUBLIC;
+
+-- Concede UPDATE estritamente nas colunas comuns editáveis diretamente pelo usuário autenticado:
+GRANT UPDATE (
+  nome_controle_id,
+  identificacao_caso,
+  status_id,
+  data_autorizacao,
+  prazo_conclusao,
+  pasta_cliente,
+  pasta_ricci,
+  arquivado_at,
+  updated_at,
+  updated_by,
+  deleted_at,
+  deleted_by
+) ON public.task_tarefas TO authenticated;
+
+-- Assegura que anon e PUBLIC não possuam nenhum privilégio de UPDATE em nenhuma coluna:
+REVOKE UPDATE ON public.task_tarefas FROM anon, PUBLIC;
 
 -- ----------------------------------------------------------------------------
 -- 1. Funções Auxiliares de Contexto Corporativo Central
@@ -215,24 +237,28 @@ END $$;
 
 -- ----------------------------------------------------------------------------
 -- 5. PONTO 1: Trigger de Proteção Efetiva Contra Transferência Direta de Atribuição
--- [Item 1]: Bloqueia qualquer tentativa de alteração nas 4 colunas de atribuição
--- (responsavel_core_usuario_id, executor_core_usuario_id, responsavel_usuario_id, executor_usuario_id)
--- a menos que a sessão execute como o proprietário da função SECURITY DEFINER.
--- O GUC 'ricci_task.atribuicao_autorizada' deixa de autorizar qualquer coisa.
+-- [Item 2]: Trigger em modo SECURITY INVOKER.
+-- Sendo SECURITY INVOKER, o seu current_user reflete fielmente o chamador da operação.
+-- Quando chamado dentro da RPC task_salvar_controle_transacional (que é SECURITY DEFINER),
+-- current_user passa a ser o PROPRIETÁRIO dessa RPC.
+-- Quando chamado por UPDATE direto pelo cliente autenticado, current_user é 'authenticated'.
+-- O proprietário da RPC é resolvido pela ASSINATURA COMPLETA da função via pg_proc
+-- ('public.task_salvar_controle_transacional(uuid,jsonb,jsonb,text)'::regprocedure).
+-- Não há fallback para 'postgres' nem autorização ampla por pertinência de role (pg_has_role).
 -- ----------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.task_tarefas_impedir_transferencia_direta()
 RETURNS TRIGGER
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_mudou_atribuicao BOOLEAN;
-  v_func_owner TEXT;
-  v_is_authorized_context BOOLEAN := false;
+  v_rpc_oid OID;
+  v_rpc_owner_name TEXT;
 BEGIN
-  -- Detecta se qualquer das 4 colunas mudou (IS DISTINCT FROM)
+  -- Detecta se qualquer das 4 colunas de atribuição mudou (IS DISTINCT FROM)
   v_mudou_atribuicao := (
     (OLD.responsavel_core_usuario_id IS DISTINCT FROM NEW.responsavel_core_usuario_id) OR
     (OLD.executor_core_usuario_id IS DISTINCT FROM NEW.executor_core_usuario_id) OR
@@ -241,27 +267,29 @@ BEGIN
   );
 
   IF v_mudou_atribuicao THEN
-    -- Obtém o proprietário registrado da função SECURITY DEFINER da RPC
-    SELECT pg_get_userbyid(proowner)
-    INTO v_func_owner
-    FROM pg_proc
-    WHERE proname = 'task_salvar_controle_transacional'
-      AND pronamespace = 'public'::regnamespace
-    LIMIT 1;
+    -- Resolve o OID e o proprietário exato da RPC pela assinatura completa
+    BEGIN
+      v_rpc_oid := 'public.task_salvar_controle_transacional(uuid,jsonb,jsonb,text)'::regprocedure::oid;
+    EXCEPTION WHEN OTHERS THEN
+      v_rpc_oid := NULL;
+    END;
 
-    -- Se a função ainda não existir ou falhar a resolução, usa o proprietário do schema public ou postgres/current_user
-    IF v_func_owner IS NULL THEN
-      v_func_owner := 'postgres';
+    IF v_rpc_oid IS NOT NULL THEN
+      SELECT pg_get_userbyid(proowner)
+      INTO v_rpc_owner_name
+      FROM pg_proc
+      WHERE oid = v_rpc_oid;
     END IF;
 
-    -- Verifica se a execução atual roda como o proprietário da função SECURITY DEFINER (current_user)
-    -- ou se current_user é superusuário / membro da role proprietária
-    IF current_user = v_func_owner OR pg_has_role(current_user, v_func_owner, 'MEMBER') THEN
-      v_is_authorized_context := true;
+    -- Se a RPC não foi encontrada no catálogo pela assinatura completa, recusa por segurança fail-closed
+    IF v_rpc_owner_name IS NULL THEN
+      RAISE EXCEPTION 'Transferência direta de atribuição bloqueada: RPC autorizada não localizada no catálogo pela assinatura completa.'
+        USING ERRCODE = '42501';
     END IF;
 
-    -- GUC 'ricci_task.atribuicao_autorizada' NÃO autoriza (critério estritamente removido)
-    IF NOT v_is_authorized_context THEN
+    -- Compara estritamente o current_user da sessão chamadora com o proprietário resolvido da RPC.
+    -- Sem fallback e sem checagem ampla de membro de role (pg_has_role).
+    IF current_user IS DISTINCT FROM v_rpc_owner_name THEN
       RAISE EXCEPTION 'Transferência direta de atribuição bloqueada. Atribuições só podem ser alteradas através da RPC autorizada task_salvar_controle_transacional executada pelo proprietário autorizado.'
         USING ERRCODE = '42501';
     END IF;
@@ -1014,9 +1042,14 @@ $$;
 -- ----------------------------------------------------------------------------
 -- 8. PONTOS 2 E 3: DROP DINÂMICO VIA pg_policies E SUBSTITUIÇÃO INTEGRAL DE RLS
 -- [Item 3]: Bloco DO $$ ... $$ que consulta pg_policies e derruba TODAS as
--- políticas existentes das 8 tabelas tratadas pelo script dentro da mesma transação,
--- sem COMMIT interno, e na sequência recria as políticas restritas já definidas.
--- Tabelas tratadas:
+-- políticas existentes ESTRITAMENTE das 9 tabelas cujas políticas são recriadas
+-- pelo próprio script dentro da mesma transação, sem COMMIT interno.
+-- NOTA DE DECISÃO SOBRE task_email_notificacoes:
+--   A tabela 'task_email_notificacoes' foi REMOVIDA da lista de drop dinâmico porque
+--   é uma tabela legada com 0 registros (candidata a DROP em migração de corte definitivo)
+--   e este script de instalação NÃO recria políticas para ela. Derrubar políticas de tabelas
+--   que não serão recriadas deixaria a tabela desprotegida ou em estado inconsistente.
+-- Tabelas tratadas (9 tabelas):
 --   1. task_tarefas
 --   2. task_providencias
 --   3. task_transicoes_atribuicao
@@ -1025,7 +1058,7 @@ $$;
 --   6. task_nomes_controle
 --   7. task_status
 --   8. task_status_providencia
---   (além de task_tipos_prazo e task_email_notificacoes se existirem)
+--   9. task_tipos_prazo
 -- ----------------------------------------------------------------------------
 
 DO $$
@@ -1040,8 +1073,7 @@ DECLARE
     'task_nomes_controle',
     'task_status',
     'task_status_providencia',
-    'task_tipos_prazo',
-    'task_email_notificacoes'
+    'task_tipos_prazo'
   ];
 BEGIN
   FOR r IN (
@@ -1053,6 +1085,9 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', r.policyname, r.schemaname, r.tablename);
   END LOOP;
 END $$;
+
+-- Garante explicitamente que RLS está habilitado em task_tarefas (não presumir que já esteja)
+ALTER TABLE public.task_tarefas ENABLE ROW LEVEL SECURITY;
 
 -- Novas Políticas para public.task_tarefas:
 -- SELECT: Admin vê tudo; Gestor vê próprios + equipe direta com ID central; Operacional vê próprios com ID central.
@@ -1279,5 +1314,75 @@ GRANT EXECUTE ON FUNCTION public.task_current_core_user_id() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.task_current_core_perfil() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.task_is_admin() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.task_tarefas_impedir_transferencia_direta() TO authenticated;
+
+-- ----------------------------------------------------------------------------
+-- 10. [Item 1 e Item 3]: Bloco de Verificação e Asserções de Segurança Final
+-- - Valida se RLS (relrowsecurity) está ativo em TODAS as 9 tabelas tratadas.
+-- - Valida se has_table_privilege('authenticated', 'public.task_tarefas', 'UPDATE') é falso.
+-- - Valida se has_column_privilege em cada uma das 4 colunas de atribuição é falso para authenticated.
+-- - Falha explicitamente (RAISE EXCEPTION) se qualquer asserção falhar.
+-- ----------------------------------------------------------------------------
+
+DO $$
+DECLARE
+  v_tabelas_verificacao TEXT[] := ARRAY[
+    'task_tarefas',
+    'task_providencias',
+    'task_transicoes_atribuicao',
+    'task_transacao_providencias_eventos',
+    'task_email_eventos',
+    'task_nomes_controle',
+    'task_status',
+    'task_status_providencia',
+    'task_tipos_prazo'
+  ];
+  v_tbl TEXT;
+  v_rls_enabled BOOLEAN;
+  v_has_tbl_update BOOLEAN;
+  v_col TEXT;
+  v_colunas_atribuicao TEXT[] := ARRAY[
+    'responsavel_core_usuario_id',
+    'executor_core_usuario_id',
+    'responsavel_usuario_id',
+    'executor_usuario_id'
+  ];
+  v_has_col_update BOOLEAN;
+BEGIN
+  -- 10.1 Verificação de RLS habilitado em todas as tabelas tratadas
+  FOREACH v_tbl IN ARRAY v_tabelas_verificacao LOOP
+    SELECT c.relrowsecurity INTO v_rls_enabled
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = v_tbl;
+
+    IF v_rls_enabled IS NOT TRUE THEN
+      RAISE EXCEPTION 'Falha de segurança na instalação: RLS não está habilitado na tabela public.%', v_tbl
+        USING ERRCODE = '42501';
+    END IF;
+  END LOOP;
+
+  -- 10.2 Verificação de has_table_privilege UPDATE = false para authenticated
+  -- (authenticated herda de PUBLIC; se houver privilégio na tabela toda, has_table_privilege retorna true)
+  SELECT has_table_privilege('authenticated', 'public.task_tarefas', 'UPDATE')
+  INTO v_has_tbl_update;
+
+  IF v_has_tbl_update IS TRUE THEN
+    RAISE EXCEPTION 'Falha de segurança na instalação: role authenticated possui has_table_privilege UPDATE = true em public.task_tarefas (esperado: false, privilégio restrito por coluna).'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- 10.3 Verificação de has_column_privilege UPDATE = false nas 4 colunas de atribuição
+  FOREACH v_col IN ARRAY v_colunas_atribuicao LOOP
+    SELECT has_column_privilege('authenticated', 'public.task_tarefas', v_col, 'UPDATE')
+    INTO v_has_col_update;
+
+    IF v_has_col_update IS TRUE THEN
+      RAISE EXCEPTION 'Falha de segurança na instalação: role authenticated possui privilégio direto ou herdado de UPDATE na coluna public.task_tarefas.% (esperado: false)!', v_col
+        USING ERRCODE = '42501';
+    END IF;
+  END LOOP;
+
+  RAISE NOTICE 'Validação de segurança final concluída com sucesso: RLS habilitado nas 9 tabelas tratadas e privilégios de UPDATE bloqueados para authenticated nas 4 colunas de atribuição.';
+END $$;
 
 COMMIT;
