@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { controleService } from '@/services/controleService'
 import { supabase } from '@/lib/supabase/client'
+import { SaveControleInput } from '@/types/task'
 
 describe('controleService.getUsuariosAtivos (Nova fonte central: task_listar_usuarios_core_elegiveis)', () => {
   beforeEach(() => {
@@ -862,6 +863,77 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       )
       expect(depois.map((c) => c.id)).not.toContain('t-2')
       expect(depois).toHaveLength(0)
+    })
+
+    it('saveControleTransacional: preserva data_conclusao do banco quando o chamador é GESTOR ou OPERACIONAL e tenta adulterar', async () => {
+      // Mock do supabase.from('task_providencias').select('id, data_conclusao')
+      const mockSelect = vi.fn().mockReturnValue({
+        in: vi.fn().mockResolvedValue({
+          data: [{ id: 'prov-fixa-1', data_conclusao: '2024-01-20' }],
+          error: null,
+        }),
+      })
+
+      const origFrom = supabase.from
+      ;(supabase.from as any) = vi.fn((table: any) => {
+        if (table === 'task_providencias') {
+          return {
+            select: mockSelect,
+          }
+        }
+        return (origFrom as any)(table)
+      })
+
+      let rpcPayloadProvs: any = null
+      ;(supabase.rpc as any) = vi.fn((fn: string, params: any) => {
+        if (fn === 'task_salvar_controle_transacional') {
+          rpcPayloadProvs = params.p_providencias
+          return Promise.resolve({
+            data: {
+              success: true,
+              operacao: 'EDICAO',
+              mudanca_real: false,
+              tarefa_id: 'caso-123',
+              caso: {
+                id: 'caso-123',
+                updated_at: '2024-01-20T12:00:00Z',
+                numero_caso: 123,
+              },
+              providencias: [{ id: 'prov-fixa-1', data_conclusao: '2024-01-20' }],
+            },
+            error: null,
+          })
+        }
+        return Promise.resolve({ data: null, error: null })
+      })
+
+      const input: SaveControleInput = {
+        id: 'caso-123',
+        nome_controle_id: 'nc-1',
+        identificacao_caso: 'Caso Teste',
+        status_id: 'st-1',
+        responsavel_core_usuario_id: 'cu-1',
+        executor_core_usuario_id: 'cu-2',
+        providencias: [
+          {
+            id: 'prov-fixa-1',
+            providencia: 'Providência protegida',
+            prazo_conclusao: '2024-01-25',
+            tipo_prazo_id: 'tp-1',
+            status_id: 'st-1',
+            data_conclusao: '2099-12-31', // Tentativa de adulteração manual por não-admin
+          },
+        ],
+      }
+
+      await controleService.saveControleTransacional(input, undefined, 'GESTOR')
+
+      // O payload enviado à RPC DEVE conter '2024-01-20' (preservado do banco), e NÃO '2099-12-31'
+      expect(rpcPayloadProvs).toBeDefined()
+      expect(rpcPayloadProvs[0].data_conclusao).toBe('2024-01-20')
+
+      // Restaura mocks
+      ;(supabase.from as any) = origFrom
     })
 
     it('saveControle: transferência com perda de acesso chama RPC task_salvar_controle_transacional e conclui com dados reais retornados pelo servidor', async () => {

@@ -314,6 +314,7 @@ export function ControleModal({
   }, [statusProvidenciaList, toast, controleToEdit])
 
   const { corePerfil, coreUserId } = useAuth()
+  const isAdmin = corePerfil === 'ADMINISTRADOR'
 
   // Popula o formulário ao abrir
   useEffect(() => {
@@ -912,7 +913,25 @@ export function ControleModal({
       const st = statusProvLista.find((s) => s.id === p.status_id)
       const cod = st?.codigo?.toLowerCase() || ''
       const exigeData = cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
-      const dtConclusao = exigeData ? (p.data_conclusao ? p.data_conclusao.trim() : null) : null
+      let dtConclusao = exigeData ? (p.data_conclusao ? p.data_conclusao.trim() : null) : null
+
+      // Garantia de integridade no fluxo de salvamento:
+      // Se não for Administrador, não aceita alteração manual de data_conclusao.
+      // Preserva o valor já existente no banco de dados para a providência correspondente.
+      if (!isAdmin) {
+        if (p.id) {
+          const prevItem = prevProvidenciasMap.get(p.id)
+          dtConclusao = prevItem
+            ? prevItem.data_conclusao
+            : p.data_conclusao
+              ? p.data_conclusao.trim()
+              : null
+        } else {
+          // Em novas providências adicionadas por Gestor/Operacional, se houver status que exige data
+          // definida automaticamente pela interface (ou prévia), mantém, mas impede inserção arbitrária manual
+          dtConclusao = dtConclusao || null
+        }
+      }
 
       const isNovaProvidencia = !p.id || !p.isPersisted
       const pProvTrimmed = p.providencia.trim()
@@ -1009,7 +1028,11 @@ export function ControleModal({
     try {
       // PONTO 1: SALVAMENTO ATÔMICO EM UMA ÚNICA TRANSAÇÃO NO SERVIDOR
       // Grava caso + atribuição + providências all-or-nothing
-      const saveResult = await controleService.saveControleTransacional(payload, usuariosLista)
+      const saveResult = await controleService.saveControleTransacional(
+        payload,
+        usuariosLista,
+        corePerfil,
+      )
       const savedControle = saveResult.controle
       const transicaoId = saveResult.transicao_id || null
 
@@ -1922,6 +1945,7 @@ export function ControleModal({
                                     </Label>
                                     <Input
                                       type="date"
+                                      disabled={!isAdmin}
                                       value={item.data_conclusao || ''}
                                       onChange={(e) =>
                                         handleUpdateProvidencia(
@@ -1930,8 +1954,23 @@ export function ControleModal({
                                           e.target.value,
                                         )
                                       }
-                                      className="h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary sm:max-w-xs"
+                                      className={cn(
+                                        'h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary sm:max-w-xs',
+                                        !isAdmin &&
+                                          'opacity-70 cursor-not-allowed bg-muted/50 border-border select-none text-muted-foreground',
+                                      )}
+                                      title={
+                                        !isAdmin
+                                          ? 'Somente Administradores podem editar a Data de Conclusão.'
+                                          : undefined
+                                      }
                                     />
+                                    {!isAdmin && (
+                                      <p className="text-[11px] text-muted-foreground italic mt-0.5">
+                                        Somente o Administrador pode inserir ou alterar manualmente
+                                        a Data de Conclusão.
+                                      </p>
+                                    )}
                                   </div>
                                 )
                               })()}

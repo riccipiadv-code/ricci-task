@@ -809,6 +809,7 @@ export const controleService = {
   async saveControleTransacional(
     input: SaveControleInput,
     usuariosParam?: TaskUsuarioAtivoRecord[],
+    callerPerfil?: string | null,
   ): Promise<SaveControleResult> {
     // Autoridade definitiva: IDs CENTRAIS (core_usuarios.id)
     const targetRespCoreId = input.responsavel_core_usuario_id || input.responsavel_usuario_id
@@ -878,21 +879,56 @@ export const controleService = {
       pasta_ricci: input.pasta_ricci?.trim() || null,
     }
 
+    // Se o chamador não for ADMINISTRADOR, busca os valores existentes no banco
+    // para garantir proteção contra adulteração manual de data_conclusao no payload da RPC
+    const isCallerAdmin = callerPerfil?.toUpperCase() === 'ADMINISTRADOR'
+    let dbProvidenciasMap: Map<string, string | null> | null = null
+
+    if (!isCallerAdmin && input.id && input.providencias && input.providencias.length > 0) {
+      const provIdsWithId = input.providencias.map((p) => p.id).filter(Boolean) as string[]
+      if (provIdsWithId.length > 0) {
+        try {
+          const { data: dbProvs } = await supabase
+            .from('task_providencias')
+            .select('id, data_conclusao')
+            .in('id', provIdsWithId)
+          if (dbProvs) {
+            dbProvidenciasMap = new Map(
+              dbProvs.map((dp: any) => [
+                dp.id,
+                dp.data_conclusao ? dp.data_conclusao.split('T')[0] : null,
+              ]),
+            )
+          }
+        } catch (fetchErr) {
+          console.warn('Aviso: falha ao verificar valores anteriores de data_conclusao:', fetchErr)
+        }
+      }
+    }
+
     // Lista de providências para envio à transação (preservando temp_id para correlação explícita)
-    const providenciasPayload = (input.providencias || []).map((p) => ({
-      id: p.id || null,
-      temp_id: (p as any).temp_id || (p as any).tempId || null,
-      providencia: p.providencia.trim(),
-      prazo_conclusao: p.prazo_conclusao,
-      tipo_prazo_id: p.tipo_prazo_id,
-      status_id: p.status_id,
-      ordem: p.ordem ?? 0,
-      data_conclusao: p.data_conclusao || null,
-      email_alertas: p.email_alertas ?? false,
-      email_alerta_inclusao: p.email_alerta_inclusao ?? false,
-      email_alerta_atraso: p.email_alerta_atraso ?? false,
-      email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
-    }))
+    const providenciasPayload = (input.providencias || []).map((p) => {
+      let finalDataConclusao = p.data_conclusao || null
+      // Se não for admin e a providência já existe no banco, preserva estritamente o valor do banco
+      if (!isCallerAdmin && p.id && dbProvidenciasMap && dbProvidenciasMap.has(p.id)) {
+        finalDataConclusao = dbProvidenciasMap.get(p.id) ?? null
+      }
+
+      return {
+        id: p.id || null,
+        temp_id: (p as any).temp_id || (p as any).tempId || null,
+        providencia: p.providencia.trim(),
+        prazo_conclusao: p.prazo_conclusao,
+        tipo_prazo_id: p.tipo_prazo_id,
+        status_id: p.status_id,
+        ordem: p.ordem ?? 0,
+        data_conclusao: finalDataConclusao,
+        email_alertas: p.email_alertas ?? false,
+        email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+        email_alerta_atraso: p.email_alerta_atraso ?? false,
+        email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
+      }
+    })
 
     // Chamada à RPC transacional única no servidor (all-or-nothing)
     const { data: rpcRaw, error: rpcErr } = await (supabase.rpc as any)(
@@ -976,8 +1012,9 @@ export const controleService = {
   async saveControle(
     input: SaveControleInput,
     usuariosParam?: TaskUsuarioAtivoRecord[],
+    callerPerfil?: string | null,
   ): Promise<TaskControleRecord> {
-    const result = await this.saveControleTransacional(input, usuariosParam)
+    const result = await this.saveControleTransacional(input, usuariosParam, callerPerfil)
     return result.controle
   },
 
