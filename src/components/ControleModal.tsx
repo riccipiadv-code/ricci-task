@@ -1107,7 +1107,17 @@ export function ControleModal({
           )
           if (!resInclusao.success) {
             emailFalhou = true
-            console.warn('Aviso: notificação de inclusão de providência falhou:', resInclusao.error)
+            console.error(
+              'Erro ao disparar notificação de inclusão de providência:',
+              resInclusao.error || resInclusao.reason || resInclusao.message,
+              resInclusao,
+            )
+          } else if (resInclusao.sent === false && resInclusao.reason) {
+            console.log(
+              'Notificação de inclusão de providência não enviada (motivo controlado):',
+              resInclusao.reason,
+              resInclusao.message,
+            )
           }
         } catch (errInclusao) {
           emailFalhou = true
@@ -1124,9 +1134,16 @@ export function ControleModal({
           )
           if (!resAtualizacao.success) {
             emailFalhou = true
-            console.warn(
-              'Aviso: notificação de atualização de providência falhou:',
-              resAtualizacao.error,
+            console.error(
+              'Erro ao disparar notificação de atualização de providência:',
+              resAtualizacao.error || resAtualizacao.reason || resAtualizacao.message,
+              resAtualizacao,
+            )
+          } else if (resAtualizacao.sent === false && resAtualizacao.reason) {
+            console.log(
+              'Notificação de atualização de providência não enviada (motivo controlado):',
+              resAtualizacao.reason,
+              resAtualizacao.message,
             )
           }
         } catch (errAtualizacao) {

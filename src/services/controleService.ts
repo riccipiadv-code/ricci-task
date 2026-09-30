@@ -1331,11 +1331,27 @@ export const controleService = {
       })
 
       if (error) {
-        console.error('Erro na chamada da Edge Function notify-task-assignment:', error)
+        let detailedError = error.message || 'Erro ao invocar função de notificação.'
+        // Supabase FunctionsHttpError pode carregar contexto em error.context
+        if ((error as any)?.context?.json) {
+          try {
+            const parsedContext = await (error as any).context.json()
+            if (parsedContext?.error) {
+              detailedError = `${detailedError} [Edge Function: ${parsedContext.error}]`
+            }
+          } catch {
+            // Contexto não pôde ser parseado como JSON
+          }
+        }
+        console.error(
+          'Erro na chamada da Edge Function notify-task-assignment:',
+          detailedError,
+          error,
+        )
         return {
           success: false,
           sent: false,
-          error: error.message || 'Erro ao invocar função de notificação.',
+          error: detailedError,
         }
       }
 
