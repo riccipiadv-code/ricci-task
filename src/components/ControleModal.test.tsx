@@ -466,7 +466,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
     expect(inputDataOp.disabled).toBe(true)
   })
 
-  it('Data de Conclusão do CASO: ADMINISTRADOR pode editar normalmente na criação e edição', async () => {
+  it('Prazo de Conclusão do CASO: ADMINISTRADOR pode editar normalmente na criação e edição', async () => {
     mockUseAuth.mockReturnValue({
       user: { id: 'auth-admin' },
       corePerfil: 'ADMINISTRADOR',
@@ -475,11 +475,11 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       loadingAccess: false,
     })
 
-    const controleComData: TaskControleRecord = {
+    const controleComPrazo: TaskControleRecord = {
       id: 'caso-admin-dt-1',
       nome_controle_id: 'nc-1',
       numero_caso: 60,
-      identificacao_caso: 'Caso com Data Admin',
+      identificacao_caso: 'Caso com Prazo Admin',
       status_id: 'st-aberto',
       responsavel_usuario_id: 'tu-resp-ativo',
       executor_usuario_id: 'tu-exec-ativo',
@@ -487,7 +487,6 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       executor_core_usuario_id: 'cu-exec-ativo',
       data_autorizacao: '2024-01-10',
       prazo_conclusao: '2024-02-10',
-      data_conclusao: '2024-01-19',
       pasta_cliente: null,
       pasta_ricci: null,
       created_at: '2024-01-10T10:00:00Z',
@@ -503,7 +502,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       <ControleModal
         open={true}
         onOpenChange={vi.fn()}
-        controleToEdit={controleComData}
+        controleToEdit={controleComPrazo}
         initialTab="dados"
         statusList={[
           {
@@ -524,13 +523,13 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       expect(controleService.getUsuariosAtivos).toHaveBeenCalled()
     })
 
-    const inputDataCaso = screen.getByDisplayValue('2024-01-19') as HTMLInputElement
-    expect(inputDataCaso).toBeDefined()
-    expect(inputDataCaso.id).toBe('data-conclusao-caso')
-    expect(inputDataCaso.disabled).toBe(false)
+    const inputPrazoCaso = screen.getByDisplayValue('2024-02-10') as HTMLInputElement
+    expect(inputPrazoCaso).toBeDefined()
+    expect(inputPrazoCaso.id).toBe('prazo-conclusao')
+    expect(inputPrazoCaso.disabled).toBe(false)
   })
 
-  it('Data de Conclusão do CASO: GESTOR e OPERACIONAL veem campo desabilitado com aviso visual', async () => {
+  it('Prazo de Conclusão do CASO: GESTOR e OPERACIONAL veem campo desabilitado com aviso visual', async () => {
     // 1. GESTOR
     mockUseAuth.mockReturnValue({
       user: { id: 'auth-gestor' },
@@ -540,19 +539,18 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       loadingAccess: false,
     })
 
-    const controleComData: TaskControleRecord = {
+    const controleComPrazo: TaskControleRecord = {
       id: 'caso-gestor-dt-1',
       nome_controle_id: 'nc-1',
       numero_caso: 61,
-      identificacao_caso: 'Caso com Data Gestor',
+      identificacao_caso: 'Caso com Prazo Gestor',
       status_id: 'st-aberto',
       responsavel_usuario_id: 'tu-resp-ativo',
       executor_usuario_id: 'tu-exec-ativo',
       responsavel_core_usuario_id: 'cu-resp-ativo',
       executor_core_usuario_id: 'cu-exec-ativo',
       data_autorizacao: '2024-01-10',
-      prazo_conclusao: '2024-02-10',
-      data_conclusao: '2024-01-17',
+      prazo_conclusao: '2024-02-15',
       pasta_cliente: null,
       pasta_ricci: null,
       created_at: '2024-01-10T10:00:00Z',
@@ -568,7 +566,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       <ControleModal
         open={true}
         onOpenChange={vi.fn()}
-        controleToEdit={controleComData}
+        controleToEdit={controleComPrazo}
         initialTab="dados"
         statusList={[
           {
@@ -589,13 +587,13 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       expect(controleService.getUsuariosAtivos).toHaveBeenCalled()
     })
 
-    const inputDataGestor = screen.getByDisplayValue('2024-01-17') as HTMLInputElement
-    expect(inputDataGestor).toBeDefined()
-    expect(inputDataGestor.id).toBe('data-conclusao-caso')
-    expect(inputDataGestor.disabled).toBe(true)
+    const inputPrazoGestor = screen.getByDisplayValue('2024-02-15') as HTMLInputElement
+    expect(inputPrazoGestor).toBeDefined()
+    expect(inputPrazoGestor.id).toBe('prazo-conclusao')
+    expect(inputPrazoGestor.disabled).toBe(true)
     expect(
       screen.getByText(
-        /Somente o Administrador pode inserir ou alterar manualmente a Data de Conclusão/i,
+        /Somente o Administrador pode inserir ou alterar o Prazo de Conclusão do caso/i,
       ),
     ).toBeDefined()
 
@@ -614,7 +612,7 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       <ControleModal
         open={true}
         onOpenChange={vi.fn()}
-        controleToEdit={controleComData}
+        controleToEdit={controleComPrazo}
         initialTab="dados"
         statusList={[
           {
@@ -631,9 +629,9 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       />,
     )
 
-    const inputDataOp = screen.getByDisplayValue('2024-01-17') as HTMLInputElement
-    expect(inputDataOp).toBeDefined()
-    expect(inputDataOp.id).toBe('data-conclusao-caso')
-    expect(inputDataOp.disabled).toBe(true)
+    const inputPrazoOp = screen.getByDisplayValue('2024-02-15') as HTMLInputElement
+    expect(inputPrazoOp).toBeDefined()
+    expect(inputPrazoOp.id).toBe('prazo-conclusao')
+    expect(inputPrazoOp.disabled).toBe(true)
   })
 })

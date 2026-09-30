@@ -840,7 +840,6 @@ export const controleService = {
           status_id,
           data_autorizacao,
           prazo_conclusao,
-          data_conclusao,
           responsavel_usuario_id,
           executor_usuario_id,
           responsavel_core_usuario_id,
@@ -867,17 +866,12 @@ export const controleService = {
 
     const isCallerAdmin = callerPerfil?.toUpperCase() === 'ADMINISTRADOR'
 
-    // Se o chamador não for Administrador, protege data_conclusao do caso (se informada)
-    // Em edição por gestor/operacional, preserva o valor existente no banco (ou null); na criação, não permite definição manual (null).
-    let casoDataConclusao: string | null = (input as any).data_conclusao || null
-    if (!isCallerAdmin) {
-      if (input.id && existingRecord) {
-        casoDataConclusao = (existingRecord as any).data_conclusao
-          ? (existingRecord as any).data_conclusao.split('T')[0]
-          : null
-      } else {
-        casoDataConclusao = null
-      }
+    // Proteção de prazo_conclusao do caso por perfil:
+    // Administrador: pode editar prazo_conclusao normalmente.
+    // Gestor e Operacional: não podem alterar prazo_conclusao; em edição, preserva estritamente o valor do banco.
+    let finalPrazoConclusao = input.prazo_conclusao || null
+    if (!isCallerAdmin && input.id && existingRecord) {
+      finalPrazoConclusao = existingRecord.prazo_conclusao || null
     }
 
     // Monta dados do caso para a RPC
@@ -886,14 +880,13 @@ export const controleService = {
       identificacao_caso: input.identificacao_caso.trim(),
       status_id: input.status_id,
       data_autorizacao: input.data_autorizacao || null,
-      prazo_conclusao: input.prazo_conclusao || null,
+      prazo_conclusao: finalPrazoConclusao,
       responsavel_core_usuario_id: targetRespCoreId,
       executor_core_usuario_id: targetExecCoreId,
       responsavel_usuario_id: input.responsavel_usuario_id || null,
       executor_usuario_id: input.executor_usuario_id || null,
       pasta_cliente: input.pasta_cliente?.trim() || null,
       pasta_ricci: input.pasta_ricci?.trim() || null,
-      ...((input as any).data_conclusao !== undefined ? { data_conclusao: casoDataConclusao } : {}),
     }
 
     // Se o chamador não for ADMINISTRADOR, busca os valores existentes no banco

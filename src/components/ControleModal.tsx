@@ -135,7 +135,6 @@ export function ControleModal({
 
   const [dataAutorizacao, setDataAutorizacao] = useState('')
   const [prazoConclusao, setPrazoConclusao] = useState('')
-  const [dataConclusaoCaso, setDataConclusaoCaso] = useState('')
   const [responsavelUsuarioId, setResponsavelUsuarioId] = useState('')
   const [executorUsuarioId, setExecutorUsuarioId] = useState('')
   const [executorIsResponsavel, setExecutorIsResponsavel] = useState(false)
@@ -393,9 +392,6 @@ export function ControleModal({
       setPrazoConclusao(
         controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
       )
-      setDataConclusaoCaso(
-        controleToEdit.data_conclusao ? controleToEdit.data_conclusao.split('T')[0] : '',
-      )
       const editRespId =
         controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id || ''
       const editExecId =
@@ -455,7 +451,6 @@ export function ControleModal({
       setStatusId(statusPadraoId)
       setDataAutorizacao(getTodayLocalDate())
       setPrazoConclusao('')
-      setDataConclusaoCaso('')
       setResponsavelUsuarioId('')
       setExecutorUsuarioId('')
       setExecutorIsResponsavel(false)
@@ -997,19 +992,15 @@ export function ControleModal({
       }
     }
 
-    // Proteção de data_conclusao do caso no formulário:
+    // Proteção de prazo_conclusao do caso no formulário:
     // Administrador: pode editar normalmente.
-    // Gestor e Operacional: não podem alterar manualmente pelo payload/formulário.
-    // Em edição, preserva o valor existente do caso; na criação, envia null.
-    let finalDataConclusaoCaso: string | null = dataConclusaoCaso.trim() || null
-    if (!isAdmin) {
-      if (controleToEdit?.id) {
-        finalDataConclusaoCaso = controleToEdit.data_conclusao
-          ? controleToEdit.data_conclusao.split('T')[0]
-          : null
-      } else {
-        finalDataConclusaoCaso = null
-      }
+    // Gestor e Operacional: não podem alterar manualmente (campo desabilitado/somente leitura).
+    // Em edição por Gestor/Operacional, preserva o valor atual do banco.
+    let finalPrazoConclusaoCaso: string | null = prazoConclusao || null
+    if (!isAdmin && isEditMode && controleToEdit) {
+      finalPrazoConclusaoCaso = controleToEdit.prazo_conclusao
+        ? controleToEdit.prazo_conclusao.split('T')[0]
+        : null
     }
 
     const payload: SaveControleInput = {
@@ -1018,8 +1009,7 @@ export function ControleModal({
       identificacao_caso: identificacaoCaso.trim(),
       status_id: statusId,
       data_autorizacao: dataAutorizacao || null,
-      prazo_conclusao: prazoConclusao || null,
-      data_conclusao: finalDataConclusaoCaso,
+      prazo_conclusao: finalPrazoConclusaoCaso,
       responsavel_usuario_id: opRespPreservado,
       executor_usuario_id: opExecPreservado,
       responsavel_core_usuario_id: respCoreId || null,
@@ -1433,36 +1423,21 @@ export function ControleModal({
 
                     {/* Prazo de Conclusão */}
                     <div className="space-y-1.5">
-                      <Label htmlFor="prazo-conclusao" className="text-xs font-semibold">
-                        Prazo de Conclusão
-                      </Label>
-                      <Input
-                        id="prazo-conclusao"
-                        type="date"
-                        value={prazoConclusao}
-                        onChange={(e) => setPrazoConclusao(e.target.value)}
-                        className="h-10 rounded-xl bg-background"
-                      />
-                    </div>
-
-                    {/* Data de Conclusão do Caso (data_conclusao) */}
-                    <div className="space-y-1.5">
                       <Label
-                        htmlFor="data-conclusao-caso"
+                        htmlFor="prazo-conclusao"
                         className={cn(
                           'text-xs font-semibold flex items-center gap-1',
                           !isAdmin && 'text-muted-foreground',
                         )}
                       >
-                        <CalendarIcon className="w-3.5 h-3.5" />
-                        <span>Data de Conclusão</span>
+                        <span>Prazo de Conclusão</span>
                       </Label>
                       <Input
-                        id="data-conclusao-caso"
+                        id="prazo-conclusao"
                         type="date"
-                        value={dataConclusaoCaso}
+                        value={prazoConclusao}
                         disabled={!isAdmin}
-                        onChange={(e) => setDataConclusaoCaso(e.target.value)}
+                        onChange={(e) => setPrazoConclusao(e.target.value)}
                         className={cn(
                           'h-10 rounded-xl bg-background text-xs font-medium',
                           !isAdmin &&
@@ -1470,14 +1445,14 @@ export function ControleModal({
                         )}
                         title={
                           !isAdmin
-                            ? 'Somente Administradores podem editar a Data de Conclusão.'
+                            ? 'Somente Administradores podem editar o Prazo de Conclusão.'
                             : undefined
                         }
                       />
                       {!isAdmin && (
                         <p className="text-[11px] text-muted-foreground italic">
-                          Somente o Administrador pode inserir ou alterar manualmente a Data de
-                          Conclusão.
+                          Somente o Administrador pode inserir ou alterar o Prazo de Conclusão do
+                          caso.
                         </p>
                       )}
                     </div>

@@ -865,7 +865,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(depois).toHaveLength(0)
     })
 
-    it('saveControleTransacional: preserva data_conclusao do caso e das providências quando chamador é GESTOR ou OPERACIONAL', async () => {
+    it('saveControleTransacional: preserva prazo_conclusao do caso e data_conclusao das providências quando chamador é GESTOR ou OPERACIONAL', async () => {
       // Mock do registro anterior do caso em task_tarefas e da providência em task_providencias
       const existingControle = {
         id: 'caso-123',
@@ -875,7 +875,6 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         status_id: 'st-1',
         data_autorizacao: '2024-01-10',
         prazo_conclusao: '2024-02-10',
-        data_conclusao: '2024-01-18',
         responsavel_usuario_id: 'tu-1',
         executor_usuario_id: 'tu-2',
         responsavel_core_usuario_id: 'cu-1',
@@ -944,7 +943,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         status_id: 'st-1',
         responsavel_core_usuario_id: 'cu-1',
         executor_core_usuario_id: 'cu-2',
-        data_conclusao: '2099-12-31', // Tentativa de adulteração manual de data_conclusao do caso por GESTOR
+        prazo_conclusao: '2099-12-31', // Tentativa de adulteração manual de prazo_conclusao do caso por GESTOR
         providencias: [
           {
             id: 'prov-fixa-1',
@@ -959,9 +958,10 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
 
       await controleService.saveControleTransacional(input, undefined, 'GESTOR')
 
-      // O payload enviado à RPC DEVE preservar '2024-01-18' do caso e '2024-01-20' da providência (valores do banco)
+      // O payload enviado à RPC DEVE preservar '2024-02-10' do caso (prazo_conclusao) e '2024-01-20' da providência (data_conclusao)
       expect(rpcPayloadCaso).toBeDefined()
-      expect(rpcPayloadCaso.data_conclusao).toBe('2024-01-18')
+      expect(rpcPayloadCaso.prazo_conclusao).toBe('2024-02-10')
+      expect(rpcPayloadCaso.data_conclusao).toBeUndefined()
 
       expect(rpcPayloadProvs).toBeDefined()
       expect(rpcPayloadProvs[0].data_conclusao).toBe('2024-01-20')
@@ -970,7 +970,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       ;(supabase.from as any) = origFrom
     })
 
-    it('saveControleTransacional: na criação por GESTOR/OPERACIONAL, data_conclusao do caso e das providências é forçada para null', async () => {
+    it('saveControleTransacional: na criação por GESTOR/OPERACIONAL, data_conclusao das providências é forçada para null e prazo_conclusao do caso é mantido', async () => {
       let rpcPayloadCaso: any = null
       let rpcPayloadProvs: any = null
       const origRpc = supabase.rpc
@@ -1002,14 +1002,14 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         status_id: 'st-1',
         responsavel_core_usuario_id: 'cu-1',
         executor_core_usuario_id: 'cu-2',
-        data_conclusao: '2024-01-20', // Não permitido na criação manual por OPERACIONAL
+        prazo_conclusao: '2024-03-01',
         providencias: [
           {
             providencia: 'Nova Providência',
             prazo_conclusao: '2024-01-25',
             tipo_prazo_id: 'tp-1',
             status_id: 'st-1',
-            data_conclusao: '2024-01-20',
+            data_conclusao: '2024-01-20', // Não permitido na criação manual por OPERACIONAL
           },
         ],
       }
@@ -1017,7 +1017,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       await controleService.saveControleTransacional(input, undefined, 'OPERACIONAL')
 
       expect(rpcPayloadCaso).toBeDefined()
-      expect(rpcPayloadCaso.data_conclusao).toBeNull()
+      expect(rpcPayloadCaso.prazo_conclusao).toBe('2024-03-01')
+      expect(rpcPayloadCaso.data_conclusao).toBeUndefined()
 
       expect(rpcPayloadProvs).toBeDefined()
       expect(rpcPayloadProvs[0].data_conclusao).toBeNull()
@@ -1025,7 +1026,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       ;(supabase.rpc as any) = origRpc
     })
 
-    it('saveControleTransacional: ADMINISTRADOR pode definir e alterar data_conclusao do caso e providências livremente', async () => {
+    it('saveControleTransacional: ADMINISTRADOR pode definir e alterar prazo_conclusao do caso e data_conclusao das providências livremente', async () => {
       const existingControle = {
         id: 'caso-admin-1',
         nome_controle_id: 'nc-1',
@@ -1034,7 +1035,6 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         status_id: 'st-1',
         data_autorizacao: '2024-01-10',
         prazo_conclusao: '2024-02-10',
-        data_conclusao: '2024-01-15',
         responsavel_usuario_id: 'tu-1',
         executor_usuario_id: 'tu-2',
         responsavel_core_usuario_id: 'cu-1',
@@ -1091,7 +1091,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         status_id: 'st-1',
         responsavel_core_usuario_id: 'cu-1',
         executor_core_usuario_id: 'cu-2',
-        data_conclusao: '2024-01-22',
+        prazo_conclusao: '2024-05-30',
         providencias: [
           {
             id: 'prov-admin-1',
@@ -1107,7 +1107,8 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       await controleService.saveControleTransacional(input, undefined, 'ADMINISTRADOR')
 
       expect(rpcPayloadCaso).toBeDefined()
-      expect(rpcPayloadCaso.data_conclusao).toBe('2024-01-22')
+      expect(rpcPayloadCaso.prazo_conclusao).toBe('2024-05-30')
+      expect(rpcPayloadCaso.data_conclusao).toBeUndefined()
 
       expect(rpcPayloadProvs).toBeDefined()
       expect(rpcPayloadProvs[0].data_conclusao).toBe('2024-01-22')
