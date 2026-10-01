@@ -864,334 +864,374 @@ export default function TarefasPage() {
       {/* ========================================================================= */}
       <div className="bg-card border border-border rounded-2xl p-3.5 sm:p-4 shadow-card space-y-3 w-full">
         {/* Linha Principal de Filtros */}
-        <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2.5">
-          {/* Busca textual ampla */}
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <Input
-              type="text"
-              placeholder="Buscar por caso, pastas Cliente/Ricci, providências, responsável ou executor..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              className="pl-9 pr-8 h-10 rounded-xl bg-background text-xs sm:text-sm"
-            />
-            {searchInput && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchInput('')
-                  setDebouncedSearch('')
-                }}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
-                title="Limpar busca"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+        <div className="flex flex-wrap items-end gap-3 w-full">
+          {/* Busca textual ampla: reduzida para ~1/3 no desktop (lg:w-1/3 ou lg:max-w-xs / lg:flex-[0_0_30%]) */}
+          <div className="w-full sm:w-auto sm:flex-1 lg:flex-none lg:w-1/3 lg:max-w-xs min-w-[200px] flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Busca</span>
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <Input
+                type="text"
+                placeholder="Buscar..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="pl-9 pr-8 h-10 rounded-xl bg-background text-xs sm:text-sm"
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchInput('')
+                    setDebouncedSearch('')
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
+                  title="Limpar busca"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Filtros da Linha Principal (Desktop / Tablets) */}
-          <div className="hidden sm:flex items-center gap-2 flex-wrap lg:flex-nowrap shrink-0">
+          <div className="hidden sm:flex items-end gap-3 flex-wrap flex-1 min-w-0">
             {/* Filtro: Controle */}
             {allNomesControle.length > 1 && (
-              <Popover>
+              <div className="flex flex-col gap-1.5 min-w-[150px] max-w-[220px] flex-1 sm:flex-initial">
+                <span className="text-xs font-medium text-muted-foreground">Controle</span>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={cn(
+                        'h-10 rounded-xl text-xs font-medium px-3 bg-background border-border flex items-center gap-1.5 w-full justify-between',
+                        selectedControles.length > 0 &&
+                          'border-primary/60 bg-primary/5 text-primary font-semibold',
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0 truncate">
+                        <Layers className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">
+                          {selectedControles.length === 0
+                            ? 'Todos'
+                            : selectedControles.length === 1
+                              ? allNomesControle.find((n) => n.id === selectedControles[0])
+                                  ?.label || selectedControles[0]
+                              : `${selectedControles.length} selecionados`}
+                        </span>
+                      </div>
+                      <ChevronDown className="w-3.5 h-3.5 shrink-0 ml-1 opacity-60" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 p-2 rounded-xl" align="start">
+                    <div className="text-xs font-semibold px-2 py-1.5 text-muted-foreground border-b border-border mb-1 flex items-center justify-between">
+                      <span>Filtrar por Controle</span>
+                      {selectedControles.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedControles([])}
+                          className="text-[11px] text-primary hover:underline"
+                        >
+                          Limpar
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-60 overflow-y-auto space-y-1 py-1">
+                      {allNomesControle.map((item) => {
+                        const isSelected = selectedControles.includes(item.id)
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedControles((prev) => prev.filter((i) => i !== item.id))
+                              } else {
+                                setSelectedControles((prev) => [...prev, item.id])
+                              }
+                            }}
+                            className={cn(
+                              'w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 transition-colors',
+                              isSelected
+                                ? 'bg-primary/10 text-primary font-semibold'
+                                : 'hover:bg-muted text-foreground',
+                            )}
+                          >
+                            <span className="truncate">{item.label}</span>
+                            {isSelected && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+
+            {/* Filtro: Status do Controle */}
+            <div className="flex flex-col gap-1.5 min-w-[150px] max-w-[200px] flex-1 sm:flex-initial">
+              <span className="text-xs font-medium text-muted-foreground">Status</span>
+              <Select value={statusControleFilter} onValueChange={setStatusControleFilter}>
+                <SelectTrigger
+                  className={cn(
+                    'h-10 rounded-xl bg-background text-xs w-full',
+                    statusControleFilter !== 'todos' &&
+                      'border-primary/60 bg-primary/5 text-primary font-semibold',
+                  )}
+                >
+                  <SelectValue>
+                    {statusControleFilter === 'todos'
+                      ? 'Todos'
+                      : statusList.find((s) => s.id === statusControleFilter)?.nome || 'Todos'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="rounded-xl">
+                  <SelectItem value="todos">Todos</SelectItem>
+                  {[...statusList]
+                    .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                    .map((st) => (
+                      <SelectItem key={st.id} value={st.id}>
+                        {st.nome}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Filtro: Responsável pelo Controle */}
+            <div className="flex flex-col gap-1.5 min-w-[170px] max-w-[220px] flex-1 sm:flex-initial">
+              <span className="text-xs font-medium text-muted-foreground">Responsável</span>
+              <Select value={responsavelFilter} onValueChange={setResponsavelFilter}>
+                <SelectTrigger
+                  className={cn(
+                    'h-10 rounded-xl bg-background text-xs w-full',
+                    responsavelFilter !== 'todos' &&
+                      'border-primary/60 bg-primary/5 text-primary font-semibold',
+                  )}
+                >
+                  <SelectValue>
+                    {responsavelFilter === 'todos'
+                      ? 'Todos'
+                      : usuariosAtivos.find((u) => u.id === responsavelFilter)?.nome || 'Todos'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="rounded-xl max-h-72">
+                  <SelectItem value="todos">Todos</SelectItem>
+                  {usuariosAtivos.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Filtro: Executor do Controle */}
+            <div className="flex flex-col gap-1.5 min-w-[170px] max-w-[220px] flex-1 sm:flex-initial">
+              <span className="text-xs font-medium text-muted-foreground">Executor</span>
+              <Select value={executorFilter} onValueChange={setExecutorFilter}>
+                <SelectTrigger
+                  className={cn(
+                    'h-10 rounded-xl bg-background text-xs w-full',
+                    executorFilter !== 'todos' &&
+                      'border-primary/60 bg-primary/5 text-primary font-semibold',
+                  )}
+                >
+                  <SelectValue>
+                    {executorFilter === 'todos'
+                      ? 'Todos'
+                      : usuariosAtivos.find((u) => u.id === executorFilter)?.nome || 'Todos'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="rounded-xl max-h-72">
+                  <SelectItem value="todos">Todos</SelectItem>
+                  {usuariosAtivos.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Popover: Mais Filtros (Tipo de Prazo, Status da Providência, Ordenação) */}
+            <div className="flex flex-col gap-1.5 shrink-0">
+              <span className="text-xs font-medium text-transparent select-none">&nbsp;</span>
+              <Popover open={moreFiltersOpen} onOpenChange={setMoreFiltersOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
                     size="sm"
                     className={cn(
-                      'h-10 rounded-xl text-xs font-medium px-3 bg-background border-border flex items-center gap-1.5 max-w-[200px]',
-                      selectedControles.length > 0 &&
+                      'h-10 rounded-xl text-xs px-3 bg-background border-border flex items-center gap-1.5 shrink-0',
+                      advancedFiltersCount > 0 &&
                         'border-primary/60 bg-primary/5 text-primary font-semibold',
                     )}
                   >
-                    <Layers className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">
-                      {selectedControles.length === 0
-                        ? 'Controle'
-                        : selectedControles.length === 1
-                          ? selectedControles[0]
-                          : `${selectedControles.length} controles`}
-                    </span>
-                    <ChevronDown className="w-3.5 h-3.5 shrink-0 ml-auto opacity-60" />
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <span>Mais filtros</span>
+                    {advancedFiltersCount > 0 && (
+                      <Badge
+                        variant="secondary"
+                        className="h-5 px-1.5 text-[10px] rounded-full bg-primary text-primary-foreground font-bold"
+                      >
+                        {advancedFiltersCount}
+                      </Badge>
+                    )}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-72 p-2 rounded-xl" align="start">
-                  <div className="text-xs font-semibold px-2 py-1.5 text-muted-foreground border-b border-border mb-1 flex items-center justify-between">
-                    <span>Filtrar por Controle</span>
-                    {selectedControles.length > 0 && (
+                <PopoverContent className="w-80 p-4 rounded-2xl shadow-xl space-y-3.5" align="end">
+                  <div className="flex items-center justify-between border-b border-border pb-2">
+                    <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-primary" />
+                      <span>Filtros Adicionais</span>
+                    </span>
+                    {advancedFiltersCount > 0 && (
                       <button
                         type="button"
-                        onClick={() => setSelectedControles([])}
-                        className="text-[11px] text-primary hover:underline"
+                        onClick={() => {
+                          setExecutorFilter('todos')
+                          setTipoPrazoFilter('todos')
+                          setStatusProvidenciaFilter('todos')
+                          setSortField('prazo_providencia')
+                          setSortDirection('asc')
+                        }}
+                        className="text-[11px] text-primary hover:underline font-medium"
                       >
-                        Limpar
+                        Resetar
                       </button>
                     )}
                   </div>
-                  <div className="max-h-60 overflow-y-auto space-y-1 py-1">
-                    {allNomesControle.map((item) => {
-                      const isSelected = selectedControles.includes(item.id)
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => {
-                            if (isSelected) {
-                              setSelectedControles((prev) => prev.filter((i) => i !== item.id))
-                            } else {
-                              setSelectedControles((prev) => [...prev, item.id])
-                            }
-                          }}
-                          className={cn(
-                            'w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 transition-colors',
-                            isSelected
-                              ? 'bg-primary/10 text-primary font-semibold'
-                              : 'hover:bg-muted text-foreground',
-                          )}
-                        >
-                          <span className="truncate">{item.label}</span>
-                          {isSelected && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
-                        </button>
-                      )
-                    })}
+
+                  {/* Tipo de Prazo */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-muted-foreground block">
+                      Tipo de Prazo da Providência
+                    </label>
+                    <Select value={tipoPrazoFilter} onValueChange={setTipoPrazoFilter}>
+                      <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                        <SelectValue placeholder="Tipo de Prazo" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="todos">Todos os tipos de prazo</SelectItem>
+                        {tiposPrazoList.map((tp) => (
+                          <SelectItem key={tp.id} value={tp.id}>
+                            {tp.nome}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Status da Providência */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-muted-foreground block">
+                      Status da Providência
+                    </label>
+                    <Select
+                      value={statusProvidenciaFilter}
+                      onValueChange={setStatusProvidenciaFilter}
+                    >
+                      <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                        <SelectValue placeholder="Status da Providência" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="todos">Todos os status de providência</SelectItem>
+                        {[...statusProvidenciaList]
+                          .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                          .map((sp) => (
+                            <SelectItem key={sp.id} value={sp.id}>
+                              {sp.nome}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Ordenação */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-muted-foreground block">
+                      Ordenação dos Casos
+                    </label>
+                    <Select value={currentSortKey} onValueChange={handleSelectSort}>
+                      <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                        <SelectValue placeholder="Ordenação" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl max-h-64">
+                        <SelectItem value="padrao">Padrão (Número do Caso crescente)</SelectItem>
+                        <SelectItem value="numero_caso:asc">Número do Caso — crescente</SelectItem>
+                        <SelectItem value="numero_caso:desc">
+                          Número do Caso — decrescente
+                        </SelectItem>
+                        <SelectItem value="prazo_providencia:asc">
+                          Prazo da Providência — crescente
+                        </SelectItem>
+                        <SelectItem value="prazo_providencia:desc">
+                          Prazo da Providência — decrescente
+                        </SelectItem>
+                        <SelectItem value="prazo_conclusao:asc">
+                          Prazo do Controle — crescente
+                        </SelectItem>
+                        <SelectItem value="prazo_conclusao:desc">
+                          Prazo do Controle — decrescente
+                        </SelectItem>
+                        <SelectItem value="data_autorizacao:asc">
+                          Data de Autorização — crescente
+                        </SelectItem>
+                        <SelectItem value="data_autorizacao:desc">
+                          Data de Autorização — decrescente
+                        </SelectItem>
+                        <SelectItem value="updated_at:desc">
+                          Última Atualização — decrescente
+                        </SelectItem>
+                        <SelectItem value="updated_at:asc">
+                          Última Atualização — crescente
+                        </SelectItem>
+                        <SelectItem value="identificacao_caso:asc">
+                          Identificação do Caso — crescente
+                        </SelectItem>
+                        <SelectItem value="identificacao_caso:desc">
+                          Identificação do Caso — decrescente
+                        </SelectItem>
+                        <SelectItem value="responsavel:asc">Responsável — crescente</SelectItem>
+                        <SelectItem value="responsavel:desc">Responsável — decrescente</SelectItem>
+                        <SelectItem value="executor:asc">Executor — crescente</SelectItem>
+                        <SelectItem value="executor:desc">Executor — decrescente</SelectItem>
+                        <SelectItem value="pasta_cliente:asc">Pasta Cliente — crescente</SelectItem>
+                        <SelectItem value="pasta_cliente:desc">
+                          Pasta Cliente — decrescente
+                        </SelectItem>
+                        <SelectItem value="pasta_ricci:asc">Pasta Ricci — crescente</SelectItem>
+                        <SelectItem value="pasta_ricci:desc">Pasta Ricci — decrescente</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </PopoverContent>
               </Popover>
-            )}
-
-            {/* Filtro: Status do Controle */}
-            <Select value={statusControleFilter} onValueChange={setStatusControleFilter}>
-              <SelectTrigger
-                className={cn(
-                  'h-10 rounded-xl bg-background text-xs w-[150px] shrink-0',
-                  statusControleFilter !== 'todos' &&
-                    'border-primary/60 bg-primary/5 text-primary font-semibold',
-                )}
-              >
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl">
-                <SelectItem value="todos">Todos os status</SelectItem>
-                {[...statusList]
-                  .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
-                  .map((st) => (
-                    <SelectItem key={st.id} value={st.id}>
-                      {st.nome}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-
-            {/* Filtro: Responsável pelo Controle */}
-            <Select value={responsavelFilter} onValueChange={setResponsavelFilter}>
-              <SelectTrigger
-                className={cn(
-                  'h-10 rounded-xl bg-background text-xs w-[170px] shrink-0',
-                  responsavelFilter !== 'todos' &&
-                    'border-primary/60 bg-primary/5 text-primary font-semibold',
-                )}
-              >
-                <SelectValue placeholder="Responsável" />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl max-h-72">
-                <SelectItem value="todos">Todos os responsáveis</SelectItem>
-                {usuariosAtivos.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    {u.nome}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {/* Filtro: Executor do Controle */}
-            <Select value={executorFilter} onValueChange={setExecutorFilter}>
-              <SelectTrigger
-                className={cn(
-                  'h-10 rounded-xl bg-background text-xs w-[160px] shrink-0',
-                  executorFilter !== 'todos' &&
-                    'border-primary/60 bg-primary/5 text-primary font-semibold',
-                )}
-              >
-                <SelectValue placeholder="Executor" />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl max-h-72">
-                <SelectItem value="todos">Todos os executores</SelectItem>
-                {usuariosAtivos.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    {u.nome}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {/* Popover: Mais Filtros (Tipo de Prazo, Status da Providência, Ordenação) */}
-            <Popover open={moreFiltersOpen} onOpenChange={setMoreFiltersOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    'h-10 rounded-xl text-xs px-3 bg-background border-border flex items-center gap-1.5',
-                    advancedFiltersCount > 0 &&
-                      'border-primary/60 bg-primary/5 text-primary font-semibold',
-                  )}
-                >
-                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                  <span>Mais filtros</span>
-                  {advancedFiltersCount > 0 && (
-                    <Badge
-                      variant="secondary"
-                      className="h-5 px-1.5 text-[10px] rounded-full bg-primary text-primary-foreground font-bold"
-                    >
-                      {advancedFiltersCount}
-                    </Badge>
-                  )}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 p-4 rounded-2xl shadow-xl space-y-3.5" align="end">
-                <div className="flex items-center justify-between border-b border-border pb-2">
-                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                    <SlidersHorizontal className="w-3.5 h-3.5 text-primary" />
-                    <span>Filtros Adicionais</span>
-                  </span>
-                  {advancedFiltersCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setExecutorFilter('todos')
-                        setTipoPrazoFilter('todos')
-                        setStatusProvidenciaFilter('todos')
-                        setSortField('prazo_providencia')
-                        setSortDirection('asc')
-                      }}
-                      className="text-[11px] text-primary hover:underline font-medium"
-                    >
-                      Resetar
-                    </button>
-                  )}
-                </div>
-
-                {/* Tipo de Prazo */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-muted-foreground block">
-                    Tipo de Prazo da Providência
-                  </label>
-                  <Select value={tipoPrazoFilter} onValueChange={setTipoPrazoFilter}>
-                    <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
-                      <SelectValue placeholder="Tipo de Prazo" />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                      <SelectItem value="todos">Todos os tipos de prazo</SelectItem>
-                      {tiposPrazoList.map((tp) => (
-                        <SelectItem key={tp.id} value={tp.id}>
-                          {tp.nome}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Status da Providência */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-muted-foreground block">
-                    Status da Providência
-                  </label>
-                  <Select
-                    value={statusProvidenciaFilter}
-                    onValueChange={setStatusProvidenciaFilter}
-                  >
-                    <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
-                      <SelectValue placeholder="Status da Providência" />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                      <SelectItem value="todos">Todos os status de providência</SelectItem>
-                      {[...statusProvidenciaList]
-                        .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
-                        .map((sp) => (
-                          <SelectItem key={sp.id} value={sp.id}>
-                            {sp.nome}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Ordenação */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-muted-foreground block">
-                    Ordenação dos Casos
-                  </label>
-                  <Select value={currentSortKey} onValueChange={handleSelectSort}>
-                    <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
-                      <SelectValue placeholder="Ordenação" />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-xl max-h-64">
-                      <SelectItem value="padrao">Padrão (Número do Caso crescente)</SelectItem>
-                      <SelectItem value="numero_caso:asc">Número do Caso — crescente</SelectItem>
-                      <SelectItem value="numero_caso:desc">Número do Caso — decrescente</SelectItem>
-                      <SelectItem value="prazo_providencia:asc">
-                        Prazo da Providência — crescente
-                      </SelectItem>
-                      <SelectItem value="prazo_providencia:desc">
-                        Prazo da Providência — decrescente
-                      </SelectItem>
-                      <SelectItem value="prazo_conclusao:asc">
-                        Prazo do Controle — crescente
-                      </SelectItem>
-                      <SelectItem value="prazo_conclusao:desc">
-                        Prazo do Controle — decrescente
-                      </SelectItem>
-                      <SelectItem value="data_autorizacao:asc">
-                        Data de Autorização — crescente
-                      </SelectItem>
-                      <SelectItem value="data_autorizacao:desc">
-                        Data de Autorização — decrescente
-                      </SelectItem>
-                      <SelectItem value="updated_at:desc">
-                        Última Atualização — decrescente
-                      </SelectItem>
-                      <SelectItem value="updated_at:asc">Última Atualização — crescente</SelectItem>
-                      <SelectItem value="identificacao_caso:asc">
-                        Identificação do Caso — crescente
-                      </SelectItem>
-                      <SelectItem value="identificacao_caso:desc">
-                        Identificação do Caso — decrescente
-                      </SelectItem>
-                      <SelectItem value="responsavel:asc">Responsável — crescente</SelectItem>
-                      <SelectItem value="responsavel:desc">Responsável — decrescente</SelectItem>
-                      <SelectItem value="executor:asc">Executor — crescente</SelectItem>
-                      <SelectItem value="executor:desc">Executor — decrescente</SelectItem>
-                      <SelectItem value="pasta_cliente:asc">Pasta Cliente — crescente</SelectItem>
-                      <SelectItem value="pasta_cliente:desc">
-                        Pasta Cliente — decrescente
-                      </SelectItem>
-                      <SelectItem value="pasta_ricci:asc">Pasta Ricci — crescente</SelectItem>
-                      <SelectItem value="pasta_ricci:desc">Pasta Ricci — decrescente</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </PopoverContent>
-            </Popover>
+            </div>
 
             {/* Botão Limpar Filtros */}
             {hasActiveFilters && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleClearFilters}
-                className="h-10 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 rounded-xl"
-                title="Limpar todos os filtros"
-              >
-                <FilterX className="w-3.5 h-3.5 mr-1" />
-                Limpar
-              </Button>
+              <div className="flex flex-col gap-1.5 shrink-0">
+                <span className="text-xs font-medium text-transparent select-none">&nbsp;</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearFilters}
+                  className="h-10 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 rounded-xl shrink-0"
+                  title="Limpar todos os filtros"
+                >
+                  <FilterX className="w-3.5 h-3.5 mr-1" />
+                  Limpar
+                </Button>
+              </div>
             )}
           </div>
 
           {/* Botão para Mobile Filters */}
-          <div className="sm:hidden flex items-center justify-between gap-2 pt-1">
+          <div className="sm:hidden flex items-center justify-between gap-2 pt-1 w-full">
             <Sheet open={mobileFilterSheetOpen} onOpenChange={setMobileFilterSheetOpen}>
               <SheetTrigger asChild>
                 <Button
