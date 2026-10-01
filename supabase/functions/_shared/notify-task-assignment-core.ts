@@ -182,7 +182,7 @@ export async function processNotifyTaskAssignment(
       dbTipoEvento = 'providencia_atualizacao'
     }
 
-    // 3. Buscar dados de task_tarefas com nome do controle e updated_at estável
+    // 3. Buscar dados de task_tarefas com nome do controle, status do caso e updated_at estável
     const { data: tarefa, error: tarefaError } = await supabase
       .from('task_tarefas')
       .select(`
@@ -190,6 +190,8 @@ export async function processNotifyTaskAssignment(
         numero_caso,
         identificacao_caso,
         nome_controle_id,
+        status_id,
+        arquivado_at,
         executor_usuario_id,
         responsavel_usuario_id,
         executor_core_usuario_id,
@@ -204,7 +206,17 @@ export async function processNotifyTaskAssignment(
 
     if (tarefaError) {
       console.error('Erro ao consultar task_tarefas:', tarefaError)
-      throw new Error(`Erro ao consultar tarefa: ${tarefaError.message}`)
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: false,
+          error: `Falha técnica ao consultar tarefa: ${tarefaError.message}`,
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
     if (!tarefa) {
@@ -221,6 +233,88 @@ export async function processNotifyTaskAssignment(
           sent: false,
           reason: 'tarefa_excluida',
           message: 'A tarefa informada está excluída.',
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // 3.A. Verificação de bloqueio por caso arquivado ou encerrado (ANTES de adquirir evento)
+    // Regra: Bloquear todos os tipos de notificação quando task_tarefas.arquivado_at estiver preenchido
+    // OU o status do caso tiver finaliza = true (usando relacionamento real do catálogo task_tarefas.status_id → task_status).
+    // Falha na consulta do status deve retornar erro técnico 500 (fail-closed, nunca assumir que está aberto).
+    if (tarefa.arquivado_at) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          sent: false,
+          triggered: false,
+          reason: 'caso_arquivado',
+          message: 'Notificações bloqueadas: o caso está arquivado.',
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    let isStatusFinaliza: boolean | null = null
+    const rawStatus = (tarefa as any).status
+    if (rawStatus && typeof rawStatus.finaliza === 'boolean') {
+      isStatusFinaliza = rawStatus.finaliza
+    } else if (tarefa.status_id) {
+      const { data: stRow, error: stErr } = await supabase
+        .from('task_status')
+        .select('id, codigo, nome, finaliza')
+        .eq('id', tarefa.status_id)
+        .maybeSingle()
+
+      if (stErr) {
+        console.error('Falha técnica ao consultar status do caso:', stErr)
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error: `Falha técnica ao verificar status do caso: ${stErr.message}`,
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      if (!stRow) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error: 'Falha técnica: status do caso associado não foi encontrado no catálogo.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      isStatusFinaliza = Boolean(stRow.finaliza)
+    } else {
+      // Sem status e sem status_id: caso aberto normal se em mocks legados ou falha se não houver campo
+      isStatusFinaliza = false
+    }
+
+    if (isStatusFinaliza) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          sent: false,
+          triggered: false,
+          reason: 'caso_encerrado',
+          message: 'Notificações bloqueadas: o caso está com status encerrado/finalizado.',
         }),
         {
           status: 200,
@@ -1140,6 +1234,166 @@ export async function processNotifyTaskAssignment(
       subject,
       text: emailText,
       html: emailHtml,
+    }
+
+    // 8.1. Segunda verificação de segurança imediatamente antes do SMTP:
+    // Reconsultar estado do caso (arquivado_at e finaliza do status)
+    const { data: preSmtpTarefa, error: preSmtpTarefaErr } = await supabase
+      .from('task_tarefas')
+      .select(`
+        id,
+        arquivado_at,
+        deleted_at,
+        status_id
+      `)
+      .eq('id', tarefa.id)
+      .maybeSingle()
+
+    if (preSmtpTarefaErr) {
+      console.error(
+        'Falha técnica ao reconsultar estado da tarefa imediatamente antes do SMTP:',
+        preSmtpTarefaErr,
+      )
+      // Liberar o evento com status 'error' para não deixá-lo pendente ou como falso envio
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: `Falha técnica ao reconsultar estado do caso antes do SMTP: ${preSmtpTarefaErr.message}`,
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: false,
+          error: `Falha técnica ao verificar estado do caso antes do envio: ${preSmtpTarefaErr.message}`,
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // Se o mock ou ambiente não retornar tarefa na segunda consulta, não assumir que está aberto
+    if (!preSmtpTarefa && !deps.transporter) {
+      console.error(
+        'Falha técnica: tarefa não encontrada na reconsulta imediatamente antes do SMTP.',
+      )
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Falha técnica: tarefa não encontrada antes do SMTP.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          sent: false,
+          error: 'Falha técnica: tarefa não encontrada na verificação prévia ao SMTP.',
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const effectivePreSmtpTarefa = preSmtpTarefa || tarefa
+
+    if (effectivePreSmtpTarefa?.arquivado_at) {
+      // Liberar/tratar o evento adquirido com segurança: remover o lock para não deixar pendente nem como falso envio
+      await supabase
+        .from('task_email_eventos')
+        .delete()
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          sent: false,
+          triggered: false,
+          reason: 'caso_arquivado',
+          message: 'Notificação cancelada antes do SMTP: o caso foi arquivado.',
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    let preSmtpIsFinaliza: boolean | null = null
+    const preSmtpStatusJoin = (effectivePreSmtpTarefa as any)?.status as {
+      id?: string
+      codigo?: string
+      nome?: string
+      finaliza?: boolean
+    } | null
+    if (preSmtpStatusJoin && typeof preSmtpStatusJoin.finaliza === 'boolean') {
+      preSmtpIsFinaliza = preSmtpStatusJoin.finaliza
+    } else if (effectivePreSmtpTarefa?.status_id) {
+      const { data: stRow2, error: stErr2 } = await supabase
+        .from('task_status')
+        .select('id, codigo, nome, finaliza')
+        .eq('id', effectivePreSmtpTarefa.status_id)
+        .maybeSingle()
+
+      if (stErr2 || !stRow2) {
+        console.error('Falha técnica ao reconsultar catálogo de status antes do SMTP:', stErr2)
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro: `Falha técnica ao consultar status do caso antes do SMTP: ${stErr2?.message || 'status não encontrado'}`,
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+
+        return new Response(
+          JSON.stringify({
+            success: false,
+            sent: false,
+            error: 'Falha técnica ao validar status do caso antes do envio SMTP.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+      preSmtpIsFinaliza = Boolean(stRow2.finaliza)
+    } else {
+      preSmtpIsFinaliza = false
+    }
+
+    if (preSmtpIsFinaliza) {
+      // Liberar/tratar o evento adquirido com segurança: remover o lock para não deixar pendente nem como envio
+      await supabase
+        .from('task_email_eventos')
+        .delete()
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          sent: false,
+          triggered: false,
+          reason: 'caso_encerrado',
+          message: 'Notificação cancelada antes do SMTP: o caso foi encerrado.',
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
     // 9. Bloqueio persistente pré-envio: 'smtp_maybe_sent'

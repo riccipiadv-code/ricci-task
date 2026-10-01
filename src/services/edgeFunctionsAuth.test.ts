@@ -2849,6 +2849,622 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(body.reason).toBe('already_sent')
       expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
     })
+
+    describe('Regras de Bloqueio para Casos Arquivados ou Encerrados (fail-closed)', () => {
+      it('1. Bloqueia disparo em caso arquivado (arquivado_at preenchido), retornando reason: caso_arquivado e SEM SMTP', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador-valido',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador Válido',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-caller',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-arquivada',
+                          numero_caso: 901,
+                          arquivado_at: '2026-01-15T10:00:00Z',
+                          status_id: 'st-aberto',
+                          executor_core_usuario_id: 'cu-exec-1',
+                          responsavel_core_usuario_id: 'cu-resp-1',
+                          updated_at: '2026-01-15T10:00:00Z',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-arquivada',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.success).toBe(true)
+        expect(body.sent).toBe(false)
+        expect(body.reason).toBe('caso_arquivado')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('2. Bloqueia disparo em caso com status finalizador (finaliza = true) sem arquivado_at, retornando reason: caso_encerrado e SEM SMTP', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador-valido',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador Válido',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-caller',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-encerrada',
+                          numero_caso: 902,
+                          arquivado_at: null,
+                          status_id: 'st-finalizador',
+                          executor_core_usuario_id: 'cu-exec-1',
+                          responsavel_core_usuario_id: 'cu-resp-1',
+                          updated_at: '2026-02-10T11:00:00Z',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_status') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'st-finalizador',
+                          codigo: 'concluido',
+                          nome: 'Finalizado com Sucesso',
+                          finaliza: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-encerrada',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.success).toBe(true)
+        expect(body.sent).toBe(false)
+        expect(body.reason).toBe('caso_encerrado')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('3. Bloqueia disparo em inclusão ou atualização de providência vinculada a caso arquivado', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador-valido',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador Válido',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-caller',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-caso-arquivado',
+                          numero_caso: 903,
+                          arquivado_at: '2026-03-01T08:00:00Z',
+                          status_id: 'st-aberto',
+                          executor_core_usuario_id: 'cu-exec-1',
+                          responsavel_core_usuario_id: 'cu-resp-1',
+                          updated_at: '2026-03-01T08:00:00Z',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const reqInclusao = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-caso-arquivado',
+            providencia_id: 'prov-1',
+            tipo: 'providencia_inclusao',
+          }),
+        })
+
+        const resInclusao = await handleNotifyTaskAssignment(reqInclusao, ctx)
+        expect(resInclusao.status).toBe(200)
+        const bodyInclusao = await resInclusao.json()
+        expect(bodyInclusao.success).toBe(true)
+        expect(bodyInclusao.sent).toBe(false)
+        expect(bodyInclusao.reason).toBe('caso_arquivado')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+
+        const reqAtualizacao = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-caso-arquivado',
+            providencia_id: 'prov-1',
+            tipo: 'providencia_atualizacao',
+          }),
+        })
+
+        const resAtualizacao = await handleNotifyTaskAssignment(reqAtualizacao, ctx)
+        expect(resAtualizacao.status).toBe(200)
+        const bodyAtualizacao = await resAtualizacao.json()
+        expect(bodyAtualizacao.success).toBe(true)
+        expect(bodyAtualizacao.sent).toBe(false)
+        expect(bodyAtualizacao.reason).toBe('caso_arquivado')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('4. Retorna erro técnico 500 (fail-closed) se houver falha na consulta do status do caso', async () => {
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador-valido',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador Válido',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-caller',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-status-falha',
+                          numero_caso: 904,
+                          arquivado_at: null,
+                          status_id: 'st-com-falha',
+                          executor_core_usuario_id: 'cu-exec-1',
+                          responsavel_core_usuario_id: 'cu-resp-1',
+                          updated_at: '2026-03-01T08:00:00Z',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_status') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: null,
+                        error: { message: 'Database timeout ao ler status' },
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-status-falha',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(500)
+        const body = await res.json()
+        expect(body.success).toBe(false)
+        expect(body.sent).toBe(false)
+        expect(body.error).toContain('Falha técnica ao verificar status do caso')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('5. Segunda verificação de segurança (pré-SMTP): detecta caso encerrado/arquivado após adquirir lock e libera evento com segurança', async () => {
+        let taskFetchCount = 0
+        let eventDeleted = false
+
+        ctx.supabase = {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-op' } },
+              error: null,
+            }),
+          },
+          from: vi.fn((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-chamador-valido',
+                          auth_user_id: 'auth-user-op',
+                          nome: 'Chamador Válido',
+                          email: 'chamador@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'link-exec',
+                      ativo: true,
+                      core_usuarios: {
+                        id: 'cu-exec-1',
+                        nome: 'Executor Um',
+                        email: 'executor.um@riccipi.com.br',
+                        ativo: true,
+                      },
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                    error: null,
+                  }),
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'link-caller',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => {
+                      taskFetchCount++
+                      if (taskFetchCount === 1) {
+                        // Primeira consulta: caso aberto
+                        return Promise.resolve({
+                          data: {
+                            id: 'tarefa-race-close',
+                            numero_caso: 905,
+                            arquivado_at: null,
+                            status_id: 'st-aberto',
+                            executor_core_usuario_id: 'cu-exec-1',
+                            responsavel_core_usuario_id: null,
+                            updated_at: '2026-03-01T08:00:00Z',
+                          },
+                          error: null,
+                        })
+                      }
+                      // Segunda consulta (imediatamente antes do SMTP): caso foi encerrado concorrentemente!
+                      return Promise.resolve({
+                        data: {
+                          id: 'tarefa-race-close',
+                          numero_caso: 905,
+                          arquivado_at: null,
+                          status_id: 'st-fechou-depois',
+                          executor_core_usuario_id: 'cu-exec-1',
+                          responsavel_core_usuario_id: null,
+                          updated_at: '2026-03-01T08:05:00Z',
+                        },
+                        error: null,
+                      })
+                    },
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_status') {
+              return {
+                select: () => ({
+                  eq: (_col: string, val: string) => ({
+                    maybeSingle: () => {
+                      if (val === 'st-aberto') {
+                        return Promise.resolve({
+                          data: { id: 'st-aberto', finaliza: false },
+                          error: null,
+                        })
+                      }
+                      return Promise.resolve({
+                        data: { id: 'st-fechou-depois', finaliza: true },
+                        error: null,
+                      })
+                    },
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_providencias') {
+              const chain: any = {
+                eq: () => chain,
+                is: () => chain,
+                order: () => chain,
+                then: (resolve: any) => resolve({ data: [], error: null }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }),
+                }),
+                insert: () => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: { id: 'evt-race-lock', owner_token: 'valid-token' },
+                        error: null,
+                      }),
+                  }),
+                }),
+                delete: () => {
+                  eventDeleted = true
+                  const chain: any = {
+                    eq: () => chain,
+                    then: (resolve: any) => resolve({ error: null }),
+                  }
+                  return chain
+                },
+                update: () => ({
+                  eq: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-assignment', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-jwt-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tarefa_id: 'tarefa-race-close',
+            tipo: 'alteracao_atribuicao',
+          }),
+        })
+
+        const res = await handleNotifyTaskAssignment(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.success).toBe(true)
+        expect(body.sent).toBe(false)
+        expect(body.reason).toBe('caso_encerrado')
+        expect(eventDeleted).toBe(true) // Evento adquirido foi liberado com segurança (delete do lock)
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+    })
   })
 
   describe('Pipeline notify-task-overdue (Rotina de Atrasos com módulo real core-auth)', () => {
