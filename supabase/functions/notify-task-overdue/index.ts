@@ -327,10 +327,13 @@ Deno.serve(async (req: Request) => {
         numero_caso,
         identificacao_caso,
         nome_controle_id,
+        status_id,
+        arquivado_at,
         executor_core_usuario_id,
         responsavel_core_usuario_id,
         deleted_at,
-        nome_controle:task_nomes_controle(nome)
+        nome_controle:task_nomes_controle(nome),
+        status:task_status(id, codigo, nome, finaliza)
       `)
       .in('id', tarefaIds)
 
@@ -383,6 +386,33 @@ Deno.serve(async (req: Request) => {
           event_key: `providencia_atraso:${prov.id}:${todayStr}`,
           status: 'skipped',
           reason: !tarefa ? 'tarefa_nao_encontrada' : 'tarefa_excluida',
+        })
+        totalSkipped++
+        continue
+      }
+
+      // Se o caso estiver arquivado, pular com reason 'caso_arquivado' (sem lock/evento em task_email_eventos)
+      if (tarefa.arquivado_at) {
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+          status: 'skipped',
+          reason: 'caso_arquivado',
+        })
+        totalSkipped++
+        continue
+      }
+
+      // Se o caso estiver com status finalizador (finaliza = true), pular com reason 'caso_finalizado'
+      const statusFinaliza = tarefa.status?.finaliza === true
+      if (statusFinaliza) {
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+          status: 'skipped',
+          reason: 'caso_finalizado',
         })
         totalSkipped++
         continue
@@ -844,6 +874,62 @@ Deno.serve(async (req: Request) => {
         subject,
         text: emailText,
         html: emailHtml,
+      }
+
+      // Recheck pré-SMTP: imediatamente antes do transporter.sendMail, reconsultar task_tarefas
+      const { data: preSmtpTarefa, error: preSmtpError } = await supabase
+        .from('task_tarefas')
+        .select('id, arquivado_at, deleted_at')
+        .eq('id', tarefa.id)
+        .maybeSingle()
+
+      if (preSmtpError) {
+        console.error(
+          `Falha técnica ao reconsultar task_tarefas antes do SMTP para caso ${tarefa.id}:`,
+          preSmtpError,
+        )
+        const errMsg = `Falha técnica ao reconsultar caso antes do SMTP: ${preSmtpError.message}`
+
+        if (eventoId) {
+          await supabase
+            .from('task_email_eventos')
+            .update({
+              status: 'error',
+              erro: errMsg,
+            })
+            .eq('id', eventoId)
+            .eq('owner_token', overdueOwnerToken)
+        }
+
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'error',
+          error: errMsg,
+        })
+        totalErrors++
+        continue
+      }
+
+      if (preSmtpTarefa && (preSmtpTarefa.arquivado_at || preSmtpTarefa.deleted_at)) {
+        if (eventoId) {
+          await supabase
+            .from('task_email_eventos')
+            .delete()
+            .eq('id', eventoId)
+            .eq('owner_token', overdueOwnerToken)
+        }
+
+        results.push({
+          providencia_id: prov.id,
+          tarefa_id: tarefa.id,
+          event_key: eventKey,
+          status: 'skipped',
+          reason: 'caso_arquivado',
+        })
+        totalSkipped++
+        continue
       }
 
       // Disparar envio via transporter SMTP com tratamento de incerteza e persistência

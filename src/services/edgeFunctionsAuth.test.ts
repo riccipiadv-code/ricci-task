@@ -1284,12 +1284,57 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
   for (const prov of providenciasAbertas) {
     const { data: tarefa } = await ctx.supabase
       .from('task_tarefas')
-      .select('*')
+      .select(`
+        id,
+        numero_caso,
+        identificacao_caso,
+        nome_controle_id,
+        status_id,
+        arquivado_at,
+        executor_core_usuario_id,
+        responsavel_core_usuario_id,
+        deleted_at,
+        nome_controle:task_nomes_controle(nome),
+        status:task_status(id, codigo, nome, finaliza)
+      `)
       .eq('id', prov.tarefa_id)
       .maybeSingle()
 
     if (!tarefa || tarefa.deleted_at) {
-      results.push({ providencia_id: prov.id, status: 'skipped', reason: 'tarefa_excluida' })
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: prov.tarefa_id,
+        event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+        status: 'skipped',
+        reason: !tarefa ? 'tarefa_nao_encontrada' : 'tarefa_excluida',
+      })
+      totalSkipped++
+      continue
+    }
+
+    // Se o caso estiver arquivado, pular com reason 'caso_arquivado' (sem lock/evento em task_email_eventos)
+    if (tarefa.arquivado_at) {
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: tarefa.id,
+        event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+        status: 'skipped',
+        reason: 'caso_arquivado',
+      })
+      totalSkipped++
+      continue
+    }
+
+    // Se o caso estiver com status finalizador (finaliza = true), pular com reason 'caso_finalizado'
+    const statusFinaliza = tarefa.status?.finaliza === true
+    if (statusFinaliza) {
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: tarefa.id,
+        event_key: `providencia_atraso:${prov.id}:${todayStr}`,
+        status: 'skipped',
+        reason: 'caso_finalizado',
+      })
       totalSkipped++
       continue
     }
@@ -1513,6 +1558,52 @@ async function handleNotifyTaskOverdue(req: Request, ctx: MockEdgeContext): Prom
         </p>
       </div>
     `
+
+    // Recheck pré-SMTP: imediatamente antes do transporter.sendMail, reconsultar task_tarefas
+    const { data: preSmtpTarefa, error: preSmtpError } = await ctx.supabase
+      .from('task_tarefas')
+      .select('id, arquivado_at, deleted_at')
+      .eq('id', tarefa.id)
+      .maybeSingle()
+
+    if (preSmtpError) {
+      const errMsg = `Falha técnica ao reconsultar caso antes do SMTP: ${preSmtpError.message}`
+      if (eventoId) {
+        await ctx.supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro: errMsg,
+          })
+          .eq('id', eventoId)
+      }
+
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: tarefa.id,
+        event_key: eventKey,
+        status: 'error',
+        error: errMsg,
+      })
+      totalErrors++
+      continue
+    }
+
+    if (preSmtpTarefa && (preSmtpTarefa.arquivado_at || preSmtpTarefa.deleted_at)) {
+      if (eventoId) {
+        await ctx.supabase.from('task_email_eventos').delete().eq('id', eventoId)
+      }
+
+      results.push({
+        providencia_id: prov.id,
+        tarefa_id: tarefa.id,
+        event_key: eventKey,
+        status: 'skipped',
+        reason: 'caso_arquivado',
+      })
+      totalSkipped++
+      continue
+    }
 
     try {
       await ctx.transporter.sendMail({
@@ -4363,6 +4454,571 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(body.details[0].reason).toBe('falha_consulta_central')
       expect(body.details[0].error).toContain('Connection reset ao consultar chave de idempotência')
       expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    describe('Novas Regras de Bloqueio em notify-task-overdue (Casos Arquivados e Encerrados)', () => {
+      it('9. Caso arquivado + providência atrasada com alertas ativos: não envia e-mail, não grava evento, reason caso_arquivado', async () => {
+        let taskEmailEventosInsertCalled = false
+        ctx.supabase = {
+          from: vi.fn((table: string) => {
+            if (table === 'task_providencias') {
+              return {
+                select: () =>
+                  Promise.resolve({
+                    data: [{ id: 'prov-caso-arq', tarefa_id: 'tarefa-arq-1' }],
+                    error: null,
+                  }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-arq-1',
+                          numero_caso: 701,
+                          arquivado_at: '2026-03-10T10:00:00Z',
+                          status_id: 'st-aberto',
+                          executor_core_usuario_id: 'cu-exec-arq',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                insert: vi.fn(() => {
+                  taskEmailEventosInsertCalled = true
+                  return {
+                    select: () => ({
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-overdue', {
+          method: 'POST',
+          headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+        })
+
+        const res = await handleNotifyTaskOverdue(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.sent).toBe(0)
+        expect(body.skipped).toBe(1)
+        expect(body.details[0].reason).toBe('caso_arquivado')
+        expect(body.details[0].status).toBe('skipped')
+        expect(taskEmailEventosInsertCalled).toBe(false)
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('10. Caso com status finaliza=true: não envia e-mail, reason caso_finalizado', async () => {
+        ctx.supabase = {
+          from: vi.fn((table: string) => {
+            if (table === 'task_providencias') {
+              return {
+                select: () =>
+                  Promise.resolve({
+                    data: [{ id: 'prov-caso-fim', tarefa_id: 'tarefa-fim-1' }],
+                    error: null,
+                  }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-fim-1',
+                          numero_caso: 702,
+                          arquivado_at: null,
+                          status_id: 'st-finalizado',
+                          status: {
+                            id: 'st-finalizado',
+                            codigo: 'concluido',
+                            nome: 'Finalizado',
+                            finaliza: true,
+                          },
+                          executor_core_usuario_id: 'cu-exec-fim',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-overdue', {
+          method: 'POST',
+          headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+        })
+
+        const res = await handleNotifyTaskOverdue(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.sent).toBe(0)
+        expect(body.skipped).toBe(1)
+        expect(body.details[0].reason).toBe('caso_finalizado')
+        expect(body.details[0].status).toBe('skipped')
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('11. Caso ativo: envia normalmente (regressão)', async () => {
+        ctx.supabase = {
+          from: vi.fn((table: string) => {
+            if (table === 'task_providencias') {
+              return {
+                select: () =>
+                  Promise.resolve({
+                    data: [{ id: 'prov-caso-ativo', tarefa_id: 'tarefa-ativo-1' }],
+                    error: null,
+                  }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              let callCount = 0
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => {
+                      callCount++
+                      return Promise.resolve({
+                        data: {
+                          id: 'tarefa-ativo-1',
+                          numero_caso: 703,
+                          arquivado_at: null,
+                          deleted_at: null,
+                          status_id: 'st-aberto',
+                          status: {
+                            id: 'st-aberto',
+                            codigo: 'aberto',
+                            nome: 'Aberto',
+                            finaliza: false,
+                          },
+                          executor_core_usuario_id: 'cu-exec-ativo',
+                        },
+                        error: null,
+                      })
+                    },
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'link-exec-ativo',
+                      ativo: true,
+                      core_usuarios: {
+                        id: 'cu-exec-ativo',
+                        nome: 'Exec Ativo',
+                        email: 'exec.ativo@riccipi.com.br',
+                        ativo: true,
+                      },
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: () => chain,
+                    not: () => chain,
+                    order: () => chain,
+                    limit: () => chain,
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }
+                  return chain
+                },
+                insert: () => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({ data: { id: 'evt-ativo-1' }, error: null }),
+                  }),
+                }),
+                update: () => ({
+                  eq: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-overdue', {
+          method: 'POST',
+          headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+        })
+
+        const res = await handleNotifyTaskOverdue(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.sent).toBe(1)
+        expect(body.details[0].status).toBe('sent')
+        expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
+      })
+
+      it('12. Caso arquivado entre a consulta inicial e o SMTP (recheck retorna arquivado_at): não envia e remove o lock', async () => {
+        let lockRemoved = false
+        ctx.supabase = {
+          from: vi.fn((table: string) => {
+            if (table === 'task_providencias') {
+              return {
+                select: () =>
+                  Promise.resolve({
+                    data: [{ id: 'prov-race-arq', tarefa_id: 'tarefa-race-1' }],
+                    error: null,
+                  }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              let callCount = 0
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => {
+                      callCount++
+                      // Primeira consulta: caso aberto
+                      if (callCount === 1) {
+                        return Promise.resolve({
+                          data: {
+                            id: 'tarefa-race-1',
+                            numero_caso: 704,
+                            arquivado_at: null,
+                            status_id: 'st-aberto',
+                            status: {
+                              id: 'st-aberto',
+                              codigo: 'aberto',
+                              nome: 'Aberto',
+                              finaliza: false,
+                            },
+                            executor_core_usuario_id: 'cu-exec-race',
+                          },
+                          error: null,
+                        })
+                      }
+                      // Recheck pré-SMTP: caso arquivado concorrentemente!
+                      return Promise.resolve({
+                        data: {
+                          id: 'tarefa-race-1',
+                          arquivado_at: '2026-03-10T12:00:00Z',
+                          deleted_at: null,
+                        },
+                        error: null,
+                      })
+                    },
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'link-exec-race',
+                      ativo: true,
+                      core_usuarios: {
+                        id: 'cu-exec-race',
+                        nome: 'Exec Race',
+                        email: 'exec.race@riccipi.com.br',
+                        ativo: true,
+                      },
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: () => chain,
+                    not: () => chain,
+                    order: () => chain,
+                    limit: () => chain,
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }
+                  return chain
+                },
+                insert: () => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({ data: { id: 'evt-race-lock' }, error: null }),
+                  }),
+                }),
+                delete: vi.fn(() => ({
+                  eq: vi.fn(() => {
+                    lockRemoved = true
+                    return Promise.resolve({ data: null, error: null })
+                  }),
+                })),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-overdue', {
+          method: 'POST',
+          headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+        })
+
+        const res = await handleNotifyTaskOverdue(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.sent).toBe(0)
+        expect(body.skipped).toBe(1)
+        expect(body.details[0].reason).toBe('caso_arquivado')
+        expect(body.details[0].status).toBe('skipped')
+        expect(lockRemoved).toBe(true)
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('13. Falha na reconsulta pré-SMTP: não envia, evento error', async () => {
+        let eventoUpdatedToError = false
+        ctx.supabase = {
+          from: vi.fn((table: string) => {
+            if (table === 'task_providencias') {
+              return {
+                select: () =>
+                  Promise.resolve({
+                    data: [{ id: 'prov-recheck-fail', tarefa_id: 'tarefa-fail-1' }],
+                    error: null,
+                  }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              let callCount = 0
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => {
+                      callCount++
+                      if (callCount === 1) {
+                        return Promise.resolve({
+                          data: {
+                            id: 'tarefa-fail-1',
+                            numero_caso: 705,
+                            arquivado_at: null,
+                            status_id: 'st-aberto',
+                            status: {
+                              id: 'st-aberto',
+                              codigo: 'aberto',
+                              nome: 'Aberto',
+                              finaliza: false,
+                            },
+                            executor_core_usuario_id: 'cu-exec-fail',
+                          },
+                          error: null,
+                        })
+                      }
+                      // Recheck falha com erro de conexão
+                      return Promise.resolve({
+                        data: null,
+                        error: { message: 'Network connection aborted' },
+                      })
+                    },
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'link-exec-fail',
+                      ativo: true,
+                      core_usuarios: {
+                        id: 'cu-exec-fail',
+                        nome: 'Exec Fail',
+                        email: 'exec.fail@riccipi.com.br',
+                        ativo: true,
+                      },
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: () => chain,
+                    not: () => chain,
+                    order: () => chain,
+                    limit: () => chain,
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }
+                  return chain
+                },
+                insert: () => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({ data: { id: 'evt-fail-recheck' }, error: null }),
+                  }),
+                }),
+                update: vi.fn((data: any) => {
+                  if (data.status === 'error') {
+                    eventoUpdatedToError = true
+                  }
+                  return {
+                    eq: () => Promise.resolve({ data: null, error: null }),
+                  }
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-overdue', {
+          method: 'POST',
+          headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+        })
+
+        const res = await handleNotifyTaskOverdue(req, ctx)
+        expect(res.status).toBe(207)
+        const body = await res.json()
+        expect(body.sent).toBe(0)
+        expect(body.errors).toBe(1)
+        expect(body.details[0].status).toBe('error')
+        expect(body.details[0].error).toContain('Network connection aborted')
+        expect(eventoUpdatedToError).toBe(true)
+        expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+      })
+
+      it('14. Caso desarquivado com providência atrasada: volta a enviar normalmente', async () => {
+        // Simulação: caso antes arquivado, mas agora arquivado_at = null
+        ctx.supabase = {
+          from: vi.fn((table: string) => {
+            if (table === 'task_providencias') {
+              return {
+                select: () =>
+                  Promise.resolve({
+                    data: [{ id: 'prov-desarquivado', tarefa_id: 'tarefa-desarq-1' }],
+                    error: null,
+                  }),
+              }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'tarefa-desarq-1',
+                          numero_caso: 706,
+                          arquivado_at: null, // Desarquivado!
+                          deleted_at: null,
+                          status_id: 'st-aberto',
+                          status: {
+                            id: 'st-aberto',
+                            codigo: 'aberto',
+                            nome: 'Aberto',
+                            finaliza: false,
+                          },
+                          executor_core_usuario_id: 'cu-exec-desarq',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'link-exec-desarq',
+                      ativo: true,
+                      core_usuarios: {
+                        id: 'cu-exec-desarq',
+                        nome: 'Exec Desarquivado',
+                        email: 'exec.desarq@riccipi.com.br',
+                        ativo: true,
+                      },
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => {
+                  const chain: any = {
+                    eq: () => chain,
+                    not: () => chain,
+                    order: () => chain,
+                    limit: () => chain,
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }
+                  return chain
+                },
+                insert: () => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({ data: { id: 'evt-desarq-1' }, error: null }),
+                  }),
+                }),
+                update: () => ({
+                  eq: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }
+            }
+            return {}
+          }),
+        }
+
+        const req = new Request('https://edge.local/notify-task-overdue', {
+          method: 'POST',
+          headers: { 'x-task-cron-secret': 'cron-secret-12345' },
+        })
+
+        const res = await handleNotifyTaskOverdue(req, ctx)
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.sent).toBe(1)
+        expect(body.details[0].status).toBe('sent')
+        expect(ctx.transporter.sendMail).toHaveBeenCalledTimes(1)
+      })
     })
 
     describe('Provas Obrigatórias v0.0.74 (Regras de Event Key, Ponte e Transição)', () => {
