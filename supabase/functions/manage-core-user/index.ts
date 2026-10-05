@@ -739,13 +739,10 @@ Deno.serve(async (req: Request) => {
               .update({ auth_user_id: existingAuth.id })
               .eq('id', targetUserId)
           } else {
-            const appUrlEnv = Deno.env.get('APP_URL')
-            const APP_URL = appUrlEnv ? appUrlEnv.replace(/\/+$/, '') : null
+            const inviteRedirectUrl = 'https://acessos-ricci.goskip.app/primeiro-acesso'
             const inviteOptions: { data: { nome: string }; redirectTo?: string } = {
               data: { nome: targetUser.nome },
-            }
-            if (APP_URL) {
-              inviteOptions.redirectTo = `${APP_URL}/login`
+              redirectTo: inviteRedirectUrl,
             }
             const { data: inviteData } = await adminClient.auth.admin.inviteUserByEmail(
               targetUser.email,
@@ -1307,13 +1304,10 @@ Deno.serve(async (req: Request) => {
             .update({ auth_user_id: linkedAuthUserId })
             .eq('id', newUsuario.id)
         } else if ((send_invite ?? true) && isAtivo) {
-          const appUrlEnv = Deno.env.get('APP_URL')
-          const APP_URL = appUrlEnv ? appUrlEnv.replace(/\/+$/, '') : null
+          const inviteRedirectUrl = 'https://acessos-ricci.goskip.app/primeiro-acesso'
           const inviteOptions: { data: { nome: string }; redirectTo?: string } = {
             data: { nome: normNome },
-          }
-          if (APP_URL) {
-            inviteOptions.redirectTo = `${APP_URL}/login`
+            redirectTo: inviteRedirectUrl,
           }
 
           const { data: inviteData, error: inviteErr } =
@@ -1586,7 +1580,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const recoveryRedirectUrl = 'https://acessos-ricci.goskip.app/redefinir-senha'
-      const inviteRedirectUrl = `${APP_URL}/login`
+      const inviteRedirectUrl = 'https://acessos-ricci.goskip.app/primeiro-acesso'
 
       if (usuario.auth_user_id) {
         const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(usuario.email, {
@@ -1611,6 +1605,12 @@ Deno.serve(async (req: Request) => {
       let authUserId: string | null = null
       if (existingAuth) {
         authUserId = existingAuth.id
+        // Usuário já existe no Auth mas não estava vinculado no core_usuarios:
+        // Não criar duplicata e enviar link de redefinição para o usuário definir/redefinir senha
+        const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(usuario.email, {
+          redirectTo: recoveryRedirectUrl,
+        })
+        if (resetErr) throw resetErr
       } else {
         const { data: inviteData, error: inviteErr } =
           await adminClient.auth.admin.inviteUserByEmail(usuario.email, {
@@ -1621,7 +1621,6 @@ Deno.serve(async (req: Request) => {
         if (inviteErr) throw inviteErr
         authUserId = inviteData.user?.id || null
       }
-
       if (authUserId) {
         await adminClient
           .from('core_usuarios')
