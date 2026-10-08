@@ -403,7 +403,7 @@ export const controleService = {
    * - ADMINISTRADOR: tudo permitido.
    * - GESTOR: acesso permitido SOMENTE quando coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id.
    *   Remover autorização por subordinados do GESTOR. Sem fallback para IDs legados.
-   * - OPERACIONAL: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id).
+   * - OPERACIONAL: apenas casos próprios (responsavel ou executor). Preserva fallback para IDs legados (0.0.102).
    * - coreUserId ausente ou perfil não reconhecido -> negar.
    */
   async checkControleAccessScope(
@@ -427,18 +427,19 @@ export const controleService = {
     // ADMINISTRADOR: inalterado
     if (perfilUpper === 'ADMINISTRADOR') return true
 
-    // OPERACIONAL: inalterado
+    // OPERACIONAL: comportamento idêntico ao da 0.0.102, com fallback legado preservado
     if (perfilUpper === 'OPERACIONAL') {
-      const respCore = controle.responsavel_core_usuario_id
-        ? controle.responsavel_core_usuario_id.trim()
-        : null
-      const execCore = controle.executor_core_usuario_id
-        ? controle.executor_core_usuario_id.trim()
-        : null
-      if (!respCore && !execCore) return false
-      return Boolean(
-        (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
-      )
+      const respId = (
+        controle.responsavel_core_usuario_id ||
+        controle.responsavel_usuario_id ||
+        ''
+      ).trim()
+      const execId = (
+        controle.executor_core_usuario_id ||
+        controle.executor_usuario_id ||
+        ''
+      ).trim()
+      return respId === trimmedCoreId || execId === trimmedCoreId
     }
 
     // GESTOR: acesso permitido SOMENTE quando coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id.
@@ -465,7 +466,7 @@ export const controleService = {
    * - ADMINISTRADOR: sem filtro (todos os casos preservados)
    * - GESTOR: apenas casos próprios (coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id)
    *   Sem autorização por subordinados e sem fallback para IDs legados.
-   * - OPERACIONAL: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id igual a userCoreId)
+   * - OPERACIONAL: apenas casos próprios (responsável ou executor), com fallback legado preservado (0.0.102).
    * - coreUserId ausente ou perfil não reconhecido -> negar (retorna array vazio).
    */
   async applyAccessScopeToControles(
@@ -486,12 +487,12 @@ export const controleService = {
       return controles
     }
 
-    // OPERACIONAL: inalterado
+    // OPERACIONAL: comportamento idêntico ao da 0.0.102, com fallback legado preservado
     if (perfilUpper === 'OPERACIONAL') {
       return controles.filter((c) => {
-        const respCore = c.responsavel_core_usuario_id ? c.responsavel_core_usuario_id.trim() : null
-        const execCore = c.executor_core_usuario_id ? c.executor_core_usuario_id.trim() : null
-        return (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId)
+        const respId = (c.responsavel_core_usuario_id || c.responsavel_usuario_id || '').trim()
+        const execId = (c.executor_core_usuario_id || c.executor_usuario_id || '').trim()
+        return respId === trimmedCoreId || execId === trimmedCoreId
       })
     }
 

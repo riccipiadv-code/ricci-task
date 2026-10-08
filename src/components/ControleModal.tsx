@@ -109,6 +109,8 @@ export function ControleModal({
   // Contador de geração para verificação assíncrona de escopo de acesso ao caso (race condition / fail-closed)
   const accessRequestIdRef = useRef<number>(0)
   const [verificandoAcesso, setVerificandoAcesso] = useState(false)
+  // Autorização explícita estrita vinculada ao contexto exato (casoId, coreUserId, corePerfil)
+  const [authorizedContext, setAuthorizedContext] = useState<string | null>(null)
 
   // Modal de cadastro rápido (+) exclusivo para Nome do Controle
   const [quickNomeModalOpen, setQuickNomeModalOpen] = useState(false)
@@ -347,9 +349,14 @@ export function ControleModal({
   useEffect(() => {
     const generation = ++accessRequestIdRef.current
 
+    // Ao fechar, abrir ou trocar de caso/identidade: invalida qualquer autorização anterior
+    setAuthorizedContext(null)
+
     if (!open) {
       setVerificandoAcesso(false)
-      return
+      return () => {
+        accessRequestIdRef.current++
+      }
     }
 
     // Caso NÃO haja controleToEdit (criação de novo caso): fluxo imediato sem bloqueio
@@ -358,13 +365,17 @@ export function ControleModal({
       carregarListasAuxiliares()
       setActiveTab(initialTab || 'dados')
       resetFormState()
-      return
+      return () => {
+        accessRequestIdRef.current++
+      }
     }
 
     // Fail-closed para caso existente:
     // Limpa dados imediatamente enquanto a verificação assíncrona estiver pendente
     setVerificandoAcesso(true)
     resetFormState()
+
+    const currentContextKey = `${controleToEdit.id || 'sem-id'}::${coreUserId || 'sem-user'}::${corePerfil || 'sem-perfil'}`
 
     const verificarAcessoAsync = async () => {
       try {
@@ -380,6 +391,7 @@ export function ControleModal({
         }
 
         if (!permitido) {
+          setAuthorizedContext(null)
           setVerificandoAcesso(false)
           toast({
             variant: 'destructive',
@@ -390,7 +402,8 @@ export function ControleModal({
           return
         }
 
-        // Acesso autorizado e geração válida: popular dados do caso
+        // Acesso explicitamente autorizado e geração válida: registrar autorização explícita e popular dados
+        setAuthorizedContext(currentContextKey)
         setVerificandoAcesso(false)
         carregarListasAuxiliares()
         setActiveTab(initialTab || 'dados')
@@ -468,6 +481,7 @@ export function ControleModal({
         if (generation !== accessRequestIdRef.current) {
           return
         }
+        setAuthorizedContext(null)
         setVerificandoAcesso(false)
         toast({
           variant: 'destructive',
@@ -479,6 +493,11 @@ export function ControleModal({
     }
 
     verificarAcessoAsync()
+
+    return () => {
+      // Invalida requisições pendentes no cleanup do efeito
+      accessRequestIdRef.current++
+    }
   }, [
     open,
     controleToEdit,
@@ -737,10 +756,31 @@ export function ControleModal({
     }
   }
 
+  // Determina se o caso tem autorização explícita válida no contexto atual
+  // Para novos casos (sem controleToEdit): permitido direto (isNovoCaso = true)
+  // Para casos existentes: DEVE coincidir exatamente com a autorização emitida pelo checkControleAccessScope
+  const isNovoCaso = !controleToEdit
+  const expectedContextKey = controleToEdit
+    ? `${controleToEdit.id || 'sem-id'}::${coreUserId || 'sem-user'}::${corePerfil || 'sem-perfil'}`
+    : null
+  const isAcessoAutorizado =
+    isNovoCaso || (authorizedContext !== null && authorizedContext === expectedContextKey)
+
   // Submit principal do controle (impede duplo envio com flag saving)
   const handleSubmitControle = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if (saving) return
+
+    // Proteção fail-closed no início de handleSubmitControle:
+    // Sem autorização explícita válida para o caso atual, o salvamento não deve prosseguir
+    if (!isAcessoAutorizado) {
+      toast({
+        variant: 'destructive',
+        title: 'Acesso negado',
+        description: 'Você não possui autorização válida para salvar alterações neste caso.',
+      })
+      return
+    }
 
     let hasError = false
     if (!nomeControleId) {
@@ -1173,7 +1213,7 @@ export function ControleModal({
                 </DialogDescription>
               </div>
 
-              {updatedAtDisplay && (
+              {isAcessoAutorizado && updatedAtDisplay && (
                 <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-muted/60 border border-border text-[11px] text-muted-foreground">
                   <Clock className="w-3.5 h-3.5 text-primary" />
                   <span>Última atualização:</span>
@@ -1182,7 +1222,7 @@ export function ControleModal({
               )}
             </div>
 
-            {/* Abas: Apenas Dados do Caso | Providência (N) */}
+            {/* Abas: Apenas Dados do Caso | Providência (N) - Metadados e contagem ocultos enquanto bloqueado */}
             <Tabs
               value={activeTab}
               onValueChange={(val) => setActiveTab(val as 'dados' | 'providencias')}
@@ -1193,7 +1233,7 @@ export function ControleModal({
                   Dados do Caso
                 </TabsTrigger>
                 <TabsTrigger value="providencias" className="rounded-lg text-xs font-semibold">
-                  Providência ({providencias.length})
+                  Providência{isAcessoAutorizado ? ` (${providencias.length})` : ''}
                 </TabsTrigger>
               </TabsList>
             </Tabs>
@@ -1201,12 +1241,20 @@ export function ControleModal({
 
           {/* Conteúdo com scroll */}
           <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-            {verificandoAcesso ? (
+            {!isAcessoAutorizado ? (
               <div className="py-16 flex flex-col items-center justify-center text-center gap-3">
-                <Loader2 className="w-8 h-8 text-primary animate-spin" />
-                <p className="text-sm text-muted-foreground font-medium">
-                  Verificando permissões de acesso ao caso...
-                </p>
+                {verificandoAcesso ? (
+                  <>
+                    <Loader2 className="w-8 h-8 text-primary animate-spin" />
+                    <p className="text-sm text-muted-foreground font-medium">
+                      Verificando permissões de acesso ao caso...
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground font-medium">
+                    Você não possui permissão para visualizar ou editar este caso.
+                  </p>
+                )}
               </div>
             ) : (
               <>
@@ -2219,7 +2267,7 @@ export function ControleModal({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={verificandoAcesso || saving}
+                disabled={!isAcessoAutorizado || verificandoAcesso || saving}
                 onClick={() => onOpenChange(false)}
                 className="h-10 px-4 rounded-xl text-xs"
               >
@@ -2230,6 +2278,7 @@ export function ControleModal({
                 type="button"
                 size="sm"
                 disabled={
+                  !isAcessoAutorizado ||
                   verificandoAcesso ||
                   saving ||
                   loadingListas ||

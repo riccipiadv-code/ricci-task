@@ -798,14 +798,44 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(filtrados).toHaveLength(3)
     })
 
-    it('OPERACIONAL: recebe apenas casos próprios (responsável ou executor)', async () => {
+    it('OPERACIONAL: recebe apenas casos próprios (responsável ou executor) e preserva fallback legado (0.0.102)', async () => {
+      const listaComOperacionalLegado: any[] = [
+        ...listaExemplo,
+        {
+          id: 't-op-legado-resp',
+          identificacao_caso: 'Caso Operacional Legado Resp',
+          responsavel_usuario_id: 'tu-op-legado',
+          executor_usuario_id: 'tu-outro',
+          responsavel_core_usuario_id: null,
+          executor_core_usuario_id: null,
+        },
+        {
+          id: 't-op-legado-exec',
+          identificacao_caso: 'Caso Operacional Legado Exec',
+          responsavel_usuario_id: 'tu-outro',
+          executor_usuario_id: 'tu-op-legado',
+          responsavel_core_usuario_id: null,
+          executor_core_usuario_id: null,
+        },
+      ]
+
       const filtrados = await controleService.applyAccessScopeToControles(
-        listaExemplo,
+        listaComOperacionalLegado,
         'OPERACIONAL',
         'cu-op-1',
       )
       expect(filtrados).toHaveLength(1)
       expect(filtrados[0].id).toBe('t-2')
+
+      // Fallback legado preservado para o OPERACIONAL (com id legado correspondente)
+      const filtradosLegado = await controleService.applyAccessScopeToControles(
+        listaComOperacionalLegado,
+        'OPERACIONAL',
+        'tu-op-legado',
+      )
+      expect(filtradosLegado.map((c) => c.id)).toEqual(
+        expect.arrayContaining(['t-op-legado-resp', 't-op-legado-exec']),
+      )
     })
 
     it('GESTOR: recebe apenas casos próprios (responsável ou executor); ser gestor de subordinado NÃO dá acesso', async () => {
@@ -1000,6 +1030,31 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           'cu-op-1',
         ),
       ).toBe(false)
+
+      // Fallback legado no OPERACIONAL preservado (comportamento da 0.0.102)
+      expect(
+        await controleService.checkControleAccessScope(
+          {
+            responsavel_core_usuario_id: null,
+            executor_core_usuario_id: null,
+            responsavel_usuario_id: 'tu-op-legado-1',
+          },
+          'OPERACIONAL',
+          'tu-op-legado-1',
+        ),
+      ).toBe(true)
+
+      expect(
+        await controleService.checkControleAccessScope(
+          {
+            responsavel_core_usuario_id: null,
+            executor_core_usuario_id: null,
+            executor_usuario_id: 'tu-op-legado-2',
+          },
+          'OPERACIONAL',
+          'tu-op-legado-2',
+        ),
+      ).toBe(true)
     })
 
     it('Reatribuição com perda de acesso: caso salvo conclui normalmente e na leitura seguinte sai da lista do editor operacional', async () => {
