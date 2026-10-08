@@ -808,32 +808,107 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(filtrados[0].id).toBe('t-2')
     })
 
-    it('GESTOR: recebe casos próprios e da equipe direta (core_usuarios.gestor_id = meuId)', async () => {
-      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
-        if (table === 'core_usuarios') {
-          return {
-            select: () => ({
-              eq: () => ({
-                eq: () =>
-                  Promise.resolve({
-                    data: [{ id: 'cu-sub-1' }],
-                    error: null,
-                  }),
-              }),
-            }),
-          }
-        }
-        return {}
-      }) as any)
+    it('GESTOR: recebe apenas casos próprios (responsável ou executor); ser gestor de subordinado NÃO dá acesso', async () => {
+      const listaComGestor: any[] = [
+        ...listaExemplo,
+        {
+          id: 't-gestor-proprio',
+          identificacao_caso: 'Caso do Gestor como Responsável',
+          responsavel_core_usuario_id: 'cu-gestor-1',
+          executor_core_usuario_id: 'cu-outro-99',
+        },
+        {
+          id: 't-gestor-executor',
+          identificacao_caso: 'Caso do Gestor como Executor',
+          responsavel_core_usuario_id: 'cu-outro-98',
+          executor_core_usuario_id: 'cu-gestor-1',
+        },
+      ]
 
       const filtrados = await controleService.applyAccessScopeToControles(
-        listaExemplo,
+        listaComGestor,
         'GESTOR',
         'cu-gestor-1',
       )
-      // cu-gestor-1 não tem caso próprio aqui, mas cu-sub-1 está em sua equipe direta
-      expect(filtrados).toHaveLength(1)
-      expect(filtrados[0].id).toBe('t-3')
+      // cu-gestor-1 acessa apenas seus próprios casos (t-gestor-proprio e t-gestor-executor).
+      // t-3 (caso exclusivo de cu-sub-1) é negado mesmo sendo subordinado.
+      expect(filtrados).toHaveLength(2)
+      expect(filtrados.map((c) => c.id)).toEqual(
+        expect.arrayContaining(['t-gestor-proprio', 't-gestor-executor']),
+      )
+      expect(filtrados.map((c) => c.id)).not.toContain('t-3')
+    })
+
+    it('checkControleAccessScope: restrição estrita do perfil GESTOR no Ricci Task', async () => {
+      // 1. Gestor como responsável: permitido
+      const respOk = await controleService.checkControleAccessScope(
+        { responsavel_core_usuario_id: 'cu-gestor-1', executor_core_usuario_id: 'cu-outro' },
+        'GESTOR',
+        'cu-gestor-1',
+      )
+      expect(respOk).toBe(true)
+
+      // 2. Gestor como executor: permitido
+      const execOk = await controleService.checkControleAccessScope(
+        { responsavel_core_usuario_id: 'cu-outro', executor_core_usuario_id: 'cu-gestor-1' },
+        'GESTOR',
+        'cu-gestor-1',
+      )
+      expect(execOk).toBe(true)
+
+      // 3. Gestor e subordinado no mesmo caso: permitido pela participação do gestor
+      const ambosOk = await controleService.checkControleAccessScope(
+        { responsavel_core_usuario_id: 'cu-gestor-1', executor_core_usuario_id: 'cu-sub-1' },
+        'GESTOR',
+        'cu-gestor-1',
+      )
+      expect(ambosOk).toBe(true)
+
+      // 4. Caso exclusivo de subordinado: negado
+      const subNegado = await controleService.checkControleAccessScope(
+        { responsavel_core_usuario_id: 'cu-sub-1', executor_core_usuario_id: 'cu-outro' },
+        'GESTOR',
+        'cu-gestor-1',
+      )
+      expect(subNegado).toBe(false)
+
+      // 5. Caso de outra equipe / terceiros: negado
+      const terceiroNegado = await controleService.checkControleAccessScope(
+        { responsavel_core_usuario_id: 'cu-outro-1', executor_core_usuario_id: 'cu-outro-2' },
+        'GESTOR',
+        'cu-gestor-1',
+      )
+      expect(terceiroNegado).toBe(false)
+
+      // 6. Identidade pendente, perfil inválido ou IDs centrais ausentes: sem liberação indevida
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-gestor-1' },
+          null,
+          'cu-gestor-1',
+        ),
+      ).toBe(false)
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-gestor-1' },
+          'GESTOR',
+          null,
+        ),
+      ).toBe(false)
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-gestor-1' },
+          'PERFIL_INVALIDO',
+          'cu-gestor-1',
+        ),
+      ).toBe(false)
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: null, executor_core_usuario_id: null },
+          'GESTOR',
+          'cu-gestor-1',
+        ),
+      ).toBe(false)
     })
 
     it('Reatribuição com perda de acesso: caso salvo conclui normalmente e na leitura seguinte sai da lista do editor operacional', async () => {

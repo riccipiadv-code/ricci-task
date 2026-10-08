@@ -399,34 +399,12 @@ export const controleService = {
   // ESCOPO CENTRAL DE ACESSO A CONTROLES (ADMINISTRADOR / GESTOR / OPERACIONAL)
   // --------------------------------------------------------------------------
   /**
-   * Obtém a lista de IDs centrais dos subordinados diretos de um gestor
-   * (core_usuarios where gestor_id = gestorCoreId and ativo = true)
-   */
-  async getSubordinadosDiretosIds(gestorCoreId: string): Promise<string[]> {
-    if (!gestorCoreId) return []
-    try {
-      const { data, error } = await supabase
-        .from('core_usuarios')
-        .select('id')
-        .eq('gestor_id', gestorCoreId)
-        .eq('ativo', true)
-
-      if (error) {
-        console.error('Erro ao buscar subordinados diretos:', error)
-        return []
-      }
-      return (data || []).map((u: any) => u.id)
-    } catch (err) {
-      console.error('Falha ao consultar equipe direta do gestor:', err)
-      return []
-    }
-  },
-
-  /**
    * Avalia se um caso está dentro do escopo de acesso central do usuário logado:
    * - ADMINISTRADOR: tudo permitido.
-   * - GESTOR: próprio (responsável ou executor) OU membro da equipe direta.
-   * - OPERACIONAL: apenas casos próprios (responsável ou executor).
+   * - GESTOR: apenas casos próprios (responsável_core_usuario_id ou executor_core_usuario_id igual ao ID central do gestor).
+   *   Ser gestor de um responsável ou executor NÃO dá mais acesso ao caso no Ricci Task.
+   * - OPERACIONAL: apenas casos próprios (responsável_core_usuario_id ou executor_core_usuario_id).
+   * Negativo quando identidade, perfil válido ou IDs centrais estiverem ausentes.
    */
   async checkControleAccessScope(
     controle: {
@@ -439,34 +417,35 @@ export const controleService = {
     userCoreId: string | null,
   ): Promise<boolean> {
     if (!userPerfil || !userCoreId) return false
-    const perfilUpper = userPerfil.toUpperCase()
+    const trimmedCoreId = userCoreId.trim()
+    if (!trimmedCoreId) return false
+
+    const perfilUpper = userPerfil.trim().toUpperCase()
     if (perfilUpper === 'ADMINISTRADOR') return true
 
-    const respCore = controle.responsavel_core_usuario_id || controle.responsavel_usuario_id || null
-    const execCore = controle.executor_core_usuario_id || controle.executor_usuario_id || null
-
-    const isProprio = Boolean(
-      (respCore && respCore === userCoreId) || (execCore && execCore === userCoreId),
-    )
-
-    if (isProprio) return true
-    if (perfilUpper === 'OPERACIONAL') return false
-
-    if (perfilUpper === 'GESTOR') {
-      if (!respCore && !execCore) return false
-      const subIds = await this.getSubordinadosDiretosIds(userCoreId)
-      const subSet = new Set(subIds)
-      return Boolean((respCore && subSet.has(respCore)) || (execCore && subSet.has(execCore)))
+    if (perfilUpper !== 'GESTOR' && perfilUpper !== 'OPERACIONAL') {
+      return false
     }
 
-    return false
+    // Comparação exclusiva por IDs centrais (sem fallback para IDs legados)
+    const respCore = controle.responsavel_core_usuario_id || null
+    const execCore = controle.executor_core_usuario_id || null
+
+    if (!respCore && !execCore) return false
+
+    const isProprio = Boolean(
+      (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
+    )
+
+    return isProprio
   },
 
   /**
    * Filtra uma lista de controles aplicando o escopo central:
-   * - ADMINISTRADOR: sem filtro
-   * - GESTOR: casos próprios + casos com responsável ou executor na equipe direta
-   * - OPERACIONAL: apenas casos próprios
+   * - ADMINISTRADOR: sem filtro (todos os casos)
+   * - GESTOR: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id igual a userCoreId)
+   * - OPERACIONAL: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id igual a userCoreId)
+   * Negativo/vazio quando identidade ou perfil válido estiverem ausentes.
    */
   async applyAccessScopeToControles(
     controles: TaskControleRecord[],
@@ -474,30 +453,19 @@ export const controleService = {
     userCoreId: string | null,
   ): Promise<TaskControleRecord[]> {
     if (!userPerfil || !userCoreId) return []
-    const perfilUpper = userPerfil.toUpperCase()
+    const trimmedCoreId = userCoreId.trim()
+    if (!trimmedCoreId) return []
+
+    const perfilUpper = userPerfil.trim().toUpperCase()
     if (perfilUpper === 'ADMINISTRADOR') {
       return controles
     }
 
-    if (perfilUpper === 'OPERACIONAL') {
+    if (perfilUpper === 'OPERACIONAL' || perfilUpper === 'GESTOR') {
       return controles.filter((c) => {
-        const respCore = c.responsavel_core_usuario_id || c.responsavel_usuario_id
-        const execCore = c.executor_core_usuario_id || c.executor_usuario_id
-        return respCore === userCoreId || execCore === userCoreId
-      })
-    }
-
-    if (perfilUpper === 'GESTOR') {
-      const subIds = await this.getSubordinadosDiretosIds(userCoreId)
-      const subSet = new Set(subIds)
-      return controles.filter((c) => {
-        const respCore = c.responsavel_core_usuario_id || c.responsavel_usuario_id
-        const execCore = c.executor_core_usuario_id || c.executor_usuario_id
-        const isProprio = respCore === userCoreId || execCore === userCoreId
-        const isEquipe = Boolean(
-          (respCore && subSet.has(respCore)) || (execCore && subSet.has(execCore)),
-        )
-        return isProprio || isEquipe
+        const respCore = c.responsavel_core_usuario_id || null
+        const execCore = c.executor_core_usuario_id || null
+        return respCore === trimmedCoreId || execCore === trimmedCoreId
       })
     }
 

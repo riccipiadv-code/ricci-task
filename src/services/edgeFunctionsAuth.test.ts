@@ -5826,41 +5826,44 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(res.allowed).toBe(true)
     })
 
-    it('(f) GESTOR: permite casos de membros de sua equipe direta ativa (core_usuarios.gestor_id = gestorCoreId)', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            in: vi.fn().mockResolvedValue({
-              data: [{ id: 'cu-sub-1', gestor_id: 'cu-gestor-1', ativo: true }],
-              error: null,
-            }),
-          }),
-        }),
-      } as any
+    it('(f) GESTOR: permite casos próprios (como responsável ou como executor)', async () => {
+      const mockSupabase = {} as any
+      // Gestor como executor
+      const resExec = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-gestor-exec',
+        responsavel_core_usuario_id: 'cu-outro',
+        executor_core_usuario_id: 'cu-gestor-1',
+      })
+      expect(resExec.allowed).toBe(true)
+      expect(resExec.status).toBe('ok')
+
+      // Gestor e subordinado no mesmo caso: permitido pela participação do gestor
+      const resAmbos = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-gestor-sub-juntos',
+        responsavel_core_usuario_id: 'cu-gestor-1',
+        executor_core_usuario_id: 'cu-sub-1',
+      })
+      expect(resAmbos.allowed).toBe(true)
+      expect(resAmbos.status).toBe('ok')
+    })
+
+    it('(f) GESTOR: nega casos exclusivos de membros de sua equipe direta ou subordinados', async () => {
+      const mockSupabase = {} as any
 
       const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
         id: 't-sub',
         responsavel_core_usuario_id: 'cu-sub-1',
         executor_core_usuario_id: 'cu-outro',
       })
-      expect(res.allowed).toBe(true)
-      expect(res.status).toBe('ok')
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toMatch(
+        /gestores só podem acessar casos em que são Responsável ou Executor/,
+      )
     })
 
-    it('(f) GESTOR: nega casos de membros inativos ou subordinados a outro gestor', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            in: vi.fn().mockResolvedValue({
-              data: [
-                { id: 'cu-sub-inativo', gestor_id: 'cu-gestor-1', ativo: false },
-                { id: 'cu-outro-gestor', gestor_id: 'cu-gestor-2', ativo: true },
-              ],
-              error: null,
-            }),
-          }),
-        }),
-      } as any
+    it('(f) GESTOR: nega casos de membros inativos ou de outra equipe/gestor', async () => {
+      const mockSupabase = {} as any
 
       const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
         id: 't-negada',
@@ -5869,27 +5872,9 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       })
       expect(res.allowed).toBe(false)
       expect(res.status).toBe('denied')
-    })
-
-    it('(f) GESTOR: falha de consulta em core_usuarios retorna technical_failure (fail-closed)', async () => {
-      const mockSupabase = {
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            in: vi.fn().mockResolvedValue({
-              data: null,
-              error: { message: 'Database connection error' },
-            }),
-          }),
-        }),
-      } as any
-
-      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
-        id: 't-falha',
-        responsavel_core_usuario_id: 'cu-alvo',
-        executor_core_usuario_id: 'cu-outro',
-      })
-      expect(res.allowed).toBe(false)
-      expect(res.status).toBe('technical_failure')
+      expect(res.error).toMatch(
+        /gestores só podem acessar casos em que são Responsável ou Executor/,
+      )
     })
   })
 

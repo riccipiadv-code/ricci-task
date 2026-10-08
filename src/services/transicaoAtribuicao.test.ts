@@ -97,29 +97,27 @@ describe('Validação Rigorosa dos 7 Bloqueios Comprovados', () => {
         responsavel_core_usuario_id: 'subordinado-core-id',
         executor_core_usuario_id: 'subordinado-core-id',
       })
+      expect(res.allowed).toBe(false)
+      expect(res.status).toBe('denied')
+      expect(res.error).toMatch(
+        /gestores só podem acessar casos em que são Responsável ou Executor/,
+      )
+    })
+
+    it('Gestor é AUTORIZADO se for o responsável ou executor do caso', async () => {
+      const mockSupabase: any = {}
+
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'gestor-core-id' }, 'GESTOR', {
+        id: 'caso-1',
+        responsavel_core_usuario_id: 'gestor-core-id',
+        executor_core_usuario_id: 'outro-core-id',
+      })
       expect(res.allowed).toBe(true)
       expect(res.status).toBe('ok')
     })
 
-    it('Gestor é BLOQUEADO se usuário não pertencer à sua equipe direta', async () => {
-      const mockSupabase: any = {
-        from: vi.fn().mockImplementation((table: string) => {
-          if (table === 'core_usuarios') {
-            const chain: any = {
-              select: () => chain,
-              in: () =>
-                Promise.resolve({
-                  data: [
-                    { id: 'outro-gestor-subordinado', gestor_id: 'outro-gestor-id', ativo: true },
-                  ],
-                  error: null,
-                }),
-            }
-            return chain
-          }
-          return {}
-        }),
-      }
+    it('Gestor é BLOQUEADO se usuário não pertencer à sua equipe direta ou for terceiro', async () => {
+      const mockSupabase: any = {}
 
       const res = await checkTaskAccessScope(mockSupabase, { id: 'gestor-core-id' }, 'GESTOR', {
         id: 'caso-1',
@@ -129,8 +127,20 @@ describe('Validação Rigorosa dos 7 Bloqueios Comprovados', () => {
       expect(res.allowed).toBe(false)
       expect(res.status).toBe('denied')
       expect(res.error).toMatch(
-        /gestores só podem acessar casos próprios ou de membros de sua equipe direta/,
+        /gestores só podem acessar casos em que são Responsável ou Executor/,
       )
+    })
+
+    it('Gestor é AUTORIZADO se for o executor do caso', async () => {
+      const mockSupabase: any = {}
+
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'gestor-core-id' }, 'GESTOR', {
+        id: 'caso-1',
+        responsavel_core_usuario_id: 'outro-usuario',
+        executor_core_usuario_id: 'gestor-core-id',
+      })
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('ok')
     })
   })
 

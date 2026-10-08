@@ -321,43 +321,35 @@ export function ControleModal({
     if (!open) return
 
     // Validação de escopo central na abertura do modal para edição
-    if (controleToEdit && corePerfil && coreUserId) {
-      let isAllowed = false
-      if (corePerfil === 'ADMINISTRADOR') {
-        isAllowed = true
-      } else {
-        const respCore =
-          controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id
-        const execCore =
-          controleToEdit.executor_core_usuario_id || controleToEdit.executor_usuario_id
-        const isProprio = Boolean(
-          (respCore && respCore === coreUserId) || (execCore && execCore === coreUserId),
-        )
+    // O GESTOR agora só pode acessar casos próprios (responsável_core_usuario_id ou executor_core_usuario_id igual a seu ID central).
+    // Não há mais liberação temporária nem consulta assíncrona por equipe direta.
+    if (controleToEdit) {
+      if (!corePerfil || !coreUserId) {
+        toast({
+          variant: 'destructive',
+          title: 'Acesso negado',
+          description: 'Você não possui permissão para visualizar ou editar este caso.',
+        })
+        onOpenChange(false)
+        return
+      }
 
-        if (isProprio) {
-          isAllowed = true
-        } else if (corePerfil === 'OPERACIONAL') {
-          isAllowed = false
-        } else if (corePerfil === 'GESTOR') {
-          // Checagem assíncrona da equipe direta
-          void (async () => {
-            const allowed = await controleService.checkControleAccessScope(
-              controleToEdit,
-              corePerfil,
-              coreUserId,
-            )
-            if (!allowed) {
-              toast({
-                variant: 'destructive',
-                title: 'Acesso negado',
-                description: 'Você não possui permissão para visualizar ou editar este caso.',
-              })
-              onOpenChange(false)
-            }
-          })()
-          // Enquanto aguarda a checagem do gestor, deixa passar temporariamente (fechará se false)
-          isAllowed = true
-        }
+      const trimmedCoreId = coreUserId.trim()
+      const perfilUpper = corePerfil.trim().toUpperCase()
+
+      let isAllowed = false
+      if (perfilUpper === 'ADMINISTRADOR') {
+        isAllowed = true
+      } else if (perfilUpper === 'GESTOR' || perfilUpper === 'OPERACIONAL') {
+        // Acesso exclusivo a casos próprios comparando IDs centrais
+        const respCore = controleToEdit.responsavel_core_usuario_id || null
+        const execCore = controleToEdit.executor_core_usuario_id || null
+
+        isAllowed = Boolean(
+          (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
+        )
+      } else {
+        isAllowed = false
       }
 
       if (!isAllowed) {

@@ -229,14 +229,175 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       corePerfil: 'OPERACIONAL',
       coreUserId: 'cu-op-1',
       hasSystemAccess: true,
+    })
+
+    const onOpenChange = vi.fn()
+    const foraEscopo: TaskControleRecord = {
+      id: 'caso-fora',
+      nome_controle_id: 'nc-1',
+      numero_caso: 99,
+      identificacao_caso: 'Caso de Terceiro',
+      status_id: 'st-1',
+      data_autorizacao: '2025-01-01',
+      prazo_conclusao: '2025-02-01',
+      responsavel_core_usuario_id: 'cu-outro-1',
+      executor_core_usuario_id: 'cu-outro-2',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+      providencias: [],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={onOpenChange}
+        controleToEdit={foraEscopo}
+        statusList={mockStatusList}
+        statusProvidenciaList={mockStatusProvList}
+        tiposPrazoList={mockTiposPrazo}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('GESTOR: bloqueia abertura e fecha modal imediatamente quando caso pertence exclusivamente a subordinado ou terceiros (sem liberação temporária)', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-gestor' },
+      corePerfil: 'GESTOR',
+      coreUserId: 'cu-gestor-1',
+      hasSystemAccess: true,
+    })
+
+    const onOpenChange = vi.fn()
+    const casoSubordinado: TaskControleRecord = {
+      id: 'caso-sub',
+      nome_controle_id: 'nc-1',
+      numero_caso: 100,
+      identificacao_caso: 'Caso Exclusivo de Subordinado',
+      status_id: 'st-1',
+      data_autorizacao: '2025-01-01',
+      prazo_conclusao: '2025-02-01',
+      responsavel_core_usuario_id: 'cu-sub-1',
+      executor_core_usuario_id: 'cu-sub-2',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+      providencias: [],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={onOpenChange}
+        controleToEdit={casoSubordinado}
+        statusList={mockStatusList}
+        statusProvidenciaList={mockStatusProvList}
+        tiposPrazoList={mockTiposPrazo}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    // Modal fecha imediatamente (onOpenChange(false)) sem passar temporariamente
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('GESTOR: permite abertura quando gestor for responsável ou executor do caso', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-gestor' },
+      corePerfil: 'GESTOR',
+      coreUserId: 'cu-gestor-1',
+      hasSystemAccess: true,
+    })
+
+    const onOpenChange = vi.fn()
+    const casoProprio: TaskControleRecord = {
+      id: 'caso-proprio-gestor',
+      nome_controle_id: 'nc-1',
+      numero_caso: 101,
+      identificacao_caso: 'Caso Próprio do Gestor',
+      status_id: 'st-1',
+      data_autorizacao: '2025-01-01',
+      prazo_conclusao: '2025-02-01',
+      responsavel_core_usuario_id: 'cu-gestor-1',
+      executor_core_usuario_id: 'cu-outro-1',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+      providencias: [],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={onOpenChange}
+        controleToEdit={casoProprio}
+        statusList={mockStatusList}
+        statusProvidenciaList={mockStatusProvList}
+        tiposPrazoList={mockTiposPrazo}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    // Não fecha o modal
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('GESTOR: nega abertura quando dados centrais ou perfil estiverem ausentes', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-gestor' },
+      corePerfil: null,
+      coreUserId: null,
+      hasSystemAccess: true,
+    })
+
+    const onOpenChange = vi.fn()
+    const caso: TaskControleRecord = {
+      id: 'caso-sem-perfil',
+      nome_controle_id: 'nc-1',
+      numero_caso: 102,
+      identificacao_caso: 'Caso Teste',
+      status_id: 'st-1',
+      data_autorizacao: '2025-01-01',
+      prazo_conclusao: '2025-02-01',
+      responsavel_core_usuario_id: 'cu-gestor-1',
+      executor_core_usuario_id: 'cu-gestor-1',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+      providencias: [],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={onOpenChange}
+        controleToEdit={caso}
+        statusList={mockStatusList}
+        statusProvidenciaList={mockStatusProvList}
+        tiposPrazoList={mockTiposPrazo}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-op' },
+      corePerfil: 'OPERACIONAL',
+      coreUserId: 'cu-op-1',
+      hasSystemAccess: true,
       loadingAccess: false,
     })
 
     const onOpenChangeMock = vi.fn()
-    const controleDeOutro: TaskControleRecord = {
-      id: 'caso-outro-1',
-      nome_controle_id: 'nc-1',
-      numero_caso: 50,
+    const onOpenChangeMock = vi.fn()
       identificacao_caso: 'Caso De Terceiro',
       status_id: 'st-aberto',
       responsavel_usuario_id: 'tu-outro',

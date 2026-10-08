@@ -488,15 +488,14 @@ export async function verifyCoreAdmin(
 /**
  * Validação de escopo de acesso a um caso (tarefa):
  * - ADMINISTRADOR: acessa qualquer caso.
- * - GESTOR: acessa caso próprio (é responsável ou executor pelo ID central) OU caso cuja equipe direta
- *   seja liderada pelo gestor (responsável ou executor tem core_usuarios.gestor_id = gestorCoreId).
- *   Para casos históricos sem IDs centrais, o gestor também acessa para não quebrar compatibilidade.
+ * - GESTOR: acessa exclusivamente casos próprios (responsável_core_usuario_id ou executor_core_usuario_id
+ *   igual ao ID central do gestor). Ser gestor de um responsável ou executor NÃO dá mais acesso ao caso no Ricci Task.
  * - OPERACIONAL: acessa exclusivamente casos onde é Responsável ou Executor pelo ID central.
  *
  * Retorna { allowed: boolean; status: 'ok' | 'denied' | 'technical_failure'; error?: string }
  */
 export async function checkTaskAccessScope(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   callerCoreUser: { id: string } | null | undefined,
   callerPerfil: string | null | undefined,
   tarefa: {
@@ -566,49 +565,16 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // (f) GESTOR -> próprio + equipe direta ativa (gestor_id), falha de consulta -> technical_failure
+  // (f) GESTOR -> exclusivamente caso próprio (restrição de acesso por equipe no Ricci Task)
   if (perfilUpper === ROLE_CODE_GESTOR) {
     if (isProprio) {
       return { allowed: true, status: 'ok' }
     }
-
-    const targetUserIds = [respCore, execCore].filter(Boolean) as string[]
-    try {
-      const { data: teamMembers, error: teamError } = await supabase
-        .from('core_usuarios')
-        .select('id, gestor_id, ativo')
-        .in('id', targetUserIds)
-
-      if (teamError) {
-        console.error('[core-auth] Falha técnica ao verificar equipe do gestor:', teamError)
-        return {
-          allowed: false,
-          status: 'technical_failure',
-          error: 'Falha técnica ao verificar escopo da equipe direta no Gestor de Acessos.',
-        }
-      }
-
-      const isEquipeDireta = (teamMembers || []).some(
-        (m: any) => m.gestor_id === callerCoreId && m.ativo === true,
-      )
-
-      if (isEquipeDireta) {
-        return { allowed: true, status: 'ok' }
-      }
-
-      return {
-        allowed: false,
-        status: 'denied',
-        error:
-          'Permissão negada: gestores só podem acessar casos próprios ou de membros de sua equipe direta.',
-      }
-    } catch (err: any) {
-      console.error('[core-auth] Exceção ao verificar equipe do gestor:', err)
-      return {
-        allowed: false,
-        status: 'technical_failure',
-        error: 'Falha técnica ao verificar escopo de equipe no Gestor de Acessos.',
-      }
+    return {
+      allowed: false,
+      status: 'denied',
+      error:
+        'Permissão negada: gestores só podem acessar casos em que são Responsável ou Executor.',
     }
   }
 
