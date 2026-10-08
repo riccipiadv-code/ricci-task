@@ -823,6 +823,14 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           responsavel_core_usuario_id: 'cu-outro-98',
           executor_core_usuario_id: 'cu-gestor-1',
         },
+        {
+          id: 't-gestor-sem-core-mas-legado',
+          identificacao_caso: 'Caso Legado sem Core ID',
+          responsavel_usuario_id: 'cu-gestor-1',
+          executor_usuario_id: 'cu-outro-99',
+          responsavel_core_usuario_id: null,
+          executor_core_usuario_id: null,
+        },
       ]
 
       const filtrados = await controleService.applyAccessScopeToControles(
@@ -830,13 +838,35 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
         'GESTOR',
         'cu-gestor-1',
       )
-      // cu-gestor-1 acessa apenas seus próprios casos (t-gestor-proprio e t-gestor-executor).
-      // t-3 (caso exclusivo de cu-sub-1) é negado mesmo sendo subordinado.
+      // cu-gestor-1 acessa apenas seus próprios casos com IDs centrais correspondentes (t-gestor-proprio e t-gestor-executor).
+      // t-3 (caso exclusivo de subordinado) é negado.
+      // t-1 (caso de terceiros) é negado.
+      // t-gestor-sem-core-mas-legado é negado (sem fallback legado).
       expect(filtrados).toHaveLength(2)
       expect(filtrados.map((c) => c.id)).toEqual(
         expect.arrayContaining(['t-gestor-proprio', 't-gestor-executor']),
       )
       expect(filtrados.map((c) => c.id)).not.toContain('t-3')
+      expect(filtrados.map((c) => c.id)).not.toContain('t-1')
+      expect(filtrados.map((c) => c.id)).not.toContain('t-gestor-sem-core-mas-legado')
+
+      // coreUserId ausente ou perfil inválido -> retorna array vazio
+      expect(
+        await controleService.applyAccessScopeToControles(listaComGestor, null, 'cu-gestor-1'),
+      ).toEqual([])
+      expect(
+        await controleService.applyAccessScopeToControles(listaComGestor, 'GESTOR', null),
+      ).toEqual([])
+      expect(
+        await controleService.applyAccessScopeToControles(listaComGestor, 'GESTOR', '   '),
+      ).toEqual([])
+      expect(
+        await controleService.applyAccessScopeToControles(
+          listaComGestor,
+          'DESCONHECIDO',
+          'cu-gestor-1',
+        ),
+      ).toEqual([])
     })
 
     it('checkControleAccessScope: restrição estrita do perfil GESTOR no Ricci Task', async () => {
@@ -864,7 +894,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       )
       expect(ambosOk).toBe(true)
 
-      // 4. Caso exclusivo de subordinado: negado
+      // 4. Caso exclusivo de subordinado (gestor é gestor do resp/exec, mas não é resp nem exec): NEGADO
       const subNegado = await controleService.checkControleAccessScope(
         { responsavel_core_usuario_id: 'cu-sub-1', executor_core_usuario_id: 'cu-outro' },
         'GESTOR',
@@ -872,7 +902,7 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       )
       expect(subNegado).toBe(false)
 
-      // 5. Caso de outra equipe / terceiros: negado
+      // 5. Caso de outra equipe / terceiros (sem qualquer relação): NEGADO
       const terceiroNegado = await controleService.checkControleAccessScope(
         { responsavel_core_usuario_id: 'cu-outro-1', executor_core_usuario_id: 'cu-outro-2' },
         'GESTOR',
@@ -880,7 +910,28 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       )
       expect(terceiroNegado).toBe(false)
 
-      // 6. Identidade pendente, perfil inválido ou IDs centrais ausentes: sem liberação indevida
+      // 6. Gestor sem IDs centrais correspondentes (coreUserId ausente ou divergente): NEGADO
+      expect(
+        await controleService.checkControleAccessScope(
+          {
+            responsavel_core_usuario_id: null,
+            executor_core_usuario_id: null,
+            responsavel_usuario_id: 'tu-gestor-1', // legado não deve ser usado como fallback
+          },
+          'GESTOR',
+          'cu-gestor-1',
+        ),
+      ).toBe(false)
+
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-outro-diferente' },
+          'GESTOR',
+          'cu-gestor-1',
+        ),
+      ).toBe(false)
+
+      // 7. Identidade ausente, coreUserId ausente ou perfil não reconhecido: fail-closed
       expect(
         await controleService.checkControleAccessScope(
           { responsavel_core_usuario_id: 'cu-gestor-1' },
@@ -893,6 +944,13 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           { responsavel_core_usuario_id: 'cu-gestor-1' },
           'GESTOR',
           null,
+        ),
+      ).toBe(false)
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-gestor-1' },
+          'GESTOR',
+          '',
         ),
       ).toBe(false)
       expect(
@@ -907,6 +965,39 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
           { responsavel_core_usuario_id: null, executor_core_usuario_id: null },
           'GESTOR',
           'cu-gestor-1',
+        ),
+      ).toBe(false)
+
+      // 8. ADMINISTRADOR e OPERACIONAL: comportamento preservado (regressão)
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-qualquer', executor_core_usuario_id: 'cu-outro' },
+          'ADMINISTRADOR',
+          'cu-admin-qualquer',
+        ),
+      ).toBe(true)
+
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-op-1', executor_core_usuario_id: 'cu-outro' },
+          'OPERACIONAL',
+          'cu-op-1',
+        ),
+      ).toBe(true)
+
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-outro', executor_core_usuario_id: 'cu-op-1' },
+          'OPERACIONAL',
+          'cu-op-1',
+        ),
+      ).toBe(true)
+
+      expect(
+        await controleService.checkControleAccessScope(
+          { responsavel_core_usuario_id: 'cu-outro', executor_core_usuario_id: 'cu-outro2' },
+          'OPERACIONAL',
+          'cu-op-1',
         ),
       ).toBe(false)
     })

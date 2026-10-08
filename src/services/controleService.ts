@@ -401,10 +401,10 @@ export const controleService = {
   /**
    * Avalia se um caso está dentro do escopo de acesso central do usuário logado:
    * - ADMINISTRADOR: tudo permitido.
-   * - GESTOR: apenas casos próprios (responsável_core_usuario_id ou executor_core_usuario_id igual ao ID central do gestor).
-   *   Ser gestor de um responsável ou executor NÃO dá mais acesso ao caso no Ricci Task.
-   * - OPERACIONAL: apenas casos próprios (responsável_core_usuario_id ou executor_core_usuario_id).
-   * Negativo quando identidade, perfil válido ou IDs centrais estiverem ausentes.
+   * - GESTOR: acesso permitido SOMENTE quando coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id.
+   *   Remover autorização por subordinados do GESTOR. Sem fallback para IDs legados.
+   * - OPERACIONAL: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id).
+   * - coreUserId ausente ou perfil não reconhecido -> negar.
    */
   async checkControleAccessScope(
     controle: {
@@ -416,60 +416,115 @@ export const controleService = {
     userPerfil: string | null,
     userCoreId: string | null,
   ): Promise<boolean> {
-    if (!userPerfil || !userCoreId) return false
+    if (!userPerfil || typeof userPerfil !== 'string') return false
+    if (!userCoreId || typeof userCoreId !== 'string') return false
+
     const trimmedCoreId = userCoreId.trim()
     if (!trimmedCoreId) return false
 
     const perfilUpper = userPerfil.trim().toUpperCase()
+
+    // ADMINISTRADOR: inalterado
     if (perfilUpper === 'ADMINISTRADOR') return true
 
-    if (perfilUpper !== 'GESTOR' && perfilUpper !== 'OPERACIONAL') {
-      return false
+    // OPERACIONAL: inalterado
+    if (perfilUpper === 'OPERACIONAL') {
+      const respCore = controle.responsavel_core_usuario_id
+        ? controle.responsavel_core_usuario_id.trim()
+        : null
+      const execCore = controle.executor_core_usuario_id
+        ? controle.executor_core_usuario_id.trim()
+        : null
+      if (!respCore && !execCore) return false
+      return Boolean(
+        (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
+      )
     }
 
-    // Comparação exclusiva por IDs centrais (sem fallback para IDs legados)
-    const respCore = controle.responsavel_core_usuario_id || null
-    const execCore = controle.executor_core_usuario_id || null
+    // GESTOR: acesso permitido SOMENTE quando coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id.
+    // Sem autorização por subordinados. Sem fallback para IDs legados.
+    if (perfilUpper === 'GESTOR') {
+      const respCore = controle.responsavel_core_usuario_id
+        ? controle.responsavel_core_usuario_id.trim()
+        : null
+      const execCore = controle.executor_core_usuario_id
+        ? controle.executor_core_usuario_id.trim()
+        : null
+      if (!respCore && !execCore) return false
+      return Boolean(
+        (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
+      )
+    }
 
-    if (!respCore && !execCore) return false
-
-    const isProprio = Boolean(
-      (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
-    )
-
-    return isProprio
+    // Perfil não reconhecido -> negar
+    return false
   },
 
   /**
    * Filtra uma lista de controles aplicando o escopo central:
-   * - ADMINISTRADOR: sem filtro (todos os casos)
-   * - GESTOR: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id igual a userCoreId)
+   * - ADMINISTRADOR: sem filtro (todos os casos preservados)
+   * - GESTOR: apenas casos próprios (coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id)
+   *   Sem autorização por subordinados e sem fallback para IDs legados.
    * - OPERACIONAL: apenas casos próprios (responsavel_core_usuario_id ou executor_core_usuario_id igual a userCoreId)
-   * Negativo/vazio quando identidade ou perfil válido estiverem ausentes.
+   * - coreUserId ausente ou perfil não reconhecido -> negar (retorna array vazio).
    */
   async applyAccessScopeToControles(
     controles: TaskControleRecord[],
     userPerfil: string | null,
     userCoreId: string | null,
   ): Promise<TaskControleRecord[]> {
-    if (!userPerfil || !userCoreId) return []
+    if (!userPerfil || typeof userPerfil !== 'string') return []
+    if (!userCoreId || typeof userCoreId !== 'string') return []
+
     const trimmedCoreId = userCoreId.trim()
     if (!trimmedCoreId) return []
 
     const perfilUpper = userPerfil.trim().toUpperCase()
+
+    // ADMINISTRADOR: inalterado
     if (perfilUpper === 'ADMINISTRADOR') {
       return controles
     }
 
-    if (perfilUpper === 'OPERACIONAL' || perfilUpper === 'GESTOR') {
+    // OPERACIONAL: inalterado
+    if (perfilUpper === 'OPERACIONAL') {
       return controles.filter((c) => {
-        const respCore = c.responsavel_core_usuario_id || null
-        const execCore = c.executor_core_usuario_id || null
-        return respCore === trimmedCoreId || execCore === trimmedCoreId
+        const respCore = c.responsavel_core_usuario_id ? c.responsavel_core_usuario_id.trim() : null
+        const execCore = c.executor_core_usuario_id ? c.executor_core_usuario_id.trim() : null
+        return (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId)
       })
     }
 
+    // GESTOR: acesso permitido SOMENTE quando coreUserId === responsavel_core_usuario_id OU === executor_core_usuario_id.
+    // Sem autorização por subordinados e sem fallback para IDs legados.
+    if (perfilUpper === 'GESTOR') {
+      return controles.filter((c) => {
+        const respCore = c.responsavel_core_usuario_id ? c.responsavel_core_usuario_id.trim() : null
+        const execCore = c.executor_core_usuario_id ? c.executor_core_usuario_id.trim() : null
+        return (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId)
+      })
+    }
+
+    // Perfil não reconhecido -> negar
     return []
+  },
+
+  // --------------------------------------------------------------------------
+  // getSubordinadosDiretosIds (preservado para compatibilidade estrutural)
+  // --------------------------------------------------------------------------
+  async getSubordinadosDiretosIds(gestorCoreUserId: string): Promise<string[]> {
+    if (!gestorCoreUserId) return []
+    try {
+      const { data, error } = await supabase
+        .from('core_usuarios')
+        .select('id')
+        .eq('gestor_id', gestorCoreUserId)
+        .eq('ativo', true)
+      if (error || !data) return []
+      return data.map((u: any) => u.id)
+    } catch {
+      return []
+    }
   },
 
   // --------------------------------------------------------------------------
