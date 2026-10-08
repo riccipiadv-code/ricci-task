@@ -5816,28 +5816,28 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(resOutro.status).toBe('denied')
     })
 
-    it('(f) GESTOR: permite casos próprios', async () => {
+    it('(f) GESTOR 1. Gestor responsável do caso: permitido', async () => {
       const mockSupabase = {} as any
       const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
-        id: 't-gestor-propria',
+        id: 't-gestor-resp',
         responsavel_core_usuario_id: 'cu-gestor-1',
         executor_core_usuario_id: 'cu-outro',
       })
       expect(res.allowed).toBe(true)
+      expect(res.status).toBe('ok')
     })
 
-    it('(f) GESTOR: permite casos próprios (como responsável ou como executor)', async () => {
+    it('(f) GESTOR 2. Gestor executor do caso: permitido', async () => {
       const mockSupabase = {} as any
-      // Gestor como executor
-      const resExec = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+      const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
         id: 't-gestor-exec',
         responsavel_core_usuario_id: 'cu-outro',
         executor_core_usuario_id: 'cu-gestor-1',
       })
-      expect(resExec.allowed).toBe(true)
-      expect(resExec.status).toBe('ok')
+      expect(res.allowed).toBe(true)
+      expect(res.status).toBe('ok')
 
-      // Gestor e subordinado no mesmo caso: permitido pela participação do gestor
+      // Gestor e subordinado no mesmo caso: permitido pela participação direta do gestor (como responsável)
       const resAmbos = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
         id: 't-gestor-sub-juntos',
         responsavel_core_usuario_id: 'cu-gestor-1',
@@ -5847,13 +5847,41 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       expect(resAmbos.status).toBe('ok')
     })
 
-    it('(f) GESTOR: nega casos exclusivos de membros de sua equipe direta ou subordinados', async () => {
+    it('(f) GESTOR 3. Caso exclusivo de subordinado: negado (allowed:false, status:denied)', async () => {
+      const mockSupabase = {} as any
+
+      // Caso em que o subordinado é o responsável
+      const resSubResp = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-sub-resp',
+        responsavel_core_usuario_id: 'cu-sub-1',
+        executor_core_usuario_id: 'cu-outro',
+      })
+      expect(resSubResp.allowed).toBe(false)
+      expect(resSubResp.status).toBe('denied')
+      expect(resSubResp.error).toMatch(
+        /gestores só podem acessar casos em que são Responsável ou Executor/,
+      )
+
+      // Caso em que o subordinado é o executor
+      const resSubExec = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
+        id: 't-sub-exec',
+        responsavel_core_usuario_id: 'cu-outro',
+        executor_core_usuario_id: 'cu-sub-1',
+      })
+      expect(resSubExec.allowed).toBe(false)
+      expect(resSubExec.status).toBe('denied')
+      expect(resSubExec.error).toMatch(
+        /gestores só podem acessar casos em que são Responsável ou Executor/,
+      )
+    })
+
+    it('(f) GESTOR 4. Caso de terceiros: negado', async () => {
       const mockSupabase = {} as any
 
       const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
-        id: 't-sub',
-        responsavel_core_usuario_id: 'cu-sub-1',
-        executor_core_usuario_id: 'cu-outro',
+        id: 't-terceiros',
+        responsavel_core_usuario_id: 'cu-terceiro-1',
+        executor_core_usuario_id: 'cu-terceiro-2',
       })
       expect(res.allowed).toBe(false)
       expect(res.status).toBe('denied')
@@ -5862,23 +5890,110 @@ describe('Testes de Pipeline e Regras de Negócio das Edge Functions (notify-tas
       )
     })
 
-    it('(f) GESTOR: nega casos de membros inativos ou de outra equipe/gestor', async () => {
+    it('(f) GESTOR: não realiza fallback para IDs legados se IDs centrais forem divergentes', async () => {
       const mockSupabase = {} as any
 
       const res = await checkTaskAccessScope(mockSupabase, { id: 'cu-gestor-1' }, 'GESTOR', {
-        id: 't-negada',
-        responsavel_core_usuario_id: 'cu-sub-inativo',
-        executor_core_usuario_id: 'cu-outro-gestor',
+        id: 't-legados-apenas',
+        responsavel_core_usuario_id: 'cu-outro-1',
+        executor_core_usuario_id: 'cu-outro-2',
+        responsavel_usuario_id: 'cu-gestor-1',
+        executor_usuario_id: 'cu-gestor-1',
       })
       expect(res.allowed).toBe(false)
       expect(res.status).toBe('denied')
-      expect(res.error).toMatch(
-        /gestores só podem acessar casos em que são Responsável ou Executor/,
-      )
     })
   })
 
   describe('Integração de Escopo no Handler notify-task-assignment', () => {
+    it('retorna 403 quando chamador GESTOR tentar disparar notificação para caso exclusivo de subordinado (sem escopo)', async () => {
+      const ctx = createMockEdgeContext()
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-gestor-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-gestor-1',
+                        auth_user_id: 'auth-gestor-1',
+                        nome: 'Gestor 1',
+                        email: 'gestor1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-gestor-1',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'GESTOR', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'task-sub-1',
+                        numero_caso: 102,
+                        responsavel_core_usuario_id: 'cu-sub-1',
+                        executor_core_usuario_id: 'cu-sub-2',
+                        deleted_at: null,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/notify-task-assignment', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-gestor-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tarefa_id: 'task-sub-1',
+          tipo: 'alteracao_atribuicao',
+        }),
+      })
+
+      const res = await handleNotifyTaskAssignment(req, ctx)
+      expect(res.status).toBe(403)
+      const data = await res.json()
+      expect(data.error).toContain('não possui permissão para disparar notificações deste caso')
+    })
     it('retorna 403 quando chamador OPERACIONAL tentar disparar notificação para caso de terceiro', async () => {
       const ctx = createMockEdgeContext()
       ctx.supabase = {

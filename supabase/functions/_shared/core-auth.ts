@@ -487,9 +487,11 @@ export async function verifyCoreAdmin(
  */
 /**
  * Validação de escopo de acesso a um caso (tarefa):
- * - ADMINISTRADOR: acessa qualquer caso.
- * - GESTOR: acessa exclusivamente casos próprios (responsável_core_usuario_id ou executor_core_usuario_id
- *   igual ao ID central do gestor). Ser gestor de um responsável ou executor NÃO dá mais acesso ao caso no Ricci Task.
+ * - ADMINISTRADOR: acessa qualquer caso (irrestrito).
+ * - GESTOR: autorizado SOMENTE quando callerCoreUser.id corresponder a responsavel_core_usuario_id
+ *   OU executor_core_usuario_id do caso. Sem autorização por subordinados e sem consulta de equipe.
+ *   Usa exclusivamente IDs centrais, sem fallback para IDs legados. Casos exclusivos de subordinado
+ *   ou de terceiros retornam allowed: false e status: 'denied'.
  * - OPERACIONAL: acessa exclusivamente casos onde é Responsável ou Executor pelo ID central.
  *
  * Retorna { allowed: boolean; status: 'ok' | 'denied' | 'technical_failure'; error?: string }
@@ -530,9 +532,9 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // (c) tarefa sem IDs centrais -> denied (fail-closed, sem fallback permissivo)
-  const respCore = tarefa.responsavel_core_usuario_id || null
-  const execCore = tarefa.executor_core_usuario_id || null
+  // (c) tarefa sem IDs centrais -> denied (fail-closed, sem fallback permissivo nem para IDs legados)
+  const respCore = (tarefa.responsavel_core_usuario_id || '').trim() || null
+  const execCore = (tarefa.executor_core_usuario_id || '').trim() || null
 
   if (!respCore && !execCore) {
     return {
@@ -547,12 +549,12 @@ export async function checkTaskAccessScope(
     return { allowed: true, status: 'ok' }
   }
 
-  // "Próprio" = ser Responsável ou Executor pelo ID central
+  // "Próprio" = callerCoreUser.id bater com responsavel_core_usuario_id OU executor_core_usuario_id
   const isProprio = Boolean(
     (respCore && respCore === callerCoreId) || (execCore && execCore === callerCoreId),
   )
 
-  // (e) OPERACIONAL -> só próprio
+  // (e) OPERACIONAL -> exclusivamente caso próprio
   if (perfilUpper === ROLE_CODE_OPERACIONAL) {
     if (isProprio) {
       return { allowed: true, status: 'ok' }
@@ -565,7 +567,9 @@ export async function checkTaskAccessScope(
     }
   }
 
-  // (f) GESTOR -> exclusivamente caso próprio (restrição de acesso por equipe no Ricci Task)
+  // (f) GESTOR -> exclusivamente caso próprio (callerCoreUser.id === responsavel_core_usuario_id OU executor_core_usuario_id).
+  // Sem autorização por subordinados e sem consulta de equipe.
+  // Casos exclusivos de subordinados ou de terceiros retornam allowed: false e status: 'denied'.
   if (perfilUpper === ROLE_CODE_GESTOR) {
     if (isProprio) {
       return { allowed: true, status: 'ok' }
