@@ -106,6 +106,9 @@ export function ControleModal({
 
   // Controle de versão sequencial de requisição para evitar race conditions em respostas assíncronas concorrentes
   const activeRequestIdRef = useRef<number>(0)
+  // Contador de geração para verificação assíncrona de escopo de acesso ao caso (race condition / fail-closed)
+  const accessRequestIdRef = useRef<number>(0)
+  const [verificandoAcesso, setVerificandoAcesso] = useState(false)
 
   // Modal de cadastro rápido (+) exclusivo para Nome do Controle
   const [quickNomeModalOpen, setQuickNomeModalOpen] = useState(false)
@@ -316,55 +319,20 @@ export function ControleModal({
   const { corePerfil, coreUserId } = useAuth()
   const isAdmin = corePerfil === 'ADMINISTRADOR'
 
-  // Popula o formulário ao abrir
-  useEffect(() => {
-    if (!open) return
-
-    // Validação de escopo central na abertura do modal para edição
-    // O GESTOR agora só pode acessar casos próprios (responsável_core_usuario_id ou executor_core_usuario_id igual a seu ID central).
-    // Não há mais liberação temporária nem consulta assíncrona por equipe direta.
-    if (controleToEdit) {
-      if (!corePerfil || !coreUserId) {
-        toast({
-          variant: 'destructive',
-          title: 'Acesso negado',
-          description: 'Você não possui permissão para visualizar ou editar este caso.',
-        })
-        onOpenChange(false)
-        return
-      }
-
-      const trimmedCoreId = coreUserId.trim()
-      const perfilUpper = corePerfil.trim().toUpperCase()
-
-      let isAllowed = false
-      if (perfilUpper === 'ADMINISTRADOR') {
-        isAllowed = true
-      } else if (perfilUpper === 'GESTOR' || perfilUpper === 'OPERACIONAL') {
-        // Acesso exclusivo a casos próprios comparando IDs centrais
-        const respCore = controleToEdit.responsavel_core_usuario_id || null
-        const execCore = controleToEdit.executor_core_usuario_id || null
-
-        isAllowed = Boolean(
-          (respCore && respCore === trimmedCoreId) || (execCore && execCore === trimmedCoreId),
-        )
-      } else {
-        isAllowed = false
-      }
-
-      if (!isAllowed) {
-        toast({
-          variant: 'destructive',
-          title: 'Acesso negado',
-          description: 'Você não possui permissão para visualizar ou editar este caso.',
-        })
-        onOpenChange(false)
-        return
-      }
-    }
-
-    carregarListasAuxiliares()
-    setActiveTab(initialTab || 'dados')
+  // Limpa estados do formulário
+  const resetFormState = useCallback(() => {
+    setNomeControleId('')
+    setIdentificacaoCaso('')
+    setStatusId(statusPadraoId)
+    setDataAutorizacao(getTodayLocalDate())
+    setPrazoConclusao('')
+    setResponsavelUsuarioId('')
+    setExecutorUsuarioId('')
+    setExecutorIsResponsavel(false)
+    setPastaCliente('')
+    setPastaRicci('')
+    setUpdatedAtDisplay(null)
+    setProvidencias([])
     setNomeControleError(false)
     setIdentificacaoError(false)
     setStatusError(false)
@@ -373,93 +341,158 @@ export function ControleModal({
     setBuscaNomeSelect('')
     setBuscaRespSelect('')
     setBuscaExecSelect('')
+  }, [statusPadraoId])
 
-    if (controleToEdit) {
-      setNomeControleId(controleToEdit.nome_controle_id || '')
-      setIdentificacaoCaso(controleToEdit.identificacao_caso || '')
-      setStatusId(controleToEdit.status_id || statusPadraoId)
-      setDataAutorizacao(
-        controleToEdit.data_autorizacao ? controleToEdit.data_autorizacao.split('T')[0] : '',
-      )
-      setPrazoConclusao(
-        controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
-      )
-      const editRespId =
-        controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id || ''
-      const editExecId =
-        controleToEdit.executor_core_usuario_id || controleToEdit.executor_usuario_id || ''
-      setResponsavelUsuarioId(editRespId)
-      setExecutorUsuarioId(editExecId)
-      const sameUser = Boolean(editRespId && editExecId && editRespId === editExecId)
-      setExecutorIsResponsavel(sameUser)
-      setPastaCliente(controleToEdit.pasta_cliente || '')
-      setPastaRicci(controleToEdit.pasta_ricci || '')
-      setUpdatedAtDisplay(controleToEdit.updated_at || null)
+  // Popula o formulário ao abrir
+  useEffect(() => {
+    const generation = ++accessRequestIdRef.current
 
-      // Carrega providências existentes
-      const draftList: DraftProvidenciaItem[] = (controleToEdit.providencias || []).map(
-        (p, idx) => ({
-          id: p.id,
-          tempId: p.id || `existing-${idx}`,
-          providencia: p.providencia || '',
-          prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : '',
-          tipo_prazo_id: p.tipo_prazo_id || tipoPrazoPadraoId,
-          status_id: p.status_id || statusProvPadraoId,
-          ordem: p.ordem ?? idx,
-          data_conclusao: p.data_conclusao ? p.data_conclusao.split('T')[0] : '',
-          email_alertas: p.email_alertas ?? false,
-          email_alerta_inclusao: p.email_alerta_inclusao ?? false,
-          email_alerta_atraso: p.email_alerta_atraso ?? false,
-          email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
-          isPersisted: true,
-        }),
-      )
-
-      if (autoAddNewProvidencia) {
-        const maiorOrdem = draftList.reduce((max, p) => Math.max(max, p.ordem ?? 0), -1)
-        const autoTempId = `draft-auto-${Date.now()}`
-        draftList.push({
-          tempId: autoTempId,
-          providencia: '',
-          prazo_conclusao: '',
-          tipo_prazo_id: tipoPrazoPadraoId,
-          status_id: statusProvPadraoId,
-          ordem: maiorOrdem + 1,
-          data_conclusao: null,
-          email_alertas: false,
-          email_alerta_inclusao: false,
-          email_alerta_atraso: false,
-          email_alerta_atualizacao: false,
-          isPersisted: false,
-        })
-        setFocusNewProvId(autoTempId)
-      }
-
-      setProvidencias(draftList)
-    } else {
-      // Novo controle
-      setNomeControleId('')
-      setIdentificacaoCaso('')
-      setStatusId(statusPadraoId)
-      setDataAutorizacao(getTodayLocalDate())
-      setPrazoConclusao('')
-      setResponsavelUsuarioId('')
-      setExecutorUsuarioId('')
-      setExecutorIsResponsavel(false)
-      setPastaCliente('')
-      setPastaRicci('')
-      setUpdatedAtDisplay(null)
-      setProvidencias([])
+    if (!open) {
+      setVerificandoAcesso(false)
+      return
     }
+
+    // Caso NÃO haja controleToEdit (criação de novo caso): fluxo imediato sem bloqueio
+    if (!controleToEdit) {
+      setVerificandoAcesso(false)
+      carregarListasAuxiliares()
+      setActiveTab(initialTab || 'dados')
+      resetFormState()
+      return
+    }
+
+    // Fail-closed para caso existente:
+    // Limpa dados imediatamente enquanto a verificação assíncrona estiver pendente
+    setVerificandoAcesso(true)
+    resetFormState()
+
+    const verificarAcessoAsync = async () => {
+      try {
+        const permitido = await controleService.checkControleAccessScope(
+          controleToEdit,
+          corePerfil,
+          coreUserId,
+        )
+
+        // Race condition: só aplica o resultado se a geração ainda for a atual
+        if (generation !== accessRequestIdRef.current) {
+          return
+        }
+
+        if (!permitido) {
+          setVerificandoAcesso(false)
+          toast({
+            variant: 'destructive',
+            title: 'Acesso negado',
+            description: 'Você não possui permissão para visualizar ou editar este caso.',
+          })
+          onOpenChange(false)
+          return
+        }
+
+        // Acesso autorizado e geração válida: popular dados do caso
+        setVerificandoAcesso(false)
+        carregarListasAuxiliares()
+        setActiveTab(initialTab || 'dados')
+        setNomeControleError(false)
+        setIdentificacaoError(false)
+        setStatusError(false)
+        setResponsavelError(false)
+        setExecutorError(false)
+        setBuscaNomeSelect('')
+        setBuscaRespSelect('')
+        setBuscaExecSelect('')
+
+        setNomeControleId(controleToEdit.nome_controle_id || '')
+        setIdentificacaoCaso(controleToEdit.identificacao_caso || '')
+        setStatusId(controleToEdit.status_id || statusPadraoId)
+        setDataAutorizacao(
+          controleToEdit.data_autorizacao ? controleToEdit.data_autorizacao.split('T')[0] : '',
+        )
+        setPrazoConclusao(
+          controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : '',
+        )
+        const editRespId =
+          controleToEdit.responsavel_core_usuario_id || controleToEdit.responsavel_usuario_id || ''
+        const editExecId =
+          controleToEdit.executor_core_usuario_id || controleToEdit.executor_usuario_id || ''
+        setResponsavelUsuarioId(editRespId)
+        setExecutorUsuarioId(editExecId)
+        const sameUser = Boolean(editRespId && editExecId && editRespId === editExecId)
+        setExecutorIsResponsavel(sameUser)
+        setPastaCliente(controleToEdit.pasta_cliente || '')
+        setPastaRicci(controleToEdit.pasta_ricci || '')
+        setUpdatedAtDisplay(controleToEdit.updated_at || null)
+
+        // Carrega providências existentes
+        const draftList: DraftProvidenciaItem[] = (controleToEdit.providencias || []).map(
+          (p, idx) => ({
+            id: p.id,
+            tempId: p.id || `existing-${idx}`,
+            providencia: p.providencia || '',
+            prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : '',
+            tipo_prazo_id: p.tipo_prazo_id || tipoPrazoPadraoId,
+            status_id: p.status_id || statusProvPadraoId,
+            ordem: p.ordem ?? idx,
+            data_conclusao: p.data_conclusao ? p.data_conclusao.split('T')[0] : '',
+            email_alertas: p.email_alertas ?? false,
+            email_alerta_inclusao: p.email_alerta_inclusao ?? false,
+            email_alerta_atraso: p.email_alerta_atraso ?? false,
+            email_alerta_atualizacao: p.email_alerta_atualizacao ?? false,
+            isPersisted: true,
+          }),
+        )
+
+        if (autoAddNewProvidencia) {
+          const maiorOrdem = draftList.reduce((max, p) => Math.max(max, p.ordem ?? 0), -1)
+          const autoTempId = `draft-auto-${Date.now()}`
+          draftList.push({
+            tempId: autoTempId,
+            providencia: '',
+            prazo_conclusao: '',
+            tipo_prazo_id: tipoPrazoPadraoId,
+            status_id: statusProvPadraoId,
+            ordem: maiorOrdem + 1,
+            data_conclusao: null,
+            email_alertas: false,
+            email_alerta_inclusao: false,
+            email_alerta_atraso: false,
+            email_alerta_atualizacao: false,
+            isPersisted: false,
+          })
+          setFocusNewProvId(autoTempId)
+        }
+
+        setProvidencias(draftList)
+      } catch (err) {
+        if (generation !== accessRequestIdRef.current) {
+          return
+        }
+        setVerificandoAcesso(false)
+        toast({
+          variant: 'destructive',
+          title: 'Acesso negado',
+          description: 'Você não possui permissão para visualizar ou editar este caso.',
+        })
+        onOpenChange(false)
+      }
+    }
+
+    verificarAcessoAsync()
   }, [
     open,
     controleToEdit,
+    corePerfil,
+    coreUserId,
     statusPadraoId,
     tipoPrazoPadraoId,
     statusProvPadraoId,
     initialTab,
     autoAddNewProvidencia,
     carregarListasAuxiliares,
+    resetFormState,
+    onOpenChange,
+    toast,
   ])
 
   // Opções de Status do Controle
@@ -1168,978 +1201,1010 @@ export function ControleModal({
 
           {/* Conteúdo com scroll */}
           <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-            {/* ============================================================= */}
-            {/* ABA 1: DADOS DO CASO                                          */}
-            {/* ============================================================= */}
-            {activeTab === 'dados' && (
-              <div className="space-y-5">
-                {/* Bloco 1: Nome do Controle e Identificação do Caso */}
-                <div className="space-y-4">
-                  {/* Nome do Controle (task_nomes_controle) */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label
-                        htmlFor="nome-controle-select"
-                        className="text-xs font-semibold text-foreground flex items-center gap-1"
-                      >
-                        <span>Nome do Controle</span>
-                        <span className="text-destructive">*</span>
-                      </Label>
-                      <span className="text-[11px] text-muted-foreground">
-                        Tabela task_nomes_controle
-                      </span>
+            {verificandoAcesso ? (
+              <div className="py-16 flex flex-col items-center justify-center text-center gap-3">
+                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+                <p className="text-sm text-muted-foreground font-medium">
+                  Verificando permissões de acesso ao caso...
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* ============================================================= */}
+                {/* ABA 1: DADOS DO CASO                                          */}
+                {/* ============================================================= */}
+                {activeTab === 'dados' && (
+                  <div className="space-y-5">
+                    {/* Bloco 1: Nome do Controle e Identificação do Caso */}
+                    <div className="space-y-4">
+                      {/* Nome do Controle (task_nomes_controle) */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <Label
+                            htmlFor="nome-controle-select"
+                            className="text-xs font-semibold text-foreground flex items-center gap-1"
+                          >
+                            <span>Nome do Controle</span>
+                            <span className="text-destructive">*</span>
+                          </Label>
+                          <span className="text-[11px] text-muted-foreground">
+                            Tabela task_nomes_controle
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex-1">
+                            <Select
+                              value={nomeControleId}
+                              onValueChange={(val) => {
+                                setNomeControleId(val)
+                                if (nomeControleError) setNomeControleError(false)
+                              }}
+                            >
+                              <SelectTrigger
+                                id="nome-controle-select"
+                                className={cn(
+                                  'h-11 rounded-xl bg-background font-medium text-left truncate text-xs sm:text-sm',
+                                  nomeControleError &&
+                                    'border-destructive focus-visible:ring-destructive',
+                                )}
+                              >
+                                <SelectValue placeholder="Selecione o Nome do Controle..." />
+                              </SelectTrigger>
+                              <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                                <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                                  <div className="relative">
+                                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                    <Input
+                                      placeholder="Filtrar nomes..."
+                                      value={buscaNomeSelect}
+                                      onChange={(e) => setBuscaNomeSelect(e.target.value)}
+                                      className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                      onClick={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => e.stopPropagation()}
+                                    />
+                                  </div>
+                                </div>
+
+                                {loadingListas ? (
+                                  <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                    <span>Carregando nomes...</span>
+                                  </div>
+                                ) : opcoesNomes.length === 0 ? (
+                                  <div className="p-4 text-center text-xs text-muted-foreground">
+                                    Nenhum Nome do Controle encontrado.
+                                  </div>
+                                ) : (
+                                  opcoesNomes.map((n) => (
+                                    <SelectItem key={n.id} value={n.id} className="py-2.5">
+                                      <div className="flex items-center justify-between w-full gap-2">
+                                        <span className="font-semibold text-foreground text-xs leading-snug break-words">
+                                          {n.nome}
+                                        </span>
+                                        {!n.ativo && (
+                                          <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
+                                            Inativo
+                                          </span>
+                                        )}
+                                      </div>
+                                    </SelectItem>
+                                  ))
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {/* Botão + compacto mantido para Nomes de Controles */}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              setQuickNomeInput('')
+                              setQuickNomeError(null)
+                              setQuickNomeModalOpen(true)
+                            }}
+                            className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
+                            title="Cadastrar novo Nome do Controle"
+                          >
+                            <Plus className="w-5 h-5 stroke-[2.5]" />
+                          </Button>
+                        </div>
+
+                        {nomeControleError && (
+                          <p className="text-xs text-destructive font-medium">
+                            O Nome do Controle é obrigatório. Selecione uma opção válida.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Identificação do Caso */}
+                      <div className="space-y-1.5">
+                        <Label
+                          htmlFor="ident-caso"
+                          className="text-xs font-semibold text-foreground flex items-center justify-between"
+                        >
+                          <span>
+                            Identificação do Caso <span className="text-destructive">*</span>
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">Obrigatório</span>
+                        </Label>
+                        <Input
+                          id="ident-caso"
+                          value={identificacaoCaso}
+                          onChange={(e) => {
+                            setIdentificacaoCaso(e.target.value)
+                            if (identificacaoError && e.target.value.trim()) {
+                              setIdentificacaoError(false)
+                            }
+                          }}
+                          className={cn(
+                            'h-10 rounded-xl bg-background font-medium',
+                            identificacaoError &&
+                              'border-destructive focus-visible:ring-destructive',
+                          )}
+                        />
+                        {identificacaoError && (
+                          <p className="text-xs text-destructive font-medium">
+                            A Identificação do Caso é obrigatória.
+                          </p>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Select
-                          value={nomeControleId}
-                          onValueChange={(val) => {
-                            setNomeControleId(val)
-                            if (nomeControleError) setNomeControleError(false)
-                          }}
-                        >
-                          <SelectTrigger
-                            id="nome-controle-select"
-                            className={cn(
-                              'h-11 rounded-xl bg-background font-medium text-left truncate text-xs sm:text-sm',
-                              nomeControleError &&
-                                'border-destructive focus-visible:ring-destructive',
-                            )}
-                          >
-                            <SelectValue placeholder="Selecione o Nome do Controle..." />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
-                            <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                              <div className="relative">
-                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                                <Input
-                                  placeholder="Filtrar nomes..."
-                                  value={buscaNomeSelect}
-                                  onChange={(e) => setBuscaNomeSelect(e.target.value)}
-                                  className="h-8 pl-8 pr-2 text-xs rounded-lg"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onKeyDown={(e) => e.stopPropagation()}
-                                />
-                              </div>
-                            </div>
+                    {/* Bloco 2: Seção Status do Controle (Status, Data de Autorização, Prazo de Conclusão) */}
+                    <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-4">
+                      <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
+                        <CheckCircle2 className="w-4 h-4 text-primary" />
+                        <span>Status do Controle</span>
+                      </div>
 
-                            {loadingListas ? (
-                              <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                                <span>Carregando nomes...</span>
-                              </div>
-                            ) : opcoesNomes.length === 0 ? (
-                              <div className="p-4 text-center text-xs text-muted-foreground">
-                                Nenhum Nome do Controle encontrado.
-                              </div>
-                            ) : (
-                              opcoesNomes.map((n) => (
-                                <SelectItem key={n.id} value={n.id} className="py-2.5">
-                                  <div className="flex items-center justify-between w-full gap-2">
-                                    <span className="font-semibold text-foreground text-xs leading-snug break-words">
-                                      {n.nome}
-                                    </span>
-                                    {!n.ativo && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {/* Status (obrigatório, task_status) */}
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-semibold">
+                            Status <span className="text-destructive">*</span>
+                          </Label>
+                          <Select
+                            value={statusId}
+                            onValueChange={(val) => {
+                              setStatusId(val)
+                              if (statusError) setStatusError(false)
+                            }}
+                          >
+                            <SelectTrigger
+                              className={cn(
+                                'h-10 rounded-xl bg-background',
+                                statusError && 'border-destructive focus-visible:ring-destructive',
+                              )}
+                            >
+                              <SelectValue placeholder="Selecione o status" />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-xl">
+                              {opcoesStatusControle.map((st) => (
+                                <SelectItem key={st.id} value={st.id}>
+                                  <div className="flex items-center gap-2">
+                                    <span>{st.nome}</span>
+                                    {!st.ativo && (
                                       <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
                                         Inativo
                                       </span>
                                     )}
                                   </div>
                                 </SelectItem>
-                              ))
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {statusError && (
+                            <p className="text-xs text-destructive font-medium">
+                              Selecione um status.
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Data de Autorização */}
+                        <div className="space-y-1.5">
+                          <Label htmlFor="data-autorizacao" className="text-xs font-semibold">
+                            Data de Autorização
+                          </Label>
+                          <Input
+                            id="data-autorizacao"
+                            type="date"
+                            value={dataAutorizacao}
+                            onChange={(e) => setDataAutorizacao(e.target.value)}
+                            className="h-10 rounded-xl bg-background"
+                          />
+                        </div>
+
+                        {/* Prazo de Conclusão */}
+                        <div className="space-y-1.5">
+                          <Label
+                            htmlFor="prazo-conclusao"
+                            className={cn(
+                              'text-xs font-semibold flex items-center gap-1',
+                              !isAdmin && 'text-muted-foreground',
                             )}
-                          </SelectContent>
-                        </Select>
+                          >
+                            <span>Prazo de Conclusão</span>
+                          </Label>
+                          <Input
+                            id="prazo-conclusao"
+                            type="date"
+                            value={prazoConclusao}
+                            disabled={!isAdmin}
+                            onChange={(e) => setPrazoConclusao(e.target.value)}
+                            className={cn(
+                              'h-10 rounded-xl bg-background text-xs font-medium',
+                              !isAdmin &&
+                                'opacity-70 cursor-not-allowed bg-muted/50 border-border select-none text-muted-foreground',
+                            )}
+                            title={
+                              !isAdmin
+                                ? 'Somente Administradores podem editar o Prazo de Conclusão.'
+                                : undefined
+                            }
+                          />
+                          {!isAdmin && (
+                            <p className="text-[11px] text-muted-foreground italic">
+                              Somente o Administrador pode inserir ou alterar o Prazo de Conclusão
+                              do caso.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Alertas de carregamento e erro recuperável */}
+                    {loadingListas && (
+                      <div className="p-3.5 rounded-xl bg-primary/10 border border-primary/20 text-xs text-foreground flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" />
+                        <span>
+                          Carregando listas auxiliares e validando usuários no Gestor de Acessos...
+                        </span>
+                      </div>
+                    )}
+
+                    {(validacaoUsuariosStatus === 'falhou' || erroListasAuxiliares) &&
+                      !loadingListas && (
+                        <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            <span>
+                              {erroUsuariosCentrais ||
+                                erroListasAuxiliares ||
+                                'Falha ao sincronizar listas auxiliares ou usuários.'}
+                            </span>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={carregarListasAuxiliares}
+                            disabled={loadingListas}
+                            className="h-7 px-2.5 rounded-lg text-[11px] shrink-0 border-destructive/30 hover:bg-destructive/15 text-destructive"
+                          >
+                            <RefreshCw className="w-3 h-3 mr-1" />
+                            Tentar novamente
+                          </Button>
+                        </div>
+                      )}
+
+                    {/* Bloco 3: Responsável e Executor (única fonte: task_usuarios com dados centrais) */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Responsável */}
+                      <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
+                            <User className="w-4 h-4 text-primary" />
+                            <span>
+                              Responsável <span className="text-destructive">*</span>
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="relative">
+                          <Select
+                            value={responsavelUsuarioId}
+                            disabled={
+                              (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                              !controleToEdit?.responsavel_usuario_id
+                            }
+                            onValueChange={(val) => {
+                              if (
+                                (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                val !== controleToEdit?.responsavel_usuario_id
+                              ) {
+                                toast({
+                                  variant: 'destructive',
+                                  title: 'Seleção bloqueada',
+                                  description:
+                                    validacaoUsuariosStatus === 'carregando' || loadingListas
+                                      ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
+                                      : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
+                                })
+                                return
+                              }
+                              setResponsavelUsuarioId(val)
+                              if (executorIsResponsavel) {
+                                setExecutorUsuarioId(val)
+                                if (val && executorError) setExecutorError(false)
+                              }
+                              if (responsavelError) setResponsavelError(false)
+                            }}
+                          >
+                            <SelectTrigger
+                              className={cn(
+                                'h-12 rounded-xl bg-background text-sm font-medium',
+                                responsavelError &&
+                                  'border-destructive focus-visible:ring-destructive',
+                              )}
+                            >
+                              <SelectValue placeholder="Selecione o responsável..." />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                              <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                                <div className="relative">
+                                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                  <Input
+                                    placeholder="Filtrar por nome ou e-mail..."
+                                    value={buscaRespSelect}
+                                    onChange={(e) => setBuscaRespSelect(e.target.value)}
+                                    className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                    onClick={(e) => e.stopPropagation()}
+                                    onKeyDown={(e) => e.stopPropagation()}
+                                  />
+                                </div>
+                              </div>
+
+                              {validacaoUsuariosStatus === 'carregando' ? (
+                                <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                  <span>Validando responsáveis centrais...</span>
+                                </div>
+                              ) : opcoesResponsaveis.length === 0 ? (
+                                <div className="p-4 text-center text-xs text-muted-foreground">
+                                  {validacaoUsuariosStatus === 'falhou'
+                                    ? 'Validação central falhou. Novas escolhas suspensas.'
+                                    : 'Nenhum responsável disponível encontrado.'}
+                                </div>
+                              ) : (
+                                opcoesResponsaveis.map((r) => {
+                                  const isInativoLocal = r.ativo === false
+                                  return (
+                                    <SelectItem key={r.id} value={r.id} className="py-2">
+                                      <div className="flex flex-col gap-0.5 text-left">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-semibold text-foreground text-xs">
+                                            {r.nome}
+                                          </span>
+                                          {isInativoLocal && (
+                                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
+                                              Inativo
+                                            </span>
+                                          )}
+                                        </div>
+                                        {r.email && (
+                                          <span className="text-[11px] text-muted-foreground font-normal">
+                                            {r.email}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </SelectItem>
+                                  )
+                                })
+                              )}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {responsavelError && (
+                          <p className="text-xs text-destructive font-medium">
+                            O Responsável é obrigatório.
+                          </p>
+                        )}
                       </div>
 
-                      {/* Botão + compacto mantido para Nomes de Controles */}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => {
-                          setQuickNomeInput('')
-                          setQuickNomeError(null)
-                          setQuickNomeModalOpen(true)
-                        }}
-                        className="h-11 w-11 p-0 rounded-xl shrink-0 border-border hover:bg-primary/10 hover:text-primary hover:border-primary/40"
-                        title="Cadastrar novo Nome do Controle"
-                      >
-                        <Plus className="w-5 h-5 stroke-[2.5]" />
-                      </Button>
-                    </div>
+                      {/* Executor */}
+                      <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
+                            <UserCheck className="w-4 h-4 text-primary" />
+                            <span>
+                              Executor <span className="text-destructive">*</span>
+                            </span>
+                          </div>
 
-                    {nomeControleError && (
-                      <p className="text-xs text-destructive font-medium">
-                        O Nome do Controle é obrigatório. Selecione uma opção válida.
-                      </p>
-                    )}
-                  </div>
+                          {/* Opção sutil: Executor é o Responsável */}
+                          <label
+                            htmlFor="executor-is-responsavel-checkbox"
+                            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer select-none font-normal"
+                          >
+                            <Checkbox
+                              id="executor-is-responsavel-checkbox"
+                              checked={executorIsResponsavel}
+                              onCheckedChange={(checked) => {
+                                const isChecked = checked === true
+                                setExecutorIsResponsavel(isChecked)
+                                if (isChecked) {
+                                  setExecutorUsuarioId(responsavelUsuarioId)
+                                  if (responsavelUsuarioId && executorError) {
+                                    setExecutorError(false)
+                                  }
+                                }
+                              }}
+                              className="h-3.5 w-3.5 rounded"
+                            />
+                            <span>Executor é o Responsável</span>
+                          </label>
+                        </div>
 
-                  {/* Identificação do Caso */}
-                  <div className="space-y-1.5">
-                    <Label
-                      htmlFor="ident-caso"
-                      className="text-xs font-semibold text-foreground flex items-center justify-between"
-                    >
-                      <span>
-                        Identificação do Caso <span className="text-destructive">*</span>
-                      </span>
-                      <span className="text-[11px] text-muted-foreground">Obrigatório</span>
-                    </Label>
-                    <Input
-                      id="ident-caso"
-                      value={identificacaoCaso}
-                      onChange={(e) => {
-                        setIdentificacaoCaso(e.target.value)
-                        if (identificacaoError && e.target.value.trim()) {
-                          setIdentificacaoError(false)
-                        }
-                      }}
-                      className={cn(
-                        'h-10 rounded-xl bg-background font-medium',
-                        identificacaoError && 'border-destructive focus-visible:ring-destructive',
-                      )}
-                    />
-                    {identificacaoError && (
-                      <p className="text-xs text-destructive font-medium">
-                        A Identificação do Caso é obrigatória.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Bloco 2: Seção Status do Controle (Status, Data de Autorização, Prazo de Conclusão) */}
-                <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-4">
-                  <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>Status do Controle</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* Status (obrigatório, task_status) */}
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold">
-                        Status <span className="text-destructive">*</span>
-                      </Label>
-                      <Select
-                        value={statusId}
-                        onValueChange={(val) => {
-                          setStatusId(val)
-                          if (statusError) setStatusError(false)
-                        }}
-                      >
-                        <SelectTrigger
-                          className={cn(
-                            'h-10 rounded-xl bg-background',
-                            statusError && 'border-destructive focus-visible:ring-destructive',
-                          )}
-                        >
-                          <SelectValue placeholder="Selecione o status" />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl">
-                          {opcoesStatusControle.map((st) => (
-                            <SelectItem key={st.id} value={st.id}>
-                              <div className="flex items-center gap-2">
-                                <span>{st.nome}</span>
-                                {!st.ativo && (
-                                  <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-muted text-muted-foreground border shrink-0">
-                                    Inativo
-                                  </span>
-                                )}
+                        <div className="relative">
+                          <Select
+                            value={executorUsuarioId}
+                            disabled={
+                              executorIsResponsavel ||
+                              ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                !controleToEdit?.executor_usuario_id)
+                            }
+                            onValueChange={(val) => {
+                              if (
+                                (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                val !== controleToEdit?.executor_usuario_id
+                              ) {
+                                toast({
+                                  variant: 'destructive',
+                                  title: 'Seleção bloqueada',
+                                  description:
+                                    validacaoUsuariosStatus === 'carregando' || loadingListas
+                                      ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
+                                      : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
+                                })
+                                return
+                              }
+                              setExecutorUsuarioId(val)
+                              if (executorError) setExecutorError(false)
+                            }}
+                          >
+                            <SelectTrigger
+                              disabled={
+                                executorIsResponsavel ||
+                                ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                  !controleToEdit?.executor_usuario_id)
+                              }
+                              className={cn(
+                                'h-12 rounded-xl bg-background text-sm font-medium',
+                                executorIsResponsavel &&
+                                  'opacity-70 cursor-not-allowed bg-muted/50',
+                                executorError &&
+                                  'border-destructive focus-visible:ring-destructive',
+                              )}
+                            >
+                              <SelectValue placeholder="Selecione o executor..." />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
+                              <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                                <div className="relative">
+                                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                  <Input
+                                    placeholder="Filtrar por nome ou e-mail..."
+                                    value={buscaExecSelect}
+                                    onChange={(e) => setBuscaExecSelect(e.target.value)}
+                                    className="h-8 pl-8 pr-2 text-xs rounded-lg"
+                                    onClick={(e) => e.stopPropagation()}
+                                    onKeyDown={(e) => e.stopPropagation()}
+                                  />
+                                </div>
                               </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {statusError && (
-                        <p className="text-xs text-destructive font-medium">Selecione um status.</p>
-                      )}
-                    </div>
 
-                    {/* Data de Autorização */}
-                    <div className="space-y-1.5">
-                      <Label htmlFor="data-autorizacao" className="text-xs font-semibold">
-                        Data de Autorização
-                      </Label>
-                      <Input
-                        id="data-autorizacao"
-                        type="date"
-                        value={dataAutorizacao}
-                        onChange={(e) => setDataAutorizacao(e.target.value)}
-                        className="h-10 rounded-xl bg-background"
-                      />
-                    </div>
+                              {validacaoUsuariosStatus === 'carregando' ? (
+                                <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                  <span>Validando executores centrais...</span>
+                                </div>
+                              ) : opcoesExecutores.length === 0 ? (
+                                <div className="p-4 text-center text-xs text-muted-foreground">
+                                  {validacaoUsuariosStatus === 'falhou'
+                                    ? 'Validação central falhou. Novas escolhas suspensas.'
+                                    : 'Nenhum executor disponível encontrado.'}
+                                </div>
+                              ) : (
+                                opcoesExecutores.map((e) => {
+                                  const isInativoLocal = e.ativo === false
+                                  return (
+                                    <SelectItem key={e.id} value={e.id} className="py-2">
+                                      <div className="flex flex-col gap-0.5 text-left">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-semibold text-foreground text-xs">
+                                            {e.nome}
+                                          </span>
+                                          {isInativoLocal && (
+                                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
+                                              Inativo
+                                            </span>
+                                          )}
+                                        </div>
+                                        {e.email && (
+                                          <span className="text-[11px] text-muted-foreground font-normal">
+                                            {e.email}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </SelectItem>
+                                  )
+                                })
+                              )}
+                            </SelectContent>
+                          </Select>
+                        </div>
 
-                    {/* Prazo de Conclusão */}
-                    <div className="space-y-1.5">
-                      <Label
-                        htmlFor="prazo-conclusao"
-                        className={cn(
-                          'text-xs font-semibold flex items-center gap-1',
-                          !isAdmin && 'text-muted-foreground',
+                        {executorError && (
+                          <p className="text-xs text-destructive font-medium">
+                            O Executor é obrigatório.
+                          </p>
                         )}
-                      >
-                        <span>Prazo de Conclusão</span>
-                      </Label>
-                      <Input
-                        id="prazo-conclusao"
-                        type="date"
-                        value={prazoConclusao}
-                        disabled={!isAdmin}
-                        onChange={(e) => setPrazoConclusao(e.target.value)}
-                        className={cn(
-                          'h-10 rounded-xl bg-background text-xs font-medium',
-                          !isAdmin &&
-                            'opacity-70 cursor-not-allowed bg-muted/50 border-border select-none text-muted-foreground',
-                        )}
-                        title={
-                          !isAdmin
-                            ? 'Somente Administradores podem editar o Prazo de Conclusão.'
-                            : undefined
-                        }
-                      />
-                      {!isAdmin && (
-                        <p className="text-[11px] text-muted-foreground italic">
-                          Somente o Administrador pode inserir ou alterar o Prazo de Conclusão do
-                          caso.
-                        </p>
-                      )}
+                      </div>
                     </div>
-                  </div>
-                </div>
 
-                {/* Alertas de carregamento e erro recuperável */}
-                {loadingListas && (
-                  <div className="p-3.5 rounded-xl bg-primary/10 border border-primary/20 text-xs text-foreground flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" />
-                    <span>
-                      Carregando listas auxiliares e validando usuários no Gestor de Acessos...
-                    </span>
+                    {/* Bloco 4: Pasta Cliente e Pasta Ricci (sem placeholders demonstrativos) */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                      <div className="space-y-1.5">
+                        <Label
+                          htmlFor="pasta-cliente"
+                          className="text-xs font-semibold text-foreground"
+                        >
+                          Pasta Cliente
+                        </Label>
+                        <Input
+                          id="pasta-cliente"
+                          value={pastaCliente}
+                          onChange={(e) => setPastaCliente(e.target.value)}
+                          className="h-10 rounded-xl bg-background"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label
+                          htmlFor="pasta-ricci"
+                          className="text-xs font-semibold text-foreground"
+                        >
+                          Pasta Ricci
+                        </Label>
+                        <Input
+                          id="pasta-ricci"
+                          value={pastaRicci}
+                          onChange={(e) => setPastaRicci(e.target.value)}
+                          className="h-10 rounded-xl bg-background"
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
 
-                {(validacaoUsuariosStatus === 'falhou' || erroListasAuxiliares) &&
-                  !loadingListas && (
-                    <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 shrink-0" />
-                        <span>
-                          {erroUsuariosCentrais ||
-                            erroListasAuxiliares ||
-                            'Falha ao sincronizar listas auxiliares ou usuários.'}
-                        </span>
+                {/* ============================================================= */}
+                {/* ABA 2: PROVIDÊNCIA (MÚLTIPLAS)                                */}
+                {/* ============================================================= */}
+                {activeTab === 'providencias' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-foreground">
+                          Providências do Controle
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                          Adicione e gerencie providências com prazo, tipo e status individual.
+                        </p>
                       </div>
                       <Button
                         type="button"
-                        variant="outline"
                         size="sm"
-                        onClick={carregarListasAuxiliares}
-                        disabled={loadingListas}
-                        className="h-7 px-2.5 rounded-lg text-[11px] shrink-0 border-destructive/30 hover:bg-destructive/15 text-destructive"
+                        onClick={handleAdicionarProvidencia}
+                        className="h-9 rounded-xl px-3.5 bg-primary text-primary-foreground font-semibold text-xs flex items-center gap-1.5 shadow-sm"
                       >
-                        <RefreshCw className="w-3 h-3 mr-1" />
-                        Tentar novamente
+                        <Plus className="w-4 h-4 stroke-[2.5]" />
+                        <span>Adicionar providência</span>
                       </Button>
                     </div>
-                  )}
 
-                {/* Bloco 3: Responsável e Executor (única fonte: task_usuarios com dados centrais) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Responsável */}
-                  <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
-                        <User className="w-4 h-4 text-primary" />
-                        <span>
-                          Responsável <span className="text-destructive">*</span>
-                        </span>
+                    {providencias.length === 0 ? (
+                      <div className="p-8 text-center border border-dashed border-border rounded-2xl bg-muted/20 space-y-2">
+                        <Calendar className="w-8 h-8 text-muted-foreground mx-auto" />
+                        <p className="text-xs text-muted-foreground">
+                          Nenhuma providência adicionada a este controle.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleAdicionarProvidencia}
+                          className="rounded-xl text-xs"
+                        >
+                          + Adicionar providência
+                        </Button>
                       </div>
-                    </div>
-
-                    <div className="relative">
-                      <Select
-                        value={responsavelUsuarioId}
-                        disabled={
-                          (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
-                          !controleToEdit?.responsavel_usuario_id
-                        }
-                        onValueChange={(val) => {
-                          if (
-                            (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
-                            val !== controleToEdit?.responsavel_usuario_id
-                          ) {
-                            toast({
-                              variant: 'destructive',
-                              title: 'Seleção bloqueada',
-                              description:
-                                validacaoUsuariosStatus === 'carregando' || loadingListas
-                                  ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
-                                  : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
-                            })
-                            return
-                          }
-                          setResponsavelUsuarioId(val)
-                          if (executorIsResponsavel) {
-                            setExecutorUsuarioId(val)
-                            if (val && executorError) setExecutorError(false)
-                          }
-                          if (responsavelError) setResponsavelError(false)
-                        }}
-                      >
-                        <SelectTrigger
-                          className={cn(
-                            'h-12 rounded-xl bg-background text-sm font-medium',
-                            responsavelError && 'border-destructive focus-visible:ring-destructive',
-                          )}
-                        >
-                          <SelectValue placeholder="Selecione o responsável..." />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
-                          <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                            <div className="relative">
-                              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                              <Input
-                                placeholder="Filtrar por nome ou e-mail..."
-                                value={buscaRespSelect}
-                                onChange={(e) => setBuscaRespSelect(e.target.value)}
-                                className="h-8 pl-8 pr-2 text-xs rounded-lg"
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => e.stopPropagation()}
-                              />
-                            </div>
-                          </div>
-
-                          {validacaoUsuariosStatus === 'carregando' ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                              <span>Validando responsáveis centrais...</span>
-                            </div>
-                          ) : opcoesResponsaveis.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground">
-                              {validacaoUsuariosStatus === 'falhou'
-                                ? 'Validação central falhou. Novas escolhas suspensas.'
-                                : 'Nenhum responsável disponível encontrado.'}
-                            </div>
-                          ) : (
-                            opcoesResponsaveis.map((r) => {
-                              const isInativoLocal = r.ativo === false
-                              return (
-                                <SelectItem key={r.id} value={r.id} className="py-2">
-                                  <div className="flex flex-col gap-0.5 text-left">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-semibold text-foreground text-xs">
-                                        {r.nome}
-                                      </span>
-                                      {isInativoLocal && (
-                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
-                                          Inativo
-                                        </span>
-                                      )}
-                                    </div>
-                                    {r.email && (
-                                      <span className="text-[11px] text-muted-foreground font-normal">
-                                        {r.email}
-                                      </span>
-                                    )}
-                                  </div>
-                                </SelectItem>
-                              )
-                            })
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {responsavelError && (
-                      <p className="text-xs text-destructive font-medium">
-                        O Responsável é obrigatório.
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Executor */}
-                  <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-3">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase tracking-wider">
-                        <UserCheck className="w-4 h-4 text-primary" />
-                        <span>
-                          Executor <span className="text-destructive">*</span>
-                        </span>
-                      </div>
-
-                      {/* Opção sutil: Executor é o Responsável */}
-                      <label
-                        htmlFor="executor-is-responsavel-checkbox"
-                        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer select-none font-normal"
-                      >
-                        <Checkbox
-                          id="executor-is-responsavel-checkbox"
-                          checked={executorIsResponsavel}
-                          onCheckedChange={(checked) => {
-                            const isChecked = checked === true
-                            setExecutorIsResponsavel(isChecked)
-                            if (isChecked) {
-                              setExecutorUsuarioId(responsavelUsuarioId)
-                              if (responsavelUsuarioId && executorError) {
-                                setExecutorError(false)
-                              }
-                            }
-                          }}
-                          className="h-3.5 w-3.5 rounded"
-                        />
-                        <span>Executor é o Responsável</span>
-                      </label>
-                    </div>
-
-                    <div className="relative">
-                      <Select
-                        value={executorUsuarioId}
-                        disabled={
-                          executorIsResponsavel ||
-                          ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
-                            !controleToEdit?.executor_usuario_id)
-                        }
-                        onValueChange={(val) => {
-                          if (
-                            (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
-                            val !== controleToEdit?.executor_usuario_id
-                          ) {
-                            toast({
-                              variant: 'destructive',
-                              title: 'Seleção bloqueada',
-                              description:
-                                validacaoUsuariosStatus === 'carregando' || loadingListas
-                                  ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
-                                  : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
-                            })
-                            return
-                          }
-                          setExecutorUsuarioId(val)
-                          if (executorError) setExecutorError(false)
-                        }}
-                      >
-                        <SelectTrigger
-                          disabled={
-                            executorIsResponsavel ||
-                            ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
-                              !controleToEdit?.executor_usuario_id)
-                          }
-                          className={cn(
-                            'h-12 rounded-xl bg-background text-sm font-medium',
-                            executorIsResponsavel && 'opacity-70 cursor-not-allowed bg-muted/50',
-                            executorError && 'border-destructive focus-visible:ring-destructive',
-                          )}
-                        >
-                          <SelectValue placeholder="Selecione o executor..." />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl max-h-80 w-[var(--radix-select-trigger-width)]">
-                          <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                            <div className="relative">
-                              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                              <Input
-                                placeholder="Filtrar por nome ou e-mail..."
-                                value={buscaExecSelect}
-                                onChange={(e) => setBuscaExecSelect(e.target.value)}
-                                className="h-8 pl-8 pr-2 text-xs rounded-lg"
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => e.stopPropagation()}
-                              />
-                            </div>
-                          </div>
-
-                          {validacaoUsuariosStatus === 'carregando' ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                              <span>Validando executores centrais...</span>
-                            </div>
-                          ) : opcoesExecutores.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground">
-                              {validacaoUsuariosStatus === 'falhou'
-                                ? 'Validação central falhou. Novas escolhas suspensas.'
-                                : 'Nenhum executor disponível encontrado.'}
-                            </div>
-                          ) : (
-                            opcoesExecutores.map((e) => {
-                              const isInativoLocal = e.ativo === false
-                              return (
-                                <SelectItem key={e.id} value={e.id} className="py-2">
-                                  <div className="flex flex-col gap-0.5 text-left">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-semibold text-foreground text-xs">
-                                        {e.nome}
-                                      </span>
-                                      {isInativoLocal && (
-                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
-                                          Inativo
-                                        </span>
-                                      )}
-                                    </div>
-                                    {e.email && (
-                                      <span className="text-[11px] text-muted-foreground font-normal">
-                                        {e.email}
-                                      </span>
-                                    )}
-                                  </div>
-                                </SelectItem>
-                              )
-                            })
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {executorError && (
-                      <p className="text-xs text-destructive font-medium">
-                        O Executor é obrigatório.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Bloco 4: Pasta Cliente e Pasta Ricci (sem placeholders demonstrativos) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                  <div className="space-y-1.5">
-                    <Label
-                      htmlFor="pasta-cliente"
-                      className="text-xs font-semibold text-foreground"
-                    >
-                      Pasta Cliente
-                    </Label>
-                    <Input
-                      id="pasta-cliente"
-                      value={pastaCliente}
-                      onChange={(e) => setPastaCliente(e.target.value)}
-                      className="h-10 rounded-xl bg-background"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label htmlFor="pasta-ricci" className="text-xs font-semibold text-foreground">
-                      Pasta Ricci
-                    </Label>
-                    <Input
-                      id="pasta-ricci"
-                      value={pastaRicci}
-                      onChange={(e) => setPastaRicci(e.target.value)}
-                      className="h-10 rounded-xl bg-background"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ============================================================= */}
-            {/* ABA 2: PROVIDÊNCIA (MÚLTIPLAS)                                */}
-            {/* ============================================================= */}
-            {activeTab === 'providencias' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <h3 className="text-sm font-bold text-foreground">Providências do Controle</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Adicione e gerencie providências com prazo, tipo e status individual.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleAdicionarProvidencia}
-                    className="h-9 rounded-xl px-3.5 bg-primary text-primary-foreground font-semibold text-xs flex items-center gap-1.5 shadow-sm"
-                  >
-                    <Plus className="w-4 h-4 stroke-[2.5]" />
-                    <span>Adicionar providência</span>
-                  </Button>
-                </div>
-
-                {providencias.length === 0 ? (
-                  <div className="p-8 text-center border border-dashed border-border rounded-2xl bg-muted/20 space-y-2">
-                    <Calendar className="w-8 h-8 text-muted-foreground mx-auto" />
-                    <p className="text-xs text-muted-foreground">
-                      Nenhuma providência adicionada a este controle.
-                    </p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleAdicionarProvidencia}
-                      className="rounded-xl text-xs"
-                    >
-                      + Adicionar providência
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {providenciasExibicao.map((item) => {
-                      const numeroExibicao = item.numeroHumano
-                      return (
-                        <div
-                          key={item.tempId}
-                          className="p-4 rounded-xl border border-border bg-card shadow-xs space-y-3 relative group"
-                        >
-                          {/* Topo do card da providência */}
-                          <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-2">
-                            <span className="text-xs font-bold text-primary flex items-center gap-1.5">
-                              <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-bold">
-                                {numeroExibicao}
-                              </span>
-                              <span>
-                                Providência #{numeroExibicao}
-                                {!item.isPersisted && (
-                                  <span className="text-primary/80 font-normal ml-1">(nova)</span>
-                                )}
-                              </span>
-                            </span>
-
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleSolicitarRemocaoProvidencia(item)}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                              title="Remover providência"
+                    ) : (
+                      <div className="space-y-4">
+                        {providenciasExibicao.map((item) => {
+                          const numeroExibicao = item.numeroHumano
+                          return (
+                            <div
+                              key={item.tempId}
+                              className="p-4 rounded-xl border border-border bg-card shadow-xs space-y-3 relative group"
                             >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-
-                          {/* Campos da providência */}
-                          <div className="space-y-3">
-                            {/* Campo 1: Providência (textarea) */}
-                            <div className="space-y-1">
-                              <Label className="text-xs font-semibold flex items-center justify-between">
-                                <span>
-                                  Providência <span className="text-destructive">*</span>
+                              {/* Topo do card da providência */}
+                              <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-2">
+                                <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                                  <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-bold">
+                                    {numeroExibicao}
+                                  </span>
+                                  <span>
+                                    Providência #{numeroExibicao}
+                                    {!item.isPersisted && (
+                                      <span className="text-primary/80 font-normal ml-1">
+                                        (nova)
+                                      </span>
+                                    )}
+                                  </span>
                                 </span>
-                                <span className="text-[11px] text-muted-foreground font-normal">
-                                  Descrição detalhada
-                                </span>
-                              </Label>
-                              <Textarea
-                                rows={2}
-                                value={item.providencia}
-                                ref={(el) => {
-                                  if (el && focusNewProvId === item.tempId) {
-                                    setTimeout(() => {
-                                      el.focus()
-                                    }, 10)
-                                    setFocusNewProvId(null)
-                                  }
-                                }}
-                                onChange={(e) =>
-                                  handleUpdateProvidencia(
-                                    item.tempId,
-                                    'providencia',
-                                    e.target.value,
-                                  )
-                                }
-                                className="resize-y min-h-[60px] rounded-xl bg-background text-xs sm:text-sm"
-                              />
-                            </div>
 
-                            {/* Campos 2, 3 e 4 em grid */}
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                              {/* Campo 2: Prazo de Conclusão (date) */}
-                              <div className="space-y-1">
-                                <Label className="text-xs font-semibold">
-                                  Prazo de Conclusão <span className="text-destructive">*</span>
-                                </Label>
-                                <Input
-                                  type="date"
-                                  value={item.prazo_conclusao}
-                                  onChange={(e) =>
-                                    handleUpdateProvidencia(
-                                      item.tempId,
-                                      'prazo_conclusao',
-                                      e.target.value,
-                                    )
-                                  }
-                                  className="h-9 rounded-xl bg-background text-xs"
-                                />
-                              </div>
-
-                              {/* Campo 3: Tipo de Prazo */}
-                              <div className="space-y-1">
-                                <Label className="text-xs font-semibold">
-                                  Tipo de Prazo <span className="text-destructive">*</span>
-                                </Label>
-                                <Select
-                                  value={item.tipo_prazo_id}
-                                  onValueChange={(val) =>
-                                    handleUpdateProvidencia(item.tempId, 'tipo_prazo_id', val)
-                                  }
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleSolicitarRemocaoProvidencia(item)}
+                                  className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                  title="Remover providência"
                                 >
-                                  <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
-                                    <SelectValue placeholder="Selecione o tipo..." />
-                                  </SelectTrigger>
-                                  <SelectContent className="rounded-xl">
-                                    {tiposPrazoList.map((tp) => (
-                                      <SelectItem key={tp.id} value={tp.id}>
-                                        {tp.nome}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
                               </div>
 
-                              {/* Campo 4: Status (task_status_providencia) */}
-                              <div className="space-y-1">
-                                <Label className="text-xs font-semibold">
-                                  Status <span className="text-destructive">*</span>
-                                </Label>
-                                <Select
-                                  value={item.status_id}
-                                  onValueChange={(val) => {
-                                    handleUpdateProvidencia(item.tempId, 'status_id', val)
-                                    const st = statusProvLista.find((s) => s.id === val)
-                                    const cod = st?.codigo?.toLowerCase() || ''
-                                    if (
-                                      cod === 'cancelado' ||
-                                      cod === 'concluido' ||
-                                      cod === 'suspenso'
-                                    ) {
-                                      if (!item.data_conclusao) {
-                                        handleUpdateProvidencia(
-                                          item.tempId,
-                                          'data_conclusao',
-                                          getTodayLocalDate(),
-                                        )
+                              {/* Campos da providência */}
+                              <div className="space-y-3">
+                                {/* Campo 1: Providência (textarea) */}
+                                <div className="space-y-1">
+                                  <Label className="text-xs font-semibold flex items-center justify-between">
+                                    <span>
+                                      Providência <span className="text-destructive">*</span>
+                                    </span>
+                                    <span className="text-[11px] text-muted-foreground font-normal">
+                                      Descrição detalhada
+                                    </span>
+                                  </Label>
+                                  <Textarea
+                                    rows={2}
+                                    value={item.providencia}
+                                    ref={(el) => {
+                                      if (el && focusNewProvId === item.tempId) {
+                                        setTimeout(() => {
+                                          el.focus()
+                                        }, 10)
+                                        setFocusNewProvId(null)
                                       }
-                                    } else {
-                                      handleUpdateProvidencia(item.tempId, 'data_conclusao', null)
+                                    }}
+                                    onChange={(e) =>
+                                      handleUpdateProvidencia(
+                                        item.tempId,
+                                        'providencia',
+                                        e.target.value,
+                                      )
                                     }
-                                  }}
-                                >
-                                  <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
-                                    <SelectValue placeholder="Selecione o status..." />
-                                  </SelectTrigger>
-                                  <SelectContent className="rounded-xl">
-                                    {statusProvLista.map((sp) => (
-                                      <SelectItem key={sp.id} value={sp.id}>
-                                        <div className="flex items-center gap-1.5">
-                                          <span>{sp.nome}</span>
-                                        </div>
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
+                                    className="resize-y min-h-[60px] rounded-xl bg-background text-xs sm:text-sm"
+                                  />
+                                </div>
 
-                              {/* Campo 5: Data de Conclusão (exibida quando o status for cancelado, concluido ou suspenso) */}
-                              {(() => {
-                                const st = statusProvLista.find((s) => s.id === item.status_id)
-                                const cod = st?.codigo?.toLowerCase() || ''
-                                const exigeData =
-                                  cod === 'cancelado' || cod === 'concluido' || cod === 'suspenso'
-                                if (!exigeData) return null
-
-                                return (
-                                  <div className="space-y-1 animate-fade-in sm:col-span-3">
-                                    <Label className="text-xs font-semibold flex items-center gap-1 text-primary">
-                                      <CalendarIcon className="w-3.5 h-3.5" />
-                                      <span>Data de Conclusão</span>
-                                      <span className="text-destructive">*</span>
+                                {/* Campos 2, 3 e 4 em grid */}
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                  {/* Campo 2: Prazo de Conclusão (date) */}
+                                  <div className="space-y-1">
+                                    <Label className="text-xs font-semibold">
+                                      Prazo de Conclusão <span className="text-destructive">*</span>
                                     </Label>
                                     <Input
                                       type="date"
-                                      disabled={!isAdmin}
-                                      value={item.data_conclusao || ''}
+                                      value={item.prazo_conclusao}
                                       onChange={(e) =>
                                         handleUpdateProvidencia(
                                           item.tempId,
-                                          'data_conclusao',
+                                          'prazo_conclusao',
                                           e.target.value,
                                         )
                                       }
-                                      className={cn(
-                                        'h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary sm:max-w-xs',
-                                        !isAdmin &&
-                                          'opacity-70 cursor-not-allowed bg-muted/50 border-border select-none text-muted-foreground',
-                                      )}
-                                      title={
-                                        !isAdmin
-                                          ? 'Somente Administradores podem editar a Data de Conclusão.'
-                                          : undefined
-                                      }
+                                      className="h-9 rounded-xl bg-background text-xs"
                                     />
-                                    {!isAdmin && (
-                                      <p className="text-[11px] text-muted-foreground italic mt-0.5">
-                                        Somente o Administrador pode inserir ou alterar manualmente
-                                        a Data de Conclusão.
-                                      </p>
-                                    )}
                                   </div>
-                                )
-                              })()}
-                            </div>
 
-                            {/* Seção de Preferências de Alerta por E-mail (sutil e compacta) */}
-                            <div className="pt-2 border-t border-border/40">
-                              <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-2">
-                                {/* Checkbox Principal: Receber alertas + Controles discretos Marcar todos / Desmarcar todos */}
-                                <div className="flex items-center justify-between flex-wrap gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <Checkbox
-                                      id={`email-alertas-${item.tempId}`}
-                                      checked={Boolean(item.email_alertas)}
-                                      onCheckedChange={(checked) => {
-                                        const isTurningOn = checked === true
-                                        if (isTurningOn) {
-                                          handleBatchUpdateProvidencia(item.tempId, {
-                                            email_alertas: true,
-                                            email_alerta_inclusao: true,
-                                            email_alerta_atraso: true,
-                                            email_alerta_atualizacao: true,
-                                          })
+                                  {/* Campo 3: Tipo de Prazo */}
+                                  <div className="space-y-1">
+                                    <Label className="text-xs font-semibold">
+                                      Tipo de Prazo <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Select
+                                      value={item.tipo_prazo_id}
+                                      onValueChange={(val) =>
+                                        handleUpdateProvidencia(item.tempId, 'tipo_prazo_id', val)
+                                      }
+                                    >
+                                      <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                                        <SelectValue placeholder="Selecione o tipo..." />
+                                      </SelectTrigger>
+                                      <SelectContent className="rounded-xl">
+                                        {tiposPrazoList.map((tp) => (
+                                          <SelectItem key={tp.id} value={tp.id}>
+                                            {tp.nome}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+
+                                  {/* Campo 4: Status (task_status_providencia) */}
+                                  <div className="space-y-1">
+                                    <Label className="text-xs font-semibold">
+                                      Status <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Select
+                                      value={item.status_id}
+                                      onValueChange={(val) => {
+                                        handleUpdateProvidencia(item.tempId, 'status_id', val)
+                                        const st = statusProvLista.find((s) => s.id === val)
+                                        const cod = st?.codigo?.toLowerCase() || ''
+                                        if (
+                                          cod === 'cancelado' ||
+                                          cod === 'concluido' ||
+                                          cod === 'suspenso'
+                                        ) {
+                                          if (!item.data_conclusao) {
+                                            handleUpdateProvidencia(
+                                              item.tempId,
+                                              'data_conclusao',
+                                              getTodayLocalDate(),
+                                            )
+                                          }
                                         } else {
                                           handleUpdateProvidencia(
                                             item.tempId,
-                                            'email_alertas',
-                                            false,
+                                            'data_conclusao',
+                                            null,
                                           )
                                         }
                                       }}
-                                    />
-                                    <Label
-                                      htmlFor={`email-alertas-${item.tempId}`}
-                                      className="text-xs font-semibold text-foreground cursor-pointer flex items-center gap-1.5 select-none"
                                     >
-                                      <Bell className="w-3.5 h-3.5 text-primary" />
-                                      <span>Receber alertas</span>
-                                    </Label>
+                                      <SelectTrigger className="h-9 rounded-xl bg-background text-xs">
+                                        <SelectValue placeholder="Selecione o status..." />
+                                      </SelectTrigger>
+                                      <SelectContent className="rounded-xl">
+                                        {statusProvLista.map((sp) => (
+                                          <SelectItem key={sp.id} value={sp.id}>
+                                            <div className="flex items-center gap-1.5">
+                                              <span>{sp.nome}</span>
+                                            </div>
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
                                   </div>
 
-                                  <div className="flex items-center gap-2 text-xs">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleBatchUpdateProvidencia(item.tempId, {
-                                          email_alerta_inclusao: true,
-                                          email_alerta_atraso: true,
-                                          email_alerta_atualizacao: true,
-                                        })
-                                      }
-                                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer select-none underline-offset-2 hover:underline"
-                                    >
-                                      Marcar todos
-                                    </button>
-                                    <span className="text-muted-foreground/40 text-[10px]">•</span>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleBatchUpdateProvidencia(item.tempId, {
-                                          email_alerta_inclusao: false,
-                                          email_alerta_atraso: false,
-                                          email_alerta_atualizacao: false,
-                                        })
-                                      }
-                                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer select-none underline-offset-2 hover:underline"
-                                    >
-                                      Desmarcar todos
-                                    </button>
-                                  </div>
+                                  {/* Campo 5: Data de Conclusão (exibida quando o status for cancelado, concluido ou suspenso) */}
+                                  {(() => {
+                                    const st = statusProvLista.find((s) => s.id === item.status_id)
+                                    const cod = st?.codigo?.toLowerCase() || ''
+                                    const exigeData =
+                                      cod === 'cancelado' ||
+                                      cod === 'concluido' ||
+                                      cod === 'suspenso'
+                                    if (!exigeData) return null
+
+                                    return (
+                                      <div className="space-y-1 animate-fade-in sm:col-span-3">
+                                        <Label className="text-xs font-semibold flex items-center gap-1 text-primary">
+                                          <CalendarIcon className="w-3.5 h-3.5" />
+                                          <span>Data de Conclusão</span>
+                                          <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Input
+                                          type="date"
+                                          disabled={!isAdmin}
+                                          value={item.data_conclusao || ''}
+                                          onChange={(e) =>
+                                            handleUpdateProvidencia(
+                                              item.tempId,
+                                              'data_conclusao',
+                                              e.target.value,
+                                            )
+                                          }
+                                          className={cn(
+                                            'h-9 rounded-xl bg-background text-xs font-medium border-primary/40 focus-visible:ring-primary sm:max-w-xs',
+                                            !isAdmin &&
+                                              'opacity-70 cursor-not-allowed bg-muted/50 border-border select-none text-muted-foreground',
+                                          )}
+                                          title={
+                                            !isAdmin
+                                              ? 'Somente Administradores podem editar a Data de Conclusão.'
+                                              : undefined
+                                          }
+                                        />
+                                        {!isAdmin && (
+                                          <p className="text-[11px] text-muted-foreground italic mt-0.5">
+                                            Somente o Administrador pode inserir ou alterar
+                                            manualmente a Data de Conclusão.
+                                          </p>
+                                        )}
+                                      </div>
+                                    )
+                                  })()}
                                 </div>
 
-                                {/* Subtipos de alerta: Inclusão, Atraso, Atualização */}
-                                <div
-                                  className={cn(
-                                    'pl-6 flex flex-wrap items-center gap-x-5 gap-y-1.5 transition-opacity duration-150',
-                                    !item.email_alertas && 'opacity-40 pointer-events-none',
-                                  )}
-                                >
-                                  {/* Subtipo 1: Inclusão da providência */}
-                                  <div className="flex items-center gap-1.5">
-                                    <Checkbox
-                                      id={`alerta-inclusao-${item.tempId}`}
-                                      disabled={!item.email_alertas}
-                                      checked={Boolean(item.email_alerta_inclusao)}
-                                      onCheckedChange={(checked) =>
-                                        handleUpdateProvidencia(
-                                          item.tempId,
-                                          'email_alerta_inclusao',
-                                          checked === true,
-                                        )
-                                      }
-                                      className="h-3.5 w-3.5 rounded"
-                                    />
-                                    <Label
-                                      htmlFor={`alerta-inclusao-${item.tempId}`}
-                                      className={cn(
-                                        'text-[11px] text-muted-foreground select-none',
-                                        item.email_alertas
-                                          ? 'cursor-pointer hover:text-foreground'
-                                          : 'cursor-not-allowed',
-                                      )}
-                                    >
-                                      Inclusão da providência
-                                    </Label>
-                                  </div>
+                                {/* Seção de Preferências de Alerta por E-mail (sutil e compacta) */}
+                                <div className="pt-2 border-t border-border/40">
+                                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-2">
+                                    {/* Checkbox Principal: Receber alertas + Controles discretos Marcar todos / Desmarcar todos */}
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <Checkbox
+                                          id={`email-alertas-${item.tempId}`}
+                                          checked={Boolean(item.email_alertas)}
+                                          onCheckedChange={(checked) => {
+                                            const isTurningOn = checked === true
+                                            if (isTurningOn) {
+                                              handleBatchUpdateProvidencia(item.tempId, {
+                                                email_alertas: true,
+                                                email_alerta_inclusao: true,
+                                                email_alerta_atraso: true,
+                                                email_alerta_atualizacao: true,
+                                              })
+                                            } else {
+                                              handleUpdateProvidencia(
+                                                item.tempId,
+                                                'email_alertas',
+                                                false,
+                                              )
+                                            }
+                                          }}
+                                        />
+                                        <Label
+                                          htmlFor={`email-alertas-${item.tempId}`}
+                                          className="text-xs font-semibold text-foreground cursor-pointer flex items-center gap-1.5 select-none"
+                                        >
+                                          <Bell className="w-3.5 h-3.5 text-primary" />
+                                          <span>Receber alertas</span>
+                                        </Label>
+                                      </div>
 
-                                  {/* Subtipo 2: Providência atrasada */}
-                                  <div className="flex items-center gap-1.5">
-                                    <Checkbox
-                                      id={`alerta-atraso-${item.tempId}`}
-                                      disabled={!item.email_alertas}
-                                      checked={Boolean(item.email_alerta_atraso)}
-                                      onCheckedChange={(checked) =>
-                                        handleUpdateProvidencia(
-                                          item.tempId,
-                                          'email_alerta_atraso',
-                                          checked === true,
-                                        )
-                                      }
-                                      className="h-3.5 w-3.5 rounded"
-                                    />
-                                    <Label
-                                      htmlFor={`alerta-atraso-${item.tempId}`}
-                                      className={cn(
-                                        'text-[11px] text-muted-foreground select-none',
-                                        item.email_alertas
-                                          ? 'cursor-pointer hover:text-foreground'
-                                          : 'cursor-not-allowed',
-                                      )}
-                                    >
-                                      Providência atrasada
-                                    </Label>
-                                  </div>
+                                      <div className="flex items-center gap-2 text-xs">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleBatchUpdateProvidencia(item.tempId, {
+                                              email_alerta_inclusao: true,
+                                              email_alerta_atraso: true,
+                                              email_alerta_atualizacao: true,
+                                            })
+                                          }
+                                          className="text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer select-none underline-offset-2 hover:underline"
+                                        >
+                                          Marcar todos
+                                        </button>
+                                        <span className="text-muted-foreground/40 text-[10px]">
+                                          •
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleBatchUpdateProvidencia(item.tempId, {
+                                              email_alerta_inclusao: false,
+                                              email_alerta_atraso: false,
+                                              email_alerta_atualizacao: false,
+                                            })
+                                          }
+                                          className="text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer select-none underline-offset-2 hover:underline"
+                                        >
+                                          Desmarcar todos
+                                        </button>
+                                      </div>
+                                    </div>
 
-                                  {/* Subtipo 3: Atualização da providência */}
-                                  <div className="flex items-center gap-1.5">
-                                    <Checkbox
-                                      id={`alerta-atualizacao-${item.tempId}`}
-                                      disabled={!item.email_alertas}
-                                      checked={Boolean(item.email_alerta_atualizacao)}
-                                      onCheckedChange={(checked) =>
-                                        handleUpdateProvidencia(
-                                          item.tempId,
-                                          'email_alerta_atualizacao',
-                                          checked === true,
-                                        )
-                                      }
-                                      className="h-3.5 w-3.5 rounded"
-                                    />
-                                    <Label
-                                      htmlFor={`alerta-atualizacao-${item.tempId}`}
+                                    {/* Subtipos de alerta: Inclusão, Atraso, Atualização */}
+                                    <div
                                       className={cn(
-                                        'text-[11px] text-muted-foreground select-none',
-                                        item.email_alertas
-                                          ? 'cursor-pointer hover:text-foreground'
-                                          : 'cursor-not-allowed',
+                                        'pl-6 flex flex-wrap items-center gap-x-5 gap-y-1.5 transition-opacity duration-150',
+                                        !item.email_alertas && 'opacity-40 pointer-events-none',
                                       )}
                                     >
-                                      Atualização da providência
-                                    </Label>
+                                      {/* Subtipo 1: Inclusão da providência */}
+                                      <div className="flex items-center gap-1.5">
+                                        <Checkbox
+                                          id={`alerta-inclusao-${item.tempId}`}
+                                          disabled={!item.email_alertas}
+                                          checked={Boolean(item.email_alerta_inclusao)}
+                                          onCheckedChange={(checked) =>
+                                            handleUpdateProvidencia(
+                                              item.tempId,
+                                              'email_alerta_inclusao',
+                                              checked === true,
+                                            )
+                                          }
+                                          className="h-3.5 w-3.5 rounded"
+                                        />
+                                        <Label
+                                          htmlFor={`alerta-inclusao-${item.tempId}`}
+                                          className={cn(
+                                            'text-[11px] text-muted-foreground select-none',
+                                            item.email_alertas
+                                              ? 'cursor-pointer hover:text-foreground'
+                                              : 'cursor-not-allowed',
+                                          )}
+                                        >
+                                          Inclusão da providência
+                                        </Label>
+                                      </div>
+
+                                      {/* Subtipo 2: Providência atrasada */}
+                                      <div className="flex items-center gap-1.5">
+                                        <Checkbox
+                                          id={`alerta-atraso-${item.tempId}`}
+                                          disabled={!item.email_alertas}
+                                          checked={Boolean(item.email_alerta_atraso)}
+                                          onCheckedChange={(checked) =>
+                                            handleUpdateProvidencia(
+                                              item.tempId,
+                                              'email_alerta_atraso',
+                                              checked === true,
+                                            )
+                                          }
+                                          className="h-3.5 w-3.5 rounded"
+                                        />
+                                        <Label
+                                          htmlFor={`alerta-atraso-${item.tempId}`}
+                                          className={cn(
+                                            'text-[11px] text-muted-foreground select-none',
+                                            item.email_alertas
+                                              ? 'cursor-pointer hover:text-foreground'
+                                              : 'cursor-not-allowed',
+                                          )}
+                                        >
+                                          Providência atrasada
+                                        </Label>
+                                      </div>
+
+                                      {/* Subtipo 3: Atualização da providência */}
+                                      <div className="flex items-center gap-1.5">
+                                        <Checkbox
+                                          id={`alerta-atualizacao-${item.tempId}`}
+                                          disabled={!item.email_alertas}
+                                          checked={Boolean(item.email_alerta_atualizacao)}
+                                          onCheckedChange={(checked) =>
+                                            handleUpdateProvidencia(
+                                              item.tempId,
+                                              'email_alerta_atualizacao',
+                                              checked === true,
+                                            )
+                                          }
+                                          className="h-3.5 w-3.5 rounded"
+                                        />
+                                        <Label
+                                          htmlFor={`alerta-atualizacao-${item.tempId}`}
+                                          className={cn(
+                                            'text-[11px] text-muted-foreground select-none',
+                                            item.email_alertas
+                                              ? 'cursor-pointer hover:text-foreground'
+                                              : 'cursor-not-allowed',
+                                          )}
+                                        >
+                                          Atualização da providência
+                                        </Label>
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        </div>
-                      )
-                    })}
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
             )}
           </div>
 
@@ -2154,7 +2219,7 @@ export function ControleModal({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={saving}
+                disabled={verificandoAcesso || saving}
                 onClick={() => onOpenChange(false)}
                 className="h-10 px-4 rounded-xl text-xs"
               >
@@ -2165,6 +2230,7 @@ export function ControleModal({
                 type="button"
                 size="sm"
                 disabled={
+                  verificandoAcesso ||
                   saving ||
                   loadingListas ||
                   (!controleToEdit && validacaoUsuariosStatus !== 'válida')
@@ -2172,7 +2238,7 @@ export function ControleModal({
                 onClick={() => handleSubmitControle()}
                 className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary text-primary-foreground shadow-sm hover:bg-[#4A4AC2]"
               >
-                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {(verificandoAcesso || saving) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 <span>{controleToEdit ? 'Salvar Alterações' : 'Criar Controle'}</span>
               </Button>
             </div>

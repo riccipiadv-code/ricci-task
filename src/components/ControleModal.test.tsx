@@ -25,6 +25,7 @@ vi.mock('@/services/controleService', () => ({
     notifyProvidenciaAtualizacao: vi.fn(),
     deleteProvidencia: vi.fn(),
     getControleUpdatedAt: vi.fn(),
+    checkControleAccessScope: vi.fn(),
   },
 }))
 
@@ -69,6 +70,17 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       },
     ] as any)
     vi.mocked(controleService.getUsuariosAtivos).mockResolvedValue(mockUsuariosAtivosValidados)
+    vi.mocked(controleService.checkControleAccessScope).mockImplementation(
+      async (ctrl, perfil, coreId) => {
+        if (!perfil || !coreId) return false
+        const p = perfil.trim().toUpperCase()
+        if (p === 'ADMINISTRADOR') return true
+        const cId = coreId.trim()
+        const resp = ctrl.responsavel_core_usuario_id || null
+        const exec = ctrl.executor_core_usuario_id || null
+        return Boolean((resp && resp === cId) || (exec && exec === cId))
+      },
+    )
   })
 
   it('exibição e preservação de pessoa inativa existente fora da lista ativa', async () => {
@@ -267,7 +279,14 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
       />,
     )
 
-    expect(onOpenChangeMock).toHaveBeenCalledWith(false)
+    await waitFor(() => {
+      expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+        controleDeOutro,
+        'OPERACIONAL',
+        'cu-op-1',
+      )
+      expect(onOpenChangeMock).toHaveBeenCalledWith(false)
+    })
   })
 
   it('ADMINISTRADOR: campo de data_conclusao da providência fica habilitado e editável', async () => {
@@ -1036,6 +1055,458 @@ describe('ControleModal (Transição de responsáveis/executores para IDs centra
           'uuid-prov-4',
         )
       })
+    })
+  })
+
+  describe('Etapa 2: Restrição de acesso ao caso no ControleModal via checkControleAccessScope', () => {
+    const casoGestorResp: TaskControleRecord = {
+      id: 'caso-gestor-resp-1',
+      nome_controle_id: 'nc-1',
+      numero_caso: 80,
+      identificacao_caso: 'Caso Gestor Responsavel',
+      status_id: 'st-aberto',
+      responsavel_usuario_id: 'tu-gestor',
+      executor_usuario_id: 'tu-outro',
+      responsavel_core_usuario_id: 'cu-gestor-1',
+      executor_core_usuario_id: 'cu-outro-2',
+      data_autorizacao: '2024-01-10',
+      prazo_conclusao: '2024-02-10',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2024-01-10T10:00:00Z',
+      created_by: null,
+      updated_at: '2024-01-10T10:00:00Z',
+      updated_by: null,
+      deleted_at: null,
+      deleted_by: null,
+      providencias: [],
+    }
+
+    const casoGestorExec: TaskControleRecord = {
+      id: 'caso-gestor-exec-1',
+      nome_controle_id: 'nc-1',
+      numero_caso: 81,
+      identificacao_caso: 'Caso Gestor Executor',
+      status_id: 'st-aberto',
+      responsavel_usuario_id: 'tu-outro',
+      executor_usuario_id: 'tu-gestor',
+      responsavel_core_usuario_id: 'cu-outro-1',
+      executor_core_usuario_id: 'cu-gestor-1',
+      data_autorizacao: '2024-01-10',
+      prazo_conclusao: '2024-02-10',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2024-01-10T10:00:00Z',
+      created_by: null,
+      updated_at: '2024-01-10T10:00:00Z',
+      updated_by: null,
+      deleted_at: null,
+      deleted_by: null,
+      providencias: [],
+    }
+
+    const casoSubordinado: TaskControleRecord = {
+      id: 'caso-subordinado-1',
+      nome_controle_id: 'nc-1',
+      numero_caso: 82,
+      identificacao_caso: 'Caso Subordinado Exclusivo',
+      status_id: 'st-aberto',
+      responsavel_usuario_id: 'tu-subordinado',
+      executor_usuario_id: 'tu-subordinado',
+      responsavel_core_usuario_id: 'cu-subordinado-1',
+      executor_core_usuario_id: 'cu-subordinado-1',
+      data_autorizacao: '2024-01-10',
+      prazo_conclusao: '2024-02-10',
+      pasta_cliente: null,
+      pasta_ricci: null,
+      created_at: '2024-01-10T10:00:00Z',
+      created_by: null,
+      updated_at: '2024-01-10T10:00:00Z',
+      updated_by: null,
+      deleted_at: null,
+      deleted_by: null,
+      providencias: [],
+    }
+
+    it('1. Gestor responsável do caso: permitido abrir', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-gestor' },
+        corePerfil: 'GESTOR',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      const onOpenChangeMock = vi.fn()
+
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenChangeMock}
+          controleToEdit={casoGestorResp}
+          statusList={[
+            {
+              id: 'st-aberto',
+              codigo: 'pendente',
+              nome: 'Pendente',
+              ordem: 1,
+              ativo: true,
+              finaliza: false,
+            },
+          ]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+          casoGestorResp,
+          'GESTOR',
+          'cu-gestor-1',
+        )
+      })
+
+      // Modal não fecha e os dados são carregados
+      expect(onOpenChangeMock).not.toHaveBeenCalledWith(false)
+      expect(await screen.findByDisplayValue('Caso Gestor Responsavel')).toBeDefined()
+    })
+
+    it('2. Gestor executor do caso: permitido abrir', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-gestor' },
+        corePerfil: 'GESTOR',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      const onOpenChangeMock = vi.fn()
+
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenChangeMock}
+          controleToEdit={casoGestorExec}
+          statusList={[
+            {
+              id: 'st-aberto',
+              codigo: 'pendente',
+              nome: 'Pendente',
+              ordem: 1,
+              ativo: true,
+              finaliza: false,
+            },
+          ]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+          casoGestorExec,
+          'GESTOR',
+          'cu-gestor-1',
+        )
+      })
+
+      expect(onOpenChangeMock).not.toHaveBeenCalledWith(false)
+      expect(await screen.findByDisplayValue('Caso Gestor Executor')).toBeDefined()
+    })
+
+    it('3. Caso exclusivo de subordinado: negado (bloqueado + acesso negado + fecha modal)', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-gestor' },
+        corePerfil: 'GESTOR',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      const onOpenChangeMock = vi.fn()
+
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenChangeMock}
+          controleToEdit={casoSubordinado}
+          statusList={[]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+          casoSubordinado,
+          'GESTOR',
+          'cu-gestor-1',
+        )
+        expect(onOpenChangeMock).toHaveBeenCalledWith(false)
+      })
+
+      // Dados não devem estar no formulário
+      expect(screen.queryByDisplayValue('Caso Subordinado Exclusivo')).toBeNull()
+    })
+
+    it('4. IDs centrais ausentes / identidade pendente: negado', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-anon' },
+        corePerfil: null,
+        coreUserId: null,
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      const onOpenChangeMock = vi.fn()
+
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenChangeMock}
+          controleToEdit={casoGestorResp}
+          statusList={[]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+          casoGestorResp,
+          null,
+          null,
+        )
+        expect(onOpenChangeMock).toHaveBeenCalledWith(false)
+      })
+
+      expect(screen.queryByDisplayValue('Caso Gestor Responsavel')).toBeNull()
+    })
+
+    it('5. Verificação pendente: dados não expostos e salvamento bloqueado', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-gestor' },
+        corePerfil: 'GESTOR',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      let resolvePromise: (val: boolean) => void = () => {}
+      const pendingPromise = new Promise<boolean>((resolve) => {
+        resolvePromise = resolve
+      })
+
+      vi.mocked(controleService.checkControleAccessScope).mockReturnValueOnce(pendingPromise)
+
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={vi.fn()}
+          controleToEdit={casoGestorResp}
+          statusList={[]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      // Enquanto a Promise está pendente:
+      expect(screen.getByText('Verificando permissões de acesso ao caso...')).toBeDefined()
+      expect(screen.queryByDisplayValue('Caso Gestor Responsavel')).toBeNull()
+
+      // Botão Salvar desabilitado
+      const salvarBtn = screen.getByRole('button', { name: /Salvar Alterações/i })
+      expect(salvarBtn).toBeDefined()
+      expect((salvarBtn as HTMLButtonElement).disabled).toBe(true)
+
+      // Resolve a Promise autorizando
+      resolvePromise(true)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Verificando permissões de acesso ao caso...')).toBeNull()
+        expect(screen.getByDisplayValue('Caso Gestor Responsavel')).toBeDefined()
+      })
+    })
+
+    it('6. Troca de caso/fechamento: resultado de verificação anterior descartado, não autoriza o caso novo', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-gestor' },
+        corePerfil: 'GESTOR',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      let resolveSlowCase1: (val: boolean) => void = () => {}
+      const slowPromiseCase1 = new Promise<boolean>((resolve) => {
+        resolveSlowCase1 = resolve
+      })
+
+      vi.mocked(controleService.checkControleAccessScope).mockReturnValueOnce(slowPromiseCase1)
+
+      const onOpenChangeMock = vi.fn()
+
+      const { rerender } = render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenChangeMock}
+          controleToEdit={casoGestorResp}
+          statusList={[]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      // Caso 1 pendente
+      expect(screen.getByText('Verificando permissões de acesso ao caso...')).toBeDefined()
+
+      // Troca imediatamente para caso 2 (subordinado não autorizado)
+      vi.mocked(controleService.checkControleAccessScope).mockResolvedValueOnce(false)
+
+      rerender(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenChangeMock}
+          controleToEdit={casoSubordinado}
+          statusList={[]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      // Resposta do caso 2 fecha o modal por falta de permissão
+      await waitFor(() => {
+        expect(onOpenChangeMock).toHaveBeenCalledWith(false)
+      })
+
+      // Agora a resposta antiga do caso 1 chega autorizando (resolveSlowCase1(true))
+      resolveSlowCase1(true)
+
+      // Não deve ter efeito nem popular os dados de caso 1
+      expect(screen.queryByDisplayValue('Caso Gestor Responsavel')).toBeNull()
+    })
+
+    it('7. Criação de novo caso: comportamento preservado sem bloqueio', async () => {
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-gestor' },
+        corePerfil: 'GESTOR',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={vi.fn()}
+          statusList={[
+            {
+              id: 'st-aberto',
+              codigo: 'pendente',
+              nome: 'Pendente',
+              ordem: 1,
+              ativo: true,
+              finaliza: false,
+            },
+          ]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      // Não chama checkControleAccessScope para criação
+      expect(controleService.checkControleAccessScope).not.toHaveBeenCalled()
+      // Título Novo Controle
+      expect(screen.getByText('Novo Controle de Caso')).toBeDefined()
+      // Não exibe loader de verificação de acesso
+      expect(screen.queryByText('Verificando permissões de acesso ao caso...')).toBeNull()
+      // Botão Criar Controle presente
+      expect(screen.getByRole('button', { name: /Criar Controle/i })).toBeDefined()
+    })
+
+    it('8. ADMINISTRADOR e OPERACIONAL: sem regressão', async () => {
+      // 8a. ADMINISTRADOR pode abrir qualquer caso
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-admin' },
+        corePerfil: 'ADMINISTRADOR',
+        coreUserId: 'cu-admin-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      const onOpenAdmin = vi.fn()
+      const { unmount } = render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenAdmin}
+          controleToEdit={casoSubordinado}
+          statusList={[
+            {
+              id: 'st-aberto',
+              codigo: 'pendente',
+              nome: 'Pendente',
+              ordem: 1,
+              ativo: true,
+              finaliza: false,
+            },
+          ]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+          casoSubordinado,
+          'ADMINISTRADOR',
+          'cu-admin-1',
+        )
+      })
+      expect(onOpenAdmin).not.toHaveBeenCalledWith(false)
+      expect(await screen.findByDisplayValue('Caso Subordinado Exclusivo')).toBeDefined()
+
+      unmount()
+
+      // 8b. OPERACIONAL pode abrir caso próprio
+      mockUseAuth.mockReturnValue({
+        user: { id: 'auth-op' },
+        corePerfil: 'OPERACIONAL',
+        coreUserId: 'cu-gestor-1',
+        hasSystemAccess: true,
+        loadingAccess: false,
+      })
+
+      const onOpenOp = vi.fn()
+      render(
+        <ControleModal
+          open={true}
+          onOpenChange={onOpenOp}
+          controleToEdit={casoGestorResp}
+          statusList={[
+            {
+              id: 'st-aberto',
+              codigo: 'pendente',
+              nome: 'Pendente',
+              ordem: 1,
+              ativo: true,
+              finaliza: false,
+            },
+          ]}
+          tiposPrazoList={[]}
+          onSaved={vi.fn()}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(controleService.checkControleAccessScope).toHaveBeenCalledWith(
+          casoGestorResp,
+          'OPERACIONAL',
+          'cu-gestor-1',
+        )
+      })
+      expect(onOpenOp).not.toHaveBeenCalledWith(false)
+      expect(await screen.findByDisplayValue('Caso Gestor Responsavel')).toBeDefined()
     })
   })
 })
