@@ -3,6 +3,7 @@
 -- E POLÍTICAS / TRIGGERS DE SEGURANÇA
 -- SISTEMA: RICCI TASK
 -- ARQUIVO: docs/sql/complemento-regra-datas-providencias-adiamento.sql
+-- VERSÃO: 0.0.112 (REVISÃO DE ESTADO FINAL PERSISTIDO, DATAS E FLAG ADIAMENTO)
 -- NOTA IMPORTANTE: ESTE ARQUIVO É EXCLUSIVAMENTE PARA REVISÃO E APLICAÇÃO
 -- MANUAL PELO USUÁRIO (NÃO É UMA MIGRATION AUTOMATIZADA).
 -- NENHUM COMANDO DESTE SCRIPT FOI EXECUTADO NO BANCO DE DADOS PELO AGENTE.
@@ -20,37 +21,38 @@
 --      NÃO são criadas policies de escrita (INSERT/UPDATE/DELETE) para authenticated,
 --      pois as solicitações são gravadas exclusivamente via Edge Function autenticada
 --      (service_role) e mantêm o acesso direto PostgREST restrito/bloqueado.
---   2. TRIGGER DE PROTEÇÃO DE core_usuarios.adiamento:
---      Trigger BEFORE UPDATE OF adiamento impedindo qualquer alteração direta
---      ou autoedição via app Ricci Task. Apenas Administrador do Gestor de
---      Acessos Ricci (core_is_gestor_acesso_admin() = true) ou service_role/postgres
---      podem alterar a permissão.
+--      O uso de task_email_eventos (`event_key = 'adiamento:{id}'`) é comprovadamente
+--      isento de colisão com eventos de atribuição (`atribuicao:...`, `providencia_inclusao:...`,
+--      `providencia_atualizacao:...`) ou atraso (`providencia_atraso:...`).
+--   2. TRIGGER DE PROTEÇÃO DE core_usuarios.adiamento (INSERT e UPDATE):
+--      Trigger BEFORE INSERT OR UPDATE OF adiamento impedindo qualquer alteração direta,
+--      autoedição via app Ricci Task ou bypass via RPCs SECURITY DEFINER genéricas.
+--      Não confia apenas em current_user (que em SECURITY DEFINER se torna o owner).
+--      Identifica o chamador REAL através da role da sessão/PostgREST (`session_user`,
+--      claims JWT `request.jwt.claims` -> role) e valida que apenas chamadas genuínas
+--      de service_role ou o Administrador do Gestor de Acessos Ricci legítimo
+--      (core_is_gestor_acesso_admin() = true) possam conceder `adiamento = true`.
 --   3. CONSTRAINT TRIGGERS DEFERRADOS ANTI-BYPASS DA REGRA DE DATAS:
---      - task_providencias: AFTER INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao
+--      - NÃO dispensa providências concluídas (data_conclusao preenchida ou status finalizador).
+--        Conforme regra de negócio estrita: providência concluída NÃO está dispensada da
+--        regra de datas. Apenas providências logicamente excluídas (deleted_at IS NOT NULL) são ignoradas.
+--        Alterar status ou preencher data_conclusao não serve de contorno para violar o prazo.
+--      - Re-leitura do estado final persistido da linha no momento da checagem do trigger
+--        (SELECT por PK), validando o resultado persistido atual em vez de somente a imagem NEW
+--        de uma operação intermediária.
+--      - Preserva alterações conjuntas válidas, múltiplos UPDATEs da mesma linha na mesma
+--        transação e serialização de transações concorrentes via row locks.
+--      - task_providencias: AFTER INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao, status_id
 --        DEFERRABLE INITIALLY DEFERRED.
---        Garante que prazo_conclusao da providência <= prazo_conclusao do caso.
---        Validação roda no COMMIT contra o estado final da transação, evitando que
---        a ordem intermediária dos UPDATEs (na RPC ou escrita direta) rejeite um estado
---        final válido (ex.: ampliar prazo do caso e de providência juntos).
---        Pula validação quando não há mudança de prazo, tarefa ou situação de exclusão.
---        Conclusão NULL no caso permite qualquer data; igualdade permitida.
---        Ignora providências excluídas (deleted_at IS NOT NULL) ou com data_conclusao preenchida.
 --      - task_tarefas: AFTER UPDATE OF prazo_conclusao DEFERRABLE INITIALLY DEFERRED.
---        Ao reduzir/alterar o prazo do caso, verifica todas as providências ativas
---        (deleted_at IS NULL e data_conclusao IS NULL) contra o novo prazo no COMMIT.
---      - Com INITIALLY DEFERRED, se houver violação no COMMIT, uma exceção é lançada
---        provocando rollback integral da transação e preservando atomicidade total.
 --   4. RPC task_salvar_controle_transacional CORRIGIDA:
---      - Validação antecipada movida estritamente para o ramo CRIACAO.
---      - Na EDICAO, validação do loop condicionada a: v_operacao = 'CRIACAO' OR
---        (v_operacao = 'EDICAO' AND v_tarefa.prazo_conclusao IS DISTINCT FROM v_prazo_conclusao::date).
---      - Validação de prazo reduzido do caso preservada (com verificação se a providência
---        em conflito já está sendo corrigida no mesmo payload).
---      - Ordem transacional preservada: UPDATE do caso ocorre com sucesso antes de triggers
---        que consultem o novo prazo; RPC possui controle FOR UPDATE e rollback integral.
+--      - Validação antecipada estritamente no ramo CRIACAO.
+--      - No loop de providências da EDICAO, valida contra o prazo do caso quando:
+--        v_operacao = 'CRIACAO' OR (v_operacao = 'EDICAO' AND v_tarefa.prazo_conclusao IS DISTINCT FROM v_prazo_conclusao::date).
+--      - Sem dispensa para providências concluídas (data_conclusao preenchida continua validada).
 --      - Preserva 100% dos escopos (GESTOR estrito a responsável/executor central,
 --        sem subordinados nem fallback legado), auditoria, eventos e contratos.
---   5. Verificações prévias e posteriores somente leitura (DO $$ ... RAISE NOTICE).
+--   5. Verificações prévias e posteriores somente leitura comentadas (DO $$ ... RAISE NOTICE).
 --   6. Rollback completo comentado ao final.
 -- ============================================================================
 
@@ -145,11 +147,41 @@ COMMENT ON POLICY "task_solicitacoes_adiamento_select_policy" ON public.task_sol
 
 
 -- ============================================================================
--- PARTE 2: PROTEÇÃO SERVER-SIDE DE core_usuarios.adiamento
+-- PARTE 2: PROTEÇÃO SERVER-SIDE DE core_usuarios.adiamento (INSERT E UPDATE)
 -- ============================================================================
 -- A permissão de adiamento é administrada EXCLUSIVAMENTE pelo Gestor de Acessos Ricci.
--- Usuários comuns, operações de autoedição pelo Ricci Task ou requisições PostgREST
--- não autorizadas são sumariamente bloqueadas.
+-- Usuários comuns, operações de autoedição pelo Ricci Task, requisições PostgREST
+-- diretas ou chamadas via RPCs SECURITY DEFINER genéricas (onde current_user = postgres)
+-- são sumariamente bloqueadas.
+--
+-- ANÁLISE DE SEGURANÇA SOBRE current_user vs. session_user vs. JWT Claims:
+-- - Em funções PostgreSQL com declaração SECURITY DEFINER, `current_user` assume a
+--   identidade do dono da função (geralmente 'postgres' ou o superusuário do banco).
+--   Portanto, confiar somente em `current_user IN ('postgres', 'service_role')` abre brecha
+--   crítica: qualquer RPC SECURITY DEFINER existente ou futura que realize INSERT/UPDATE
+--   em core_usuarios (mesmo sem autorização de Gestor de Acessos) teria bypass automático!
+-- - Por outro lado, `session_user` mantém o usuário inicial da conexão física/pool do Postgres.
+-- - No ambiente Supabase/PostgREST, o chamador real e seu perfil são propagados pelo PostgREST
+--   através do JWT na configuração de sessão: `current_setting('request.jwt.claims', true)`.
+--   O papel (role) do token PostgREST é extraído de:
+--     coalesce(current_setting('request.jwt.claim.role', true),
+--              (current_setting('request.jwt.claims', true)::jsonb->>'role'))
+--   Quando o PostgREST executa uma requisição com a chave de serviço (service_role),
+--   a claim 'role' é estritamente 'service_role'.
+-- - Quando uma requisição autenticada de usuário final chama uma RPC (mesmo SECURITY DEFINER),
+--   a claim 'role' é 'authenticated' e `auth.uid()` identifica o chamador humano.
+-- - Para conexões administrativas puras diretas (ex.: psql, scripts de migração pelo console
+--   onde não há requisição HTTP/PostgREST e portanto request.jwt.claims é NULL),
+--   `session_user IN ('postgres', 'supabase_admin')` garante a execução legítima de DDL/scripts.
+--
+-- REGRAS DA ALLOWLIST (ESTRITA):
+-- 1. No INSERT: se NEW.adiamento = true, o chamador DEVE ser service_role genuíno,
+--    administrador do console (session_user postgres/supabase_admin sem JWT) ou
+--    um Gestor de Acesso Admin corporativo legítimo (core_is_gestor_acesso_admin() = true).
+--    Criação com o valor padrão (false) ou NULL é sempre permitida.
+-- 2. No UPDATE: se o valor de `adiamento` estiver sofrendo alteração real
+--    (OLD.adiamento IS DISTINCT FROM NEW.adiamento), a alteração só passa se o chamador
+--    for service_role genuíno, administrador do console ou core_is_gestor_acesso_admin().
 
 CREATE OR REPLACE FUNCTION public.core_usuarios_proteger_coluna_adiamento()
 RETURNS TRIGGER
@@ -157,35 +189,85 @@ LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  v_jwt_claims_raw TEXT;
+  v_jwt_claims JSONB;
+  v_jwt_role TEXT;
+  v_eh_service_role BOOLEAN := false;
+  v_eh_admin_gestor BOOLEAN := false;
+  v_eh_conexao_direta_admin BOOLEAN := false;
 BEGIN
-  -- Se o valor da coluna 'adiamento' estiver sendo alterado
-  IF OLD.adiamento IS DISTINCT FROM NEW.adiamento THEN
-    -- Permite se a role da sessão for postgres / service_role
-    IF current_user IN ('postgres', 'service_role') THEN
-      RETURN NEW;
-    END IF;
+  -- Se for INSERT e adiamento for false (ou null), não está tentando elevar privilégio: permite
+  IF TG_OP = 'INSERT' AND COALESCE(NEW.adiamento, false) = false THEN
+    NEW.adiamento := false;
+    RETURN NEW;
+  END IF;
 
-    -- Permite se o usuário autenticado for Administrador no sistema GESTOR_ACESSO
-    IF public.core_is_gestor_acesso_admin() THEN
-      RETURN NEW;
-    END IF;
+  -- Se for UPDATE e não alterou o valor de adiamento: permite
+  IF TG_OP = 'UPDATE' AND (OLD.adiamento IS NOT DISTINCT FROM NEW.adiamento) THEN
+    RETURN NEW;
+  END IF;
 
+  -- A partir deste ponto: está tentando criar com adiamento = true OU alterar o valor em UPDATE.
+  -- Exige autorização estrita da allowlist.
+
+  -- 1. Extração segura da role contida no JWT da requisição PostgREST/Supabase
+  BEGIN
+    v_jwt_claims_raw := current_setting('request.jwt.claims', true);
+    IF v_jwt_claims_raw IS NOT NULL AND v_jwt_claims_raw <> '' THEN
+      v_jwt_claims := v_jwt_claims_raw::jsonb;
+      v_jwt_role := v_jwt_claims->>'role';
+    ELSE
+      -- Fallback para setting direto exposto por algumas versões do PostgREST
+      v_jwt_role := current_setting('request.jwt.claim.role', true);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    v_jwt_role := NULL;
+  END;
+
+  -- 2. Identifica se a chamada é de infraestrutura via service_role autenticada
+  IF v_jwt_role = 'service_role' THEN
+    v_eh_service_role := true;
+  END IF;
+
+  -- 3. Identifica se é conexão direta de administração (psql/console sem camada PostgREST/JWT)
+  -- Importante: checa session_user (usuário físico da conexão), e NÃO current_user (que poderia
+  -- ser assumido por funções SECURITY DEFINER de chamadores autenticados normais).
+  IF v_jwt_role IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN
+    v_eh_conexao_direta_admin := true;
+  END IF;
+
+  -- 4. Identifica se o chamador autenticado é Gestor de Acessos Admin legítimo
+  -- A função core_is_gestor_acesso_admin() consulta auth.uid() contra core_usuario_sistemas
+  -- no sistema 'GESTOR_ACESSO' com perfil 'ADMINISTRADOR'.
+  IF auth.uid() IS NOT NULL THEN
+    v_eh_admin_gestor := public.core_is_gestor_acesso_admin();
+  END IF;
+
+  -- 5. Avaliação da Allowlist:
+  IF v_eh_service_role OR v_eh_conexao_direta_admin OR v_eh_admin_gestor THEN
+    RETURN NEW;
+  END IF;
+
+  -- Caso contrário: bloqueio sumário com exceção 42501 (insufficient_privilege)
+  IF TG_OP = 'INSERT' THEN
+    RAISE EXCEPTION 'Criação indevida bloqueada: a concessão da permissão de adiamento (core_usuarios.adiamento = true) na criação de usuários só é permitida ao Administrador do Gestor de Acessos Ricci ou via serviço corporativo autorizado.'
+      USING ERRCODE = '42501';
+  ELSE
     RAISE EXCEPTION 'Alteração indevida bloqueada: a permissão de adiamento (core_usuarios.adiamento) só pode ser modificada pelo Gestor de Acessos Ricci por um Administrador autorizado.'
       USING ERRCODE = '42501';
   END IF;
-
-  RETURN NEW;
 END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_core_usuarios_proteger_adiamento ON public.core_usuarios;
 CREATE TRIGGER trg_core_usuarios_proteger_adiamento
-  BEFORE UPDATE OF adiamento ON public.core_usuarios
+  BEFORE INSERT OR UPDATE OF adiamento ON public.core_usuarios
   FOR EACH ROW
   EXECUTE FUNCTION public.core_usuarios_proteger_coluna_adiamento();
 
 COMMENT ON TRIGGER trg_core_usuarios_proteger_adiamento ON public.core_usuarios IS
-  'Impede alteração da coluna adiamento por APIs e usuários do Ricci Task, restringindo-a ao Gestor de Acessos.';
+  'Impede criação ou alteração indevida da flag adiamento por APIs, usuários do Ricci Task ou RPCs SECURITY DEFINER genéricas, restringindo-a ao Gestor de Acessos Ricci e service_role.';
 
 
 -- ============================================================================
@@ -193,31 +275,59 @@ COMMENT ON TRIGGER trg_core_usuarios_proteger_adiamento ON public.core_usuarios 
 -- ============================================================================
 -- REGRA DE NEGÓCIO:
 -- "A data da providência não pode ser maior que a data de conclusão do caso (prazo_conclusao)."
--- Convenção:
+-- Convenção de campos:
 -- - task_providencias.prazo_conclusao (DATE NOT NULL)
 -- - task_tarefas.prazo_conclusao (DATE nullable)
 -- - Comparação estrita de calendário: providência <= caso.
 -- - Igualdade é estritamente PERMITIDA.
 -- - Caso com prazo NULL não impõe limite superior pela regra.
--- - Providências soft-deleted (deleted_at IS NOT NULL) ou já concluídas
---   (data_conclusao IS NOT NULL) não impedem alteração de datas.
--- - Pula validação quando não há mudança relevante de dados.
+-- - Providência concluída NÃO ESTÁ DISPENSADA da regra de datas:
+--   preencher `data_conclusao` ou alterar status para finalizador NÃO serves de contorno.
+-- - Apenas providências logicamente excluídas (deleted_at IS NOT NULL) são ignoradas.
+-- - Inconsistências históricas sem alteração relevante continuam preservadas (pula validação),
+--   mas qualquer alteração de prazo_conclusao, tarefa_id, deleted_at (restauração),
+--   data_conclusao ou status_id dispara e valida a linha contra o prazo do caso.
 --
--- DESENHO DEFERRADO (DEFERRABLE INITIALLY DEFERRED):
--- - Por que AFTER e DEFERRABLE:
---   A RPC task_salvar_controle_transacional (e processos transacionais similares)
---   na EDICAO grava as providências PRIMEIRO e só depois faz UPDATE do caso.
---   Se os triggers fossem BEFORE imediatos, a gravação de uma providência com prazo
---   estendido (ex. 29/10) dispararia antes do UPDATE do caso (ainda em 30/09),
---   rejeitando um estado final perfeitamente válido (caso que seria atualizado para 30/10).
---   Com CONSTRAINT TRIGGER ... AFTER ... DEFERRABLE INITIALLY DEFERRED, a checagem
---   é postergada para o COMMIT da transação, quando o caso e as providências já
---   estão em seus estados FINAIS.
--- - Se no COMMIT o estado final violar a regra de datas, o trigger lança exceção
---   provocando ROLLBACK integral da transação, preservando atomicidade e impedindo contornos.
--- - Constraint triggers só aceitam timing AFTER e operam FOR EACH ROW.
--- - O valor de retorno em triggers AFTER FOR EACH ROW é ignorado pelo PostgreSQL
---   (RETURN NEW é mantido por padronização da linguagem PL/pgSQL).
+-- ARQUITETURA DE CONSTRAINT TRIGGERS DEFERRADOS E ESTADO FINAL PERSISTIDO:
+-- 1. Por que AFTER e DEFERRABLE INITIALLY DEFERRED:
+--    - Operações transacionais (como a RPC `task_salvar_controle_transacional` ou requisições
+--      PostgREST em transação) gravam providências e o caso em ordens variadas (ex.: amplia o
+--      prazo do caso para 30/10 e ajusta a providência para 29/10). Se a validação fosse BEFORE
+--      imediata, uma providência salva antes da atualização do caso dispararia um erro
+--      prematuro contra o prazo antigo (30/09), inviabilizando alterações conjuntas válidas.
+--    - Com `DEFERRABLE INITIALLY DEFERRED`, os triggers row-level têm seus eventos enfileirados
+--      para avaliação no momento do COMMIT da transação.
+--
+-- 2. Problema dos eventos enfileirados e Consulta do Estado Final Persistido:
+--    - No PostgreSQL, constraint triggers row-level disparam UMA VEZ POR OPERAÇÃO enfileirada.
+--    - A variável NEW contém a imagem da linha NAQUELE MOMENTO em que o comando ocorreu.
+--    - Se uma linha sofre múltiplos UPDATEs na mesma transação (ex.: etapa 1 seta data temporária;
+--      etapa 2 na mesma transação define o valor final correto), múltiplos eventos do trigger
+--      são enfileirados.
+--    - Se o trigger validasse estritamente NEW, o primeiro evento (intermediário) abortaria
+--      indevidamente uma transação cujo resultado final é 100% válido!
+--    - SOLUÇÃO: A função do trigger consulta o ESTADO ATUAL PERSISTIDO DA LINHA NA TABELA
+--      (via `SELECT ... WHERE id = NEW.id`), em vez de validar cegamente a imagem estática de NEW.
+--      Se a linha foi excluída (hard delete) ou marcada como soft-deleted (deleted_at IS NOT NULL),
+--      não há violação. Se o estado persistido atual na transação satisfaz a regra (prazo <= caso),
+--      o trigger passa com sucesso, aceitando operações conjuntas e múltiplos updates.
+--
+-- 3. Concorrência e Bloqueios (Locking & Serialização):
+--    - Bloqueios na RPC: `task_salvar_controle_transacional` executa `SELECT ... FROM task_tarefas WHERE id = ... FOR UPDATE`
+--      adquirindo lock exclusivo de linha (RowExclusive / Exclusive tuple lock) sobre o caso, e
+--      `SELECT ... FROM task_providencias WHERE id = ... FOR UPDATE` sobre as providências existentes.
+--    - Bloqueios em escrita direta: Qualquer INSERT ou UPDATE adquire automaticamente row lock exclusivo
+--      nas tuplas modificadas até o encerramento da transação (COMMIT ou ROLLBACK).
+--    - Serialização com triggers DEFERRED: Transações concorrentes que tentem modificar o prazo
+--      do mesmo caso e/ou de suas providências são serializadas nos locks de linha do PostgreSQL.
+--      A segunda transação aguarda o COMMIT da primeira. Quando a segunda prossegue, seus triggers
+--      DEFERRED consultam o estado commitado atualizado pela primeira transação, impedindo
+--      qualquer inconsistência de corrida (race condition).
+--    - Ordem de aquisição e Prevenção de Deadlock:
+--      A ordem canônica recomendada é sempre bloquear/atualizar o CASO (pai) antes das PROVIDÊNCIAS
+--      (filhas), ou ordenar o acesso às providências por chave primária (id ASC). A RPC mantém
+--      o lock FOR UPDATE no caso no início da transação antes de iterar pelas providências,
+--      garantindo que nenhuma outra transação paralela dispute os registros em ordem inversa.
 
 -- ----------------------------------------------------------------------------
 -- 3.1 Constraint Trigger Deferrado em task_providencias
@@ -229,47 +339,67 @@ SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
+  v_prov_atual RECORD;
   v_caso_prazo DATE;
   v_caso_deleted TIMESTAMPTZ;
   v_caso_identificacao TEXT;
   v_caso_numero INT;
 BEGIN
-  -- Se a providência estiver marcada como excluída (soft-deleted), não bloqueia
-  IF NEW.deleted_at IS NOT NULL THEN
+  -- 1. Re-leitura do estado final persistido da providência no momento do trigger.
+  -- Se a linha foi fisicamente removida nesta transação, nada a validar.
+  SELECT id, tarefa_id, prazo_conclusao, deleted_at, data_conclusao, status_id
+  INTO v_prov_atual
+  FROM public.task_providencias
+  WHERE id = NEW.id;
+
+  IF NOT FOUND THEN
+    -- Linha foi removida fisicamente na transação; dispensa validação.
     RETURN NEW;
   END IF;
 
-  -- Se a providência já estiver concluída (data_conclusao preenchida), não bloqueia
-  IF NEW.data_conclusao IS NOT NULL THEN
+  -- 2. Se no estado persistido atual a providência estiver soft-deleted, não bloqueia
+  IF v_prov_atual.deleted_at IS NOT NULL THEN
     RETURN NEW;
   END IF;
 
-  -- Se for UPDATE e não alterou o prazo nem a tarefa nem a situação de exclusão, pula
-  -- (só valida quando prazo, caso ou situação de exclusão mudarem — restauração de excluída continua validada)
+  -- 3. Preservação de dados históricos sem alteração relevante:
+  -- Se for UPDATE e o estado persistido atual não alterou prazo, caso, deleted_at,
+  -- data_conclusao ou status em relação a OLD, pula a validação.
+  -- (Garante que edições puramente administrativas de outros campos não bloqueiem histórico,
+  -- mas qualquer tentativa de contorno via data_conclusao, status ou prazo força a checagem).
   IF TG_OP = 'UPDATE'
-     AND OLD.prazo_conclusao = NEW.prazo_conclusao
-     AND OLD.tarefa_id = NEW.tarefa_id
-     AND OLD.deleted_at IS NOT DISTINCT FROM NEW.deleted_at THEN
+     AND v_prov_atual.prazo_conclusao = OLD.prazo_conclusao
+     AND v_prov_atual.tarefa_id = OLD.tarefa_id
+     AND v_prov_atual.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+     AND v_prov_atual.data_conclusao IS NOT DISTINCT FROM OLD.data_conclusao
+     AND v_prov_atual.status_id IS NOT DISTINCT FROM OLD.status_id THEN
     RETURN NEW;
   END IF;
 
-  -- Busca o prazo_conclusao do caso correspondente (no estado corrente da transação / commit)
+  -- 4. Busca o estado final persistido do caso vinculado
   SELECT prazo_conclusao, deleted_at, identificacao_caso, numero_caso
   INTO v_caso_prazo, v_caso_deleted, v_caso_identificacao, v_caso_numero
   FROM public.task_tarefas
-  WHERE id = NEW.tarefa_id;
+  WHERE id = v_prov_atual.tarefa_id;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Caso vinculado (ID %) não foi localizado.', NEW.tarefa_id
+    RAISE EXCEPTION 'Caso vinculado (ID %) não foi localizado.', v_prov_atual.tarefa_id
       USING ERRCODE = '23503';
   END IF;
 
-  -- Se o caso tiver prazo_conclusao definido, a providência ativa NÃO pode ultrapassá-lo
-  -- (igualdade é estritamente permitida: NEW.prazo_conclusao <= v_caso_prazo)
+  -- 5. Se o caso foi soft-deleted na transação, não bloqueia
+  IF v_caso_deleted IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- 6. Validação estrita da regra de datas contra o estado persistido:
+  -- Providência concluída NÃO é dispensada da regra de datas.
+  -- Se o caso tiver prazo_conclusao definido, o prazo_conclusao da providência NÃO pode ultrapassá-lo.
+  -- (Igualdade é estritamente permitida: v_prov_atual.prazo_conclusao <= v_caso_prazo).
   IF v_caso_prazo IS NOT NULL THEN
-    IF NEW.prazo_conclusao > v_caso_prazo THEN
-      RAISE EXCEPTION 'A data da providência (%) não pode ser maior que a data de conclusão do caso (% - Caso #%: "%").',
-        to_char(NEW.prazo_conclusao, 'DD/MM/YYYY'),
+    IF v_prov_atual.prazo_conclusao > v_caso_prazo THEN
+      RAISE EXCEPTION 'A data da providência (%) não pode ser maior que a data de conclusão do caso (% - Caso #%: "%"). Providências concluídas também devem respeitar o limite de conclusão do caso.',
+        to_char(v_prov_atual.prazo_conclusao, 'DD/MM/YYYY'),
         to_char(v_caso_prazo, 'DD/MM/YYYY'),
         COALESCE(v_caso_numero, 0),
         COALESCE(v_caso_identificacao, '')
@@ -283,13 +413,13 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_task_providencias_validar_data_limite ON public.task_providencias;
 CREATE CONSTRAINT TRIGGER trg_task_providencias_validar_data_limite
-  AFTER INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao ON public.task_providencias
+  AFTER INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao, status_id ON public.task_providencias
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW
   EXECUTE FUNCTION public.task_providencias_validar_data_limite_caso();
 
 COMMENT ON TRIGGER trg_task_providencias_validar_data_limite ON public.task_providencias IS
-  'Garante no COMMIT (deferrado) que o prazo de conclusão da providência não ultrapasse o prazo de conclusão do caso associado.';
+  'Garante no COMMIT (deferrado) que o prazo de conclusão da providência (mesmo concluída) não ultrapasse o prazo de conclusão final persistido do caso associado.';
 
 
 -- ----------------------------------------------------------------------------
@@ -302,38 +432,53 @@ SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
+  v_caso_atual RECORD;
   v_prov_invalida RECORD;
 BEGIN
-  -- Se o caso estiver sendo soft-deleted, não bloqueia
-  IF NEW.deleted_at IS NOT NULL THEN
+  -- 1. Re-leitura do estado final persistido do caso no momento do trigger.
+  SELECT id, prazo_conclusao, deleted_at
+  INTO v_caso_atual
+  FROM public.task_tarefas
+  WHERE id = NEW.id;
+
+  IF NOT FOUND THEN
+    -- Caso removido fisicamente; nada a validar
     RETURN NEW;
   END IF;
 
-  -- Só valida se prazo_conclusao foi alterado para um valor NOT NULL
-  IF NEW.prazo_conclusao IS NOT NULL THEN
-    -- Se o prazo_conclusao anterior era idêntico ao novo, pula validação
-    IF TG_OP = 'UPDATE' AND OLD.prazo_conclusao IS NOT DISTINCT FROM NEW.prazo_conclusao THEN
-      RETURN NEW;
-    END IF;
+  -- 2. Se o caso estiver soft-deleted no estado persistido atual, não bloqueia
+  IF v_caso_atual.deleted_at IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
 
-    -- Localiza a providência ativa (não excluída e não concluída) que excede o novo prazo
-    SELECT id, providencia, prazo_conclusao
-    INTO v_prov_invalida
-    FROM public.task_providencias
-    WHERE tarefa_id = NEW.id
-      AND deleted_at IS NULL
-      AND data_conclusao IS NULL
-      AND prazo_conclusao > NEW.prazo_conclusao
-    ORDER BY prazo_conclusao DESC
-    LIMIT 1;
+  -- 3. Se no estado persistido final o prazo_conclusao for NULL, não impõe limite superior
+  IF v_caso_atual.prazo_conclusao IS NULL THEN
+    RETURN NEW;
+  END IF;
 
-    IF FOUND THEN
-      RAISE EXCEPTION 'A conclusão do caso (%) não pode ser reduzida para uma data anterior ao prazo da providência "%" (%). Ajuste o prazo da providência primeiro ou solicite adiamento.',
-        to_char(NEW.prazo_conclusao, 'DD/MM/YYYY'),
-        v_prov_invalida.providencia,
-        to_char(v_prov_invalida.prazo_conclusao, 'DD/MM/YYYY')
-        USING ERRCODE = '23514'; -- check_violation
-    END IF;
+  -- 4. Se for UPDATE e o prazo_conclusao final for idêntico ao OLD original, pula
+  IF TG_OP = 'UPDATE' AND OLD.prazo_conclusao IS NOT DISTINCT FROM v_caso_atual.prazo_conclusao THEN
+    RETURN NEW;
+  END IF;
+
+  -- 5. Localiza providência ativa (deleted_at IS NULL) que excede o prazo_conclusao final do caso.
+  -- NOTA IMPORTANTE: Providências concluídas (data_conclusao IS NOT NULL) NÃO são ignoradas!
+  -- Apenas providências com deleted_at IS NOT NULL são ignoradas.
+  SELECT id, providencia, prazo_conclusao, data_conclusao
+  INTO v_prov_invalida
+  FROM public.task_providencias
+  WHERE tarefa_id = v_caso_atual.id
+    AND deleted_at IS NULL
+    AND prazo_conclusao > v_caso_atual.prazo_conclusao
+  ORDER BY prazo_conclusao DESC
+  LIMIT 1;
+
+  IF FOUND THEN
+    RAISE EXCEPTION 'A conclusão do caso (%) não pode ser reduzida para uma data anterior ao prazo da providência "%" (%). Ajuste o prazo da providência primeiro ou solicite adiamento.',
+      to_char(v_caso_atual.prazo_conclusao, 'DD/MM/YYYY'),
+      v_prov_invalida.providencia,
+      to_char(v_prov_invalida.prazo_conclusao, 'DD/MM/YYYY')
+      USING ERRCODE = '23514'; -- check_violation
   END IF;
 
   RETURN NEW;
@@ -348,7 +493,7 @@ CREATE CONSTRAINT TRIGGER trg_task_tarefas_validar_providencias_prazo
   EXECUTE FUNCTION public.task_tarefas_validar_providencias_ao_alterar_prazo();
 
 COMMENT ON TRIGGER trg_task_tarefas_validar_providencias_prazo ON public.task_tarefas IS
-  'Impede no COMMIT (deferrado) redução ou alteração do prazo de conclusão do caso se houver providências ativas com data posterior à nova conclusão.';
+  'Impede no COMMIT (deferrado) redução do prazo de conclusão do caso se o estado final persistido contiver providências (inclusive concluídas) com data posterior à nova conclusão.';
 
 
 -- ============================================================================
@@ -686,14 +831,14 @@ BEGIN
     END IF;
 
     -- Se o prazo_conclusao do caso estiver sendo reduzido/alterado em edição:
-    -- Valida se há providências ativas persistidas que excedem o novo prazo e que NÃO estão no payload
+    -- Valida se há providências ativas persistidas que excedem o novo prazo e que NÃO estão no payload.
+    -- NOTA: Providências concluídas NÃO estão dispensadas da regra de datas.
     IF v_prazo_conclusao IS NOT NULL AND (v_tarefa.prazo_conclusao IS DISTINCT FROM v_prazo_conclusao::date) THEN
       SELECT id, providencia, prazo_conclusao
       INTO v_prov_db_conflito
       FROM public.task_providencias
       WHERE tarefa_id = p_tarefa_id
         AND deleted_at IS NULL
-        AND data_conclusao IS NULL
         AND prazo_conclusao > v_prazo_conclusao::date
       ORDER BY prazo_conclusao DESC
       LIMIT 1;
@@ -840,9 +985,9 @@ BEGIN
 
       -- Validação de limite contra o prazo do caso:
       -- Na CRIACAO, valida sempre se o prazo do caso estiver preenchido.
-      -- Na EDICAO, valida apenas se o prazo do caso foi alterado/definido ou se a operação for de criação.
-      -- Se a providência já estiver concluída (v_prov_data_conclusao NOT NULL), não bloqueia.
-      IF v_prov_data_conclusao IS NULL AND v_prazo_conclusao IS NOT NULL THEN
+      -- Na EDICAO, valida se o prazo do caso foi alterado/definido ou se a operação for de criação.
+      -- Providência concluída NÃO está dispensada da regra de datas (data_conclusao preenchida continua validada).
+      IF v_prazo_conclusao IS NOT NULL THEN
         IF (v_operacao = 'CRIACAO') OR
            (v_operacao = 'EDICAO' AND v_tarefa.prazo_conclusao IS DISTINCT FROM v_prazo_conclusao::date) THEN
           IF (v_prov_prazo::date > v_prazo_conclusao::date) THEN
@@ -1129,9 +1274,17 @@ SELECT
 FROM pg_trigger tg
 LEFT JOIN pg_constraint c ON c.oid = tg.tgconstraint
 WHERE tg.tgrelid = 'public.task_providencias'::regclass
-  AND tg.tgname = 'trg_task_providencias_validar_data_limite';
+  AND tgname = 'trg_task_providencias_validar_data_limite';
 -- Esperado: tgdeferrable = true, tginitdeferred = true, contype = 't' (trigger constraint), condeferrable = true, condeferred = true
 
+-- Validação de isolamento do evento de adiamento em task_email_eventos (sem colisão com atribuição):
+-- O padrão de chave para adiamento é 'adiamento:{solicitacao_id}', enquanto atribuições usam
+-- 'atribuicao:{tarefa_id}:{stamp}:{exec}:{resp}', inclusões 'providencia_inclusao:{prov_id}',
+-- atualizações 'providencia_atualizacao:{prov_id}:{stamp}' e atrasos 'providencia_atraso:{prov_id}:{data}'.
+SELECT id, event_key, tipo_evento, status, created_at
+FROM public.task_email_eventos
+WHERE event_key LIKE 'adiamento:%'
+LIMIT 5;
 SELECT
   tg.tgname,
   tg.tgenabled,
