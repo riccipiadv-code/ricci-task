@@ -25,15 +25,21 @@
 --      ou autoedição via app Ricci Task. Apenas Administrador do Gestor de
 --      Acessos Ricci (core_is_gestor_acesso_admin() = true) ou service_role/postgres
 --      podem alterar a permissão.
---   3. TRIGGERS ANTI-BYPASS DA REGRA DE DATAS:
---      - task_providencias: BEFORE INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at.
+--   3. CONSTRAINT TRIGGERS DEFERRADOS ANTI-BYPASS DA REGRA DE DATAS:
+--      - task_providencias: AFTER INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao
+--        DEFERRABLE INITIALLY DEFERRED.
 --        Garante que prazo_conclusao da providência <= prazo_conclusao do caso.
---        Pula validação quando não há mudança de prazo, tarefa ou exclusão.
+--        Validação roda no COMMIT contra o estado final da transação, evitando que
+--        a ordem intermediária dos UPDATEs (na RPC ou escrita direta) rejeite um estado
+--        final válido (ex.: ampliar prazo do caso e de providência juntos).
+--        Pula validação quando não há mudança de prazo, tarefa ou situação de exclusão.
 --        Conclusão NULL no caso permite qualquer data; igualdade permitida.
 --        Ignora providências excluídas (deleted_at IS NOT NULL) ou com data_conclusao preenchida.
---      - task_tarefas: BEFORE UPDATE OF prazo_conclusao.
+--      - task_tarefas: AFTER UPDATE OF prazo_conclusao DEFERRABLE INITIALLY DEFERRED.
 --        Ao reduzir/alterar o prazo do caso, verifica todas as providências ativas
---        (deleted_at IS NULL e data_conclusao IS NULL) contra o novo prazo.
+--        (deleted_at IS NULL e data_conclusao IS NULL) contra o novo prazo no COMMIT.
+--      - Com INITIALLY DEFERRED, se houver violação no COMMIT, uma exceção é lançada
+--        provocando rollback integral da transação e preservando atomicidade total.
 --   4. RPC task_salvar_controle_transacional CORRIGIDA:
 --      - Validação antecipada movida estritamente para o ramo CRIACAO.
 --      - Na EDICAO, validação do loop condicionada a: v_operacao = 'CRIACAO' OR
@@ -183,7 +189,7 @@ COMMENT ON TRIGGER trg_core_usuarios_proteger_adiamento ON public.core_usuarios 
 
 
 -- ============================================================================
--- PARTE 3: TRIGGERS ANTI-BYPASS DA REGRA DE DATAS (NO BANCO DE DADOS)
+-- PARTE 3: CONSTRAINT TRIGGERS DEFERRADOS ANTI-BYPASS DA REGRA DE DATAS
 -- ============================================================================
 -- REGRA DE NEGÓCIO:
 -- "A data da providência não pode ser maior que a data de conclusão do caso (prazo_conclusao)."
@@ -196,9 +202,25 @@ COMMENT ON TRIGGER trg_core_usuarios_proteger_adiamento ON public.core_usuarios 
 -- - Providências soft-deleted (deleted_at IS NOT NULL) ou já concluídas
 --   (data_conclusao IS NOT NULL) não impedem alteração de datas.
 -- - Pula validação quando não há mudança relevante de dados.
+--
+-- DESENHO DEFERRADO (DEFERRABLE INITIALLY DEFERRED):
+-- - Por que AFTER e DEFERRABLE:
+--   A RPC task_salvar_controle_transacional (e processos transacionais similares)
+--   na EDICAO grava as providências PRIMEIRO e só depois faz UPDATE do caso.
+--   Se os triggers fossem BEFORE imediatos, a gravação de uma providência com prazo
+--   estendido (ex. 29/10) dispararia antes do UPDATE do caso (ainda em 30/09),
+--   rejeitando um estado final perfeitamente válido (caso que seria atualizado para 30/10).
+--   Com CONSTRAINT TRIGGER ... AFTER ... DEFERRABLE INITIALLY DEFERRED, a checagem
+--   é postergada para o COMMIT da transação, quando o caso e as providências já
+--   estão em seus estados FINAIS.
+-- - Se no COMMIT o estado final violar a regra de datas, o trigger lança exceção
+--   provocando ROLLBACK integral da transação, preservando atomicidade e impedindo contornos.
+-- - Constraint triggers só aceitam timing AFTER e operam FOR EACH ROW.
+-- - O valor de retorno em triggers AFTER FOR EACH ROW é ignorado pelo PostgreSQL
+--   (RETURN NEW é mantido por padronização da linguagem PL/pgSQL).
 
 -- ----------------------------------------------------------------------------
--- 3.1 Trigger em task_providencias
+-- 3.1 Constraint Trigger Deferrado em task_providencias
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.task_providencias_validar_data_limite_caso()
 RETURNS TRIGGER
@@ -222,23 +244,16 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Se for UPDATE e não alterou o prazo nem a tarefa_id nem restaurou a providência excluída, pula
-  IF TG_OP = 'UPDATE' THEN
-    IF (OLD.prazo_conclusao = NEW.prazo_conclusao)
-       AND (OLD.tarefa_id = NEW.tarefa_id)
-       AND (OLD.deleted_at IS NULL AND NEW.deleted_at IS NULL)
-       AND (OLD.data_conclusao IS NOT NULL AND NEW.data_conclusao IS NOT NULL) THEN
-      RETURN NEW;
-    END IF;
-
-    IF (OLD.prazo_conclusao = NEW.prazo_conclusao)
-       AND (OLD.tarefa_id = NEW.tarefa_id)
-       AND (OLD.deleted_at IS NULL AND NEW.deleted_at IS NULL) THEN
-      RETURN NEW;
-    END IF;
+  -- Se for UPDATE e não alterou o prazo nem a tarefa nem a situação de exclusão, pula
+  -- (só valida quando prazo, caso ou situação de exclusão mudarem — restauração de excluída continua validada)
+  IF TG_OP = 'UPDATE'
+     AND OLD.prazo_conclusao = NEW.prazo_conclusao
+     AND OLD.tarefa_id = NEW.tarefa_id
+     AND OLD.deleted_at IS NOT DISTINCT FROM NEW.deleted_at THEN
+    RETURN NEW;
   END IF;
 
-  -- Busca o prazo_conclusao do caso correspondente
+  -- Busca o prazo_conclusao do caso correspondente (no estado corrente da transação / commit)
   SELECT prazo_conclusao, deleted_at, identificacao_caso, numero_caso
   INTO v_caso_prazo, v_caso_deleted, v_caso_identificacao, v_caso_numero
   FROM public.task_tarefas
@@ -267,17 +282,18 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_task_providencias_validar_data_limite ON public.task_providencias;
-CREATE TRIGGER trg_task_providencias_validar_data_limite
-  BEFORE INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao ON public.task_providencias
+CREATE CONSTRAINT TRIGGER trg_task_providencias_validar_data_limite
+  AFTER INSERT OR UPDATE OF prazo_conclusao, tarefa_id, deleted_at, data_conclusao ON public.task_providencias
+  DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW
   EXECUTE FUNCTION public.task_providencias_validar_data_limite_caso();
 
 COMMENT ON TRIGGER trg_task_providencias_validar_data_limite ON public.task_providencias IS
-  'Garante que o prazo de conclusão da providência não ultrapasse o prazo de conclusão do caso associado.';
+  'Garante no COMMIT (deferrado) que o prazo de conclusão da providência não ultrapasse o prazo de conclusão do caso associado.';
 
 
 -- ----------------------------------------------------------------------------
--- 3.2 Trigger em task_tarefas (ao alterar/reduzir prazo_conclusao do caso)
+-- 3.2 Constraint Trigger Deferrado em task_tarefas (ao alterar/reduzir prazo_conclusao do caso)
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.task_tarefas_validar_providencias_ao_alterar_prazo()
 RETURNS TRIGGER
@@ -325,13 +341,14 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_task_tarefas_validar_providencias_prazo ON public.task_tarefas;
-CREATE TRIGGER trg_task_tarefas_validar_providencias_prazo
-  BEFORE UPDATE OF prazo_conclusao ON public.task_tarefas
+CREATE CONSTRAINT TRIGGER trg_task_tarefas_validar_providencias_prazo
+  AFTER UPDATE OF prazo_conclusao ON public.task_tarefas
+  DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW
   EXECUTE FUNCTION public.task_tarefas_validar_providencias_ao_alterar_prazo();
 
 COMMENT ON TRIGGER trg_task_tarefas_validar_providencias_prazo ON public.task_tarefas IS
-  'Impede redução ou alteração do prazo de conclusão do caso se houver providências ativas com data posterior à nova conclusão.';
+  'Impede no COMMIT (deferrado) redução ou alteração do prazo de conclusão do caso se houver providências ativas com data posterior à nova conclusão.';
 
 
 -- ============================================================================
@@ -1099,17 +1116,36 @@ WHERE tgrelid = 'public.core_usuarios'::regclass
   AND tgname = 'trg_core_usuarios_proteger_adiamento';
 -- Esperado: trigger ativo
 
-SELECT tgname, tgenabled, tgtype
-FROM pg_trigger
-WHERE tgrelid = 'public.task_providencias'::regclass
-  AND tgname = 'trg_task_providencias_validar_data_limite';
--- Esperado: trigger ativo em task_providencias
+-- Validação dos CONSTRAINT TRIGGERS deferrados em pg_trigger e pg_constraint:
+SELECT
+  tg.tgname,
+  tg.tgenabled,
+  tg.tgdeferrable,
+  tg.tginitdeferred,
+  c.conname,
+  c.contype,
+  c.condeferrable,
+  c.condeferred
+FROM pg_trigger tg
+LEFT JOIN pg_constraint c ON c.oid = tg.tgconstraint
+WHERE tg.tgrelid = 'public.task_providencias'::regclass
+  AND tg.tgname = 'trg_task_providencias_validar_data_limite';
+-- Esperado: tgdeferrable = true, tginitdeferred = true, contype = 't' (trigger constraint), condeferrable = true, condeferred = true
 
-SELECT tgname, tgenabled, tgtype
-FROM pg_trigger
-WHERE tgrelid = 'public.task_tarefas'::regclass
-  AND tgname = 'trg_task_tarefas_validar_providencias_prazo';
--- Esperado: trigger ativo em task_tarefas
+SELECT
+  tg.tgname,
+  tg.tgenabled,
+  tg.tgdeferrable,
+  tg.tginitdeferred,
+  c.conname,
+  c.contype,
+  c.condeferrable,
+  c.condeferred
+FROM pg_trigger tg
+LEFT JOIN pg_constraint c ON c.oid = tg.tgconstraint
+WHERE tg.tgrelid = 'public.task_tarefas'::regclass
+  AND tg.tgname = 'trg_task_tarefas_validar_providencias_prazo';
+-- Esperado: tgdeferrable = true, tginitdeferred = true, contype = 't' (trigger constraint), condeferrable = true, condeferred = true
 
 SELECT proname, prorettype::regtype, prosrc
 FROM pg_proc
