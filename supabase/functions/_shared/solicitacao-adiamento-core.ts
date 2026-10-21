@@ -1238,10 +1238,44 @@ export async function processSolicitacaoAdiamento(
     }
 
     // Atualiza estado da solicitação para 'enviando'
-    await supabase
+    const { data: enviandoSolRows, error: enviandoSolErr } = await supabase
       .from('task_solicitacoes_adiamento')
       .update({ email_status: 'enviando' })
       .eq('id', solicitacaoId)
+      .select('id')
+
+    if (enviandoSolErr || !enviandoSolRows || enviandoSolRows.length === 0) {
+      console.error(
+        '[solicitacao-adiamento] Falha ao marcar solicitação como enviando:',
+        enviandoSolErr,
+      )
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Falha ao preparar envio: não foi possível registrar estado enviando na solicitação.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          solicitacao_registrada: true,
+          email_status: 'falhou',
+          notificacao_aceita_smtp: false,
+          solicitacao_id: solicitacaoId,
+          chave_idempotencia,
+          message:
+            'Solicitação registrada, porém houve falha técnica ao preparar o envio. Nenhum e-mail foi enviado; tente novamente.',
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
 
     // 12. Obtenção do Transporter SMTP
     let transporter = deps.transporter
@@ -1767,12 +1801,41 @@ export async function processSolicitacaoAdiamento(
 
     // Atualiza to_email no evento se o e-mail do admin tiver mudado
     if (normalizarEmail(adminAtualizado.email) !== normalizarEmail(destinatarioAdmin.email)) {
-      await supabase
+      const { data: updatedToEmailRows, error: toEmailErr } = await supabase
         .from('task_email_eventos')
         .update({ to_email: adminAtualizado.email })
         .eq('id', eventoId)
         .eq('owner_token', callOwnerToken)
         .eq('status', 'pending')
+        .select('id')
+
+      if (toEmailErr || !updatedToEmailRows || updatedToEmailRows.length === 0) {
+        console.error('[solicitacao-adiamento] Falha ao atualizar to_email no evento:', toEmailErr)
+        const ok = await encerrarEventoSemEnvio(
+          'Falha ao persistir destinatário atualizado antes do SMTP.',
+          'falhou',
+        )
+        if (!ok) {
+          return respostaConflitoDesistencia()
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: false,
+            solicitacao_registrada: true,
+            email_status: 'falhou',
+            notificacao_aceita_smtp: false,
+            solicitacao_id: solicitacaoId,
+            chave_idempotencia,
+            message:
+              'Solicitação registrada, porém houve falha ao atualizar o destinatário. Nenhum e-mail foi enviado; tente novamente.',
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
     }
 
     const mailOptions = {
@@ -1794,14 +1857,18 @@ export async function processSolicitacaoAdiamento(
       })
       .eq('id', eventoId)
       .eq('owner_token', callOwnerToken)
+      .eq('status', 'pending')
       .select('id, status')
 
     if (maybeSentErr || !maybeSentRows || maybeSentRows.length === 0) {
       console.error('[solicitacao-adiamento] Falha ao gravar status smtp_maybe_sent:', maybeSentErr)
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'falhou' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Falha ao gravar bloqueio persistente pré-SMTP.',
+        'falhou',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({

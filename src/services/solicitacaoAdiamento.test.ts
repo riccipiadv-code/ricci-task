@@ -3860,5 +3860,1022 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
       expect(solicitacaoUpdateTentado).toBe(false)
       expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
     })
+
+    it('(a) falha na gravação de "enviando" -> evento error + 500 com email_status "falhou" e sem chamada de sendMail', async () => {
+      let eventoErrorUpdatedWith: any = null
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 530,
+                        identificacao_caso: 'Falha gravacao enviando',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-enviando-fail-1',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111140',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => ({
+                eq: () => ({
+                  // Falha ao gravar 'enviando': 0 linhas afetadas
+                  select: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-enviando-fail-1',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                eventoErrorUpdatedWith = upd
+                const chain: any = {
+                  eq: () => chain,
+                  select: () =>
+                    Promise.resolve({ data: [{ id: 'evt-enviando-fail-1' }], error: null }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste falha enviando',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111140',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('falhou')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-enviando-fail-1')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111140')
+      expect(data.message).toBe(
+        'Solicitação registrada, porém houve falha técnica ao preparar o envio. Nenhum e-mail foi enviado; tente novamente.',
+      )
+
+      expect(eventoErrorUpdatedWith).toEqual(
+        expect.objectContaining({
+          status: 'error',
+          erro: expect.stringContaining('não foi possível registrar estado enviando'),
+        }),
+      )
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    it('(b.1) falha na gravação do bloqueio smtp_maybe_sent -> auxiliar devolve true -> resposta 500 atual', async () => {
+      let solicitacaoUpdatedWith: any = null
+      let eventoUpdatedWith: any = null
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 531,
+                        identificacao_caso: 'Falha smtp_maybe_sent auxiliar true',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-pre-smtp-fail-1',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111141',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                solicitacaoUpdatedWith = upd
+                return {
+                  eq: () => ({
+                    select: () =>
+                      Promise.resolve({
+                        data: [{ id: 'sol-pre-smtp-fail-1' }],
+                        error: null,
+                      }),
+                  }),
+                }
+              },
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-pre-smtp-fail-1',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                // Se for a atualização para smtp_maybe_sent: retorna 0 linhas
+                if (upd.status === 'smtp_maybe_sent') {
+                  const chain: any = {
+                    eq: () => chain,
+                    select: () => Promise.resolve({ data: [], error: null }),
+                  }
+                  return chain
+                }
+                // Se for a atualização do encerrarEventoSemEnvio: devolve sucesso
+                eventoUpdatedWith = upd
+                const chain: any = {
+                  eq: () => chain,
+                  select: () =>
+                    Promise.resolve({
+                      data: [{ id: 'evt-pre-smtp-fail-1' }],
+                      error: null,
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste falha smtp_maybe_sent auxiliar true',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111141',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(true)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('falhou')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-pre-smtp-fail-1')
+      expect(data.error).toBe('Falha técnica ao assegurar bloqueio persistente pré-SMTP.')
+
+      expect(eventoUpdatedWith).toEqual(
+        expect.objectContaining({
+          status: 'error',
+          erro: 'Falha ao gravar bloqueio persistente pré-SMTP.',
+        }),
+      )
+      expect(solicitacaoUpdatedWith).toEqual(
+        expect.objectContaining({
+          email_status: 'falhou',
+        }),
+      )
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    it('(b.2) falha na gravação do bloqueio smtp_maybe_sent -> auxiliar devolve false -> resposta de conflito 409', async () => {
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 532,
+                        identificacao_caso: 'Falha smtp_maybe_sent auxiliar false',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-pre-smtp-fail-2',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111142',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({
+                      data: [{ id: 'sol-pre-smtp-fail-2' }],
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-pre-smtp-fail-2',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => {
+                // Em ambos os updates (smtp_maybe_sent e encerrarEventoSemEnvio), retorna 0 linhas (outra requisição assumiu)
+                const chain: any = {
+                  eq: () => chain,
+                  select: () => Promise.resolve({ data: [], error: null }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste falha smtp_maybe_sent auxiliar false',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111142',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(409)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('enviando')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-pre-smtp-fail-2')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111142')
+      expect(data.message).toBe(
+        'Solicitação registrada, porém não foi possível confirmar o estado do envio (outra requisição assumiu o envio ou houve falha de persistência). Nenhum e-mail foi enviado por esta requisição.',
+      )
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    it('(c.1) falha na troca de to_email -> auxiliar devolve true -> 500 com mensagem exata', async () => {
+      let eventoUpdatedWith: any = null
+      let solicitacaoUpdatedWith: any = null
+
+      let callCount = 0
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () => {
+                callCount++
+                // Primeiro e-mail: daniel.adensohn@riccipi.com.br
+                // Na reconsulta pré-SMTP (callCount > 1): email muda para daniel.novo@riccipi.com.br
+                const emailAdmin =
+                  callCount > 1 ? 'daniel.novo@riccipi.com.br' : 'daniel.adensohn@riccipi.com.br'
+                return Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: emailAdmin,
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                })
+              },
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 533,
+                        identificacao_caso: 'Falha to_email auxiliar true',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-to-email-fail-1',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111143',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                solicitacaoUpdatedWith = upd
+                return {
+                  eq: () => ({
+                    select: () =>
+                      Promise.resolve({
+                        data: [{ id: 'sol-to-email-fail-1' }],
+                        error: null,
+                      }),
+                  }),
+                }
+              },
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-to-email-fail-1',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                if (upd.to_email) {
+                  // Simula falha ao atualizar to_email: 0 linhas afetadas
+                  const chain: any = {
+                    eq: () => chain,
+                    select: () => Promise.resolve({ data: [], error: null }),
+                  }
+                  return chain
+                }
+                eventoUpdatedWith = upd
+                const chain: any = {
+                  eq: () => chain,
+                  select: () =>
+                    Promise.resolve({
+                      data: [{ id: 'evt-to-email-fail-1' }],
+                      error: null,
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste falha to_email auxiliar true',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111143',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('falhou')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-to-email-fail-1')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111143')
+      expect(data.message).toBe(
+        'Solicitação registrada, porém houve falha ao atualizar o destinatário. Nenhum e-mail foi enviado; tente novamente.',
+      )
+
+      expect(eventoUpdatedWith).toEqual(
+        expect.objectContaining({
+          status: 'error',
+          erro: 'Falha ao persistir destinatário atualizado antes do SMTP.',
+        }),
+      )
+      expect(solicitacaoUpdatedWith).toEqual(
+        expect.objectContaining({
+          email_status: 'falhou',
+        }),
+      )
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    it('(c.2) falha na troca de to_email -> auxiliar devolve false -> 409 conflito e sem envio', async () => {
+      let callCount = 0
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () => {
+                callCount++
+                const emailAdmin =
+                  callCount > 1 ? 'daniel.novo@riccipi.com.br' : 'daniel.adensohn@riccipi.com.br'
+                return Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: emailAdmin,
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                })
+              },
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 534,
+                        identificacao_caso: 'Falha to_email auxiliar false',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-to-email-fail-2',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111144',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({
+                      data: [{ id: 'sol-to-email-fail-2' }],
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-to-email-fail-2',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: () => {
+                // Em todos os updates, simula 0 linhas afetadas (outra requisição venceu)
+                const chain: any = {
+                  eq: () => chain,
+                  select: () => Promise.resolve({ data: [], error: null }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste falha to_email auxiliar false',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111144',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(409)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('enviando')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-to-email-fail-2')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111144')
+      expect(data.message).toBe(
+        'Solicitação registrada, porém não foi possível confirmar o estado do envio (outra requisição assumiu o envio ou houve falha de persistência). Nenhum e-mail foi enviado por esta requisição.',
+      )
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
   })
 })
