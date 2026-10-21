@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Plus,
   Search,
@@ -282,6 +282,14 @@ export default function TarefasPage() {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
   const [controleToArchive, setControleToArchive] = useState<TaskControleRecord | null>(null)
   const [archiving, setArchiving] = useState(false)
+
+  const handleModalOpenChange = useCallback((isOpen: boolean) => {
+    setModalOpen(isOpen)
+    if (!isOpen) {
+      setModalInitialTab('dados')
+      setModalAutoAddNewProvidencia(false)
+    }
+  }, [])
 
   // Modais sequenciais de pós-encerramento de Providência
   // Modal 1: "Sem mais providências nesse controle / Deseja inserir uma nova providência?"
@@ -2712,13 +2720,7 @@ export default function TarefasPage() {
       {/* Modal de Criação / Edição de Controle */}
       <ControleModal
         open={modalOpen}
-        onOpenChange={(isOpen) => {
-          setModalOpen(isOpen)
-          if (!isOpen) {
-            setModalInitialTab('dados')
-            setModalAutoAddNewProvidencia(false)
-          }
-        }}
+        onOpenChange={handleModalOpenChange}
         controleToEdit={controleToEdit}
         statusList={statusList}
         statusProvidenciaList={statusProvidenciaList}
