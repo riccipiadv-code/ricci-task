@@ -33,6 +33,14 @@ export interface SolicitacaoAdiamentoDependencies {
   getEnv?: (key: string) => string | undefined
 }
 
+export function isValidEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false
+  const trimmed = email.trim()
+  // Deve conter exatamente um '@', não pode ter vírgula nem ponto-e-vírgula nem espaços
+  if (/[,;\s]/.test(trimmed)) return false
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
+}
+
 export interface AdministradorElegivel {
   id: string
   nome: string
@@ -371,8 +379,8 @@ export async function processSolicitacaoAdiamento(
       chave_idempotencia,
     } = body
 
-    // 4. Validação de parâmetros obrigatórios básicos
-    if (!tarefa_id || !isValidUUID(tarefa_id)) {
+    // 4. Validação rigorosa de tipos e parâmetros antes de manipulações de string
+    if (tarefa_id == null || typeof tarefa_id !== 'string' || !isValidUUID(tarefa_id)) {
       return new Response(
         JSON.stringify({ error: 'Parâmetro tarefa_id é obrigatório e deve ser um UUID válido.' }),
         {
@@ -382,7 +390,11 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    if (!administrador_core_usuario_id || !isValidUUID(administrador_core_usuario_id)) {
+    if (
+      administrador_core_usuario_id == null ||
+      typeof administrador_core_usuario_id !== 'string' ||
+      !isValidUUID(administrador_core_usuario_id)
+    ) {
       return new Response(
         JSON.stringify({
           error: 'Parâmetro administrador_core_usuario_id é obrigatório e deve ser um UUID válido.',
@@ -394,7 +406,11 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    if (!chave_idempotencia || !isValidUUID(chave_idempotencia)) {
+    if (
+      chave_idempotencia == null ||
+      typeof chave_idempotencia !== 'string' ||
+      !isValidUUID(chave_idempotencia)
+    ) {
       return new Response(
         JSON.stringify({
           error: 'Parâmetro chave_idempotencia é obrigatório e deve ser um UUID válido.',
@@ -406,8 +422,17 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // Validação de motivo: obrigatório após trim, máximo 200 caracteres
-    const motivoTrimmed = typeof motivo === 'string' ? motivo.trim() : ''
+    // Validação de tipo e conteúdo de motivo
+    if (motivo == null || typeof motivo !== 'string') {
+      return new Response(
+        JSON.stringify({ error: 'O motivo da solicitação é obrigatório e deve ser um texto.' }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+    const motivoTrimmed = motivo.trim()
     if (!motivoTrimmed) {
       return new Response(JSON.stringify({ error: 'O motivo da solicitação é obrigatório.' }), {
         status: 400,
@@ -425,8 +450,18 @@ export async function processSolicitacaoAdiamento(
     }
 
     // Validação da data solicitada
-    const prazoSolicitadoTrimmed =
-      typeof prazo_solicitado === 'string' ? prazo_solicitado.trim() : ''
+    if (prazo_solicitado == null || typeof prazo_solicitado !== 'string') {
+      return new Response(
+        JSON.stringify({
+          error: 'Parâmetro prazo_solicitado inválido. Deve ser uma string no formato YYYY-MM-DD.',
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+    const prazoSolicitadoTrimmed = prazo_solicitado.trim()
     if (!isValidDateStr(prazoSolicitadoTrimmed)) {
       return new Response(
         JSON.stringify({
@@ -579,8 +614,8 @@ export async function processSolicitacaoAdiamento(
     let providenciaAlvo: any = null
     let textoProvidenciaFinal = ''
 
-    if (providencia_id) {
-      if (!isValidUUID(providencia_id)) {
+    if (providencia_id != null) {
+      if (typeof providencia_id !== 'string' || !isValidUUID(providencia_id)) {
         return new Response(JSON.stringify({ error: 'Parâmetro providencia_id inválido.' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -713,35 +748,134 @@ export async function processSolicitacaoAdiamento(
     }
 
     let solicitacaoId: string
-    let isReplay = false
+    let activeSolicitacaoRecord: any = existingSolicitacao
+    let isExistingOrWinner = Boolean(existingSolicitacao)
 
-    if (existingSolicitacao) {
-      isReplay = true
-      // Validação de correspondência de conteúdo para chave repetida:
-      // Chave repetida com conteúdo diferente DEVE ser rejeitada.
-      const matchTarefa = existingSolicitacao.tarefa_id === tarefa.id
-      const matchProv =
-        (existingSolicitacao.providencia_id || null) === (providenciaAlvo?.id || null)
-      const matchAdmin = existingSolicitacao.administrador_core_usuario_id === destinatarioAdmin.id
-      const matchSolicitante =
-        existingSolicitacao.solicitante_core_usuario_id === solicitanteCoreUser.id
-      const matchMotivo = existingSolicitacao.motivo === motivoTrimmed
-      const matchPrazoAtual =
-        String(existingSolicitacao.prazo_caso_atual).split('T')[0] === prazoCasoAtualStr
+    const validatePayloadMatchesRecord = (record: any): boolean => {
+      const matchTarefa = record.tarefa_id === tarefa.id
+      const matchProv = (record.providencia_id || null) === (providenciaAlvo?.id || null)
+      const matchAdmin = record.administrador_core_usuario_id === destinatarioAdmin.id
+      const matchSolicitante = record.solicitante_core_usuario_id === solicitanteCoreUser.id
+      const matchMotivo = record.motivo === motivoTrimmed
       const matchPrazoSolicitado =
-        String(existingSolicitacao.prazo_solicitado).split('T')[0] === prazoSolicitadoTrimmed
-      const matchProvTexto = existingSolicitacao.providencia_texto.trim() === textoProvidenciaFinal
+        String(record.prazo_solicitado).split('T')[0] === prazoSolicitadoTrimmed
+      const matchProvTexto = record.providencia_texto.trim() === textoProvidenciaFinal
+      return (
+        matchTarefa &&
+        matchProv &&
+        matchAdmin &&
+        matchSolicitante &&
+        matchMotivo &&
+        matchPrazoSolicitado &&
+        matchProvTexto
+      )
+    }
 
-      if (
-        !matchTarefa ||
-        !matchProv ||
-        !matchAdmin ||
-        !matchSolicitante ||
-        !matchMotivo ||
-        !matchPrazoAtual ||
-        !matchPrazoSolicitado ||
-        !matchProvTexto
-      ) {
+    if (!activeSolicitacaoRecord) {
+      // Inserir registro em task_solicitacoes_adiamento ANTES do envio SMTP
+      const { data: insertedSolicitacao, error: insertError } = await supabase
+        .from('task_solicitacoes_adiamento')
+        .insert({
+          tarefa_id: tarefa.id,
+          providencia_id: providenciaAlvo ? providenciaAlvo.id : null,
+          solicitante_core_usuario_id: solicitanteCoreUser.id,
+          administrador_core_usuario_id: destinatarioAdmin.id,
+          providencia_texto: textoProvidenciaFinal,
+          motivo: motivoTrimmed,
+          prazo_caso_atual: prazoCasoAtualStr,
+          prazo_solicitado: prazoSolicitadoTrimmed,
+          chave_idempotencia,
+          email_status: 'pendente',
+          email_enviado_at: null,
+        })
+        .select(`
+          id,
+          tarefa_id,
+          providencia_id,
+          solicitante_core_usuario_id,
+          administrador_core_usuario_id,
+          providencia_texto,
+          motivo,
+          prazo_caso_atual,
+          prazo_solicitado,
+          chave_idempotencia,
+          email_status,
+          email_enviado_at,
+          created_at
+        `)
+        .maybeSingle()
+
+      if (insertError) {
+        if (insertError.code === '23505' || insertError.message?.includes('23505')) {
+          // Conflito 23505: releia e compare o registro vencedor
+          const { data: winnerRecord, error: rereadErr } = await supabase
+            .from('task_solicitacoes_adiamento')
+            .select(`
+              id,
+              tarefa_id,
+              providencia_id,
+              solicitante_core_usuario_id,
+              administrador_core_usuario_id,
+              providencia_texto,
+              motivo,
+              prazo_caso_atual,
+              prazo_solicitado,
+              chave_idempotencia,
+              email_status,
+              email_enviado_at,
+              created_at
+            `)
+            .eq('chave_idempotencia', chave_idempotencia)
+            .maybeSingle()
+
+          if (rereadErr || !winnerRecord) {
+            return new Response(
+              JSON.stringify({
+                error: 'Concorrência detectada: chave de idempotência já registrada.',
+              }),
+              {
+                status: 409,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+              },
+            )
+          }
+
+          activeSolicitacaoRecord = winnerRecord
+          isExistingOrWinner = true
+        } else {
+          console.error('[solicitacao-adiamento] Erro ao inserir solicitação:', insertError)
+          return new Response(
+            JSON.stringify({
+              error: `Falha técnica ao registrar solicitação de adiamento: ${insertError.message}`,
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
+      } else {
+        if (!insertedSolicitacao) {
+          return new Response(
+            JSON.stringify({ error: 'Falha técnica ao confirmar gravação da solicitação.' }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
+        activeSolicitacaoRecord = insertedSolicitacao
+        solicitacaoId = insertedSolicitacao.id
+      }
+    }
+
+    if (!solicitacaoId!) {
+      solicitacaoId = activeSolicitacaoRecord.id
+    }
+
+    // Se já existia ou foi recuperado de concorrência 23505: valida conteúdo original
+    if (isExistingOrWinner && activeSolicitacaoRecord) {
+      if (!validatePayloadMatchesRecord(activeSolicitacaoRecord)) {
         return new Response(
           JSON.stringify({
             error:
@@ -754,10 +888,7 @@ export async function processSolicitacaoAdiamento(
         )
       }
 
-      solicitacaoId = existingSolicitacao.id
-
-      // Se o e-mail já foi enviado com sucesso nesta solicitação, retorna idempotente sem reenvio
-      if (existingSolicitacao.email_status === 'enviado') {
+      if (activeSolicitacaoRecord.email_status === 'enviado') {
         return new Response(
           JSON.stringify({
             success: true,
@@ -775,8 +906,7 @@ export async function processSolicitacaoAdiamento(
         )
       }
 
-      // Se o status for 'incerto', rejeita reenvio automático (aguarda reconciliação)
-      if (existingSolicitacao.email_status === 'incerto') {
+      if (activeSolicitacaoRecord.email_status === 'incerto') {
         return new Response(
           JSON.stringify({
             success: true,
@@ -794,62 +924,6 @@ export async function processSolicitacaoAdiamento(
           },
         )
       }
-    } else {
-      // Inserir registro em task_solicitacoes_adiamento ANTES do envio SMTP
-      const { data: insertedSolicitacao, error: insertError } = await supabase
-        .from('task_solicitacoes_adiamento')
-        .insert({
-          tarefa_id: tarefa.id,
-          providencia_id: providenciaAlvo ? providenciaAlvo.id : null,
-          solicitante_core_usuario_id: solicitanteCoreUser.id,
-          administrador_core_usuario_id: destinatarioAdmin.id,
-          providencia_texto: textoProvidenciaFinal,
-          motivo: motivoTrimmed,
-          prazo_caso_atual: prazoCasoAtualStr,
-          prazo_solicitado: prazoSolicitadoTrimmed,
-          chave_idempotencia,
-          email_status: 'pendente',
-          email_enviado_at: null,
-        })
-        .select('id, chave_idempotencia, email_status')
-        .maybeSingle()
-
-      if (insertError) {
-        if (insertError.code === '23505' || insertError.message?.includes('23505')) {
-          // Concorrência imediata na chave de idempotência
-          return new Response(
-            JSON.stringify({
-              error: 'Concorrência detectada: chave de idempotência já registrada.',
-            }),
-            {
-              status: 409,
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            },
-          )
-        }
-        console.error('[solicitacao-adiamento] Erro ao inserir solicitação:', insertError)
-        return new Response(
-          JSON.stringify({
-            error: `Falha técnica ao registrar solicitação de adiamento: ${insertError.message}`,
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
-      }
-
-      if (!insertedSolicitacao) {
-        return new Response(
-          JSON.stringify({ error: 'Falha técnica ao confirmar gravação da solicitação.' }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
-      }
-
-      solicitacaoId = insertedSolicitacao.id
     }
 
     // 11. Controle Atômico de Envio em task_email_eventos (owner_token + aquisição de lock)
@@ -1079,8 +1153,162 @@ export async function processSolicitacaoAdiamento(
       .update({ email_status: 'enviando' })
       .eq('id', solicitacaoId)
 
-    // 12. Rechecagens de Segurança Imediatamente Antes do Disparo SMTP
-    // 12.1 Reconsultar o administrador para confirmar que continua ativo e com adiamento=true
+    // 12. Obtenção do Transporter SMTP
+    let transporter = deps.transporter
+    let senderEmail = 'nao-responder@riccitask.com.br'
+    let replyTo: string | undefined = undefined
+
+    if (!transporter) {
+      const { data: setting, error: settingError } = await supabase
+        .from('email_settings')
+        .select('*')
+        .eq('active', true)
+        .limit(1)
+        .maybeSingle()
+
+      if (settingError || !setting) {
+        // Falha ao obter configuração/senha SMTP deve preservar o ID da solicitação e informar que já foi registrada
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro: 'Nenhuma configuração de e-mail ativa encontrada.',
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+          .eq('status', 'pending')
+
+        await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({ email_status: 'falhou' })
+          .eq('id', solicitacaoId)
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            solicitacao_registrada: true,
+            email_status: 'falhou',
+            notificacao_aceita_smtp: false,
+            error:
+              'Solicitação registrada com sucesso, porém o envio de notificação falhou: nenhuma configuração de e-mail ativa encontrada.',
+            solicitacao_id: solicitacaoId,
+            chave_idempotencia,
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      senderEmail = setting.sender_email
+      replyTo = setting.reply_to || undefined
+
+      const { data: secretData, error: secretErr } = await supabase
+        .from('email_secrets')
+        .select('secret_value')
+        .eq('setting_id', setting.id)
+        .limit(1)
+        .maybeSingle()
+
+      const secret = secretData?.secret_value
+      if (secretErr || !secret) {
+        // Falha ao obter senha SMTP deve preservar o ID da solicitação e informar que já foi registrada
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro: 'A senha do transporte SMTP não foi configurada.',
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+          .eq('status', 'pending')
+
+        await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({ email_status: 'falhou' })
+          .eq('id', solicitacaoId)
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            solicitacao_registrada: true,
+            email_status: 'falhou',
+            notificacao_aceita_smtp: false,
+            error:
+              'Solicitação registrada com sucesso, porém o envio de notificação falhou: a senha do transporte SMTP não foi configurada.',
+            solicitacao_id: solicitacaoId,
+            chave_idempotencia,
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      const transporterOptions: any = {
+        host: setting.smtp_host,
+        port: setting.smtp_port,
+        secure: setting.smtp_secure,
+        auth: {
+          user: setting.smtp_user,
+          pass: secret,
+        },
+      }
+
+      if (setting.smtp_host === 'smtp.office365.com') {
+        transporterOptions.port = 587
+        transporterOptions.secure = false
+        transporterOptions.requireTLS = true
+        transporterOptions.tls = { ciphers: 'SSLv3' }
+      }
+
+      transporter = nodemailer.createTransport(transporterOptions)
+    }
+
+    // 13. Revalidações Imediatamente ANTES do SMTP:
+    // solicitante ativo e autorizado, caso aberto, prazo vigente, providência pertencente ao caso e não excluída, administrador elegível.
+    // Usar o e-mail atualizado retornado pela revalidação.
+
+    // 13.1 Solicitante ativo e autorizado
+    const recheckCaller = await verifyRicciTaskCaller(supabase, user.id)
+    if (!recheckCaller.allowed || !recheckCaller.coreUser) {
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Solicitante perdeu autorização antes do despacho SMTP.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'cancelado' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'cancelado',
+          notificacao_aceita_smtp: false,
+          reason: 'solicitante_desautorizado',
+          message:
+            'Solicitação registrada, porém o envio do e-mail foi cancelado: o solicitante não possui mais autorização ativa.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+    const solicitanteAtualizado = recheckCaller.coreUser
+
+    // 13.2 Administrador elegível + e-mail atualizado
     const recheckAdmin = await getValidatedEligibleAdmin(supabase, destinatarioAdmin.id)
     if (!recheckAdmin.valid || !recheckAdmin.admin) {
       await supabase
@@ -1091,6 +1319,7 @@ export async function processSolicitacaoAdiamento(
         })
         .eq('id', eventoId)
         .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
 
       await supabase
         .from('task_solicitacoes_adiamento')
@@ -1114,11 +1343,62 @@ export async function processSolicitacaoAdiamento(
         },
       )
     }
+    const adminAtualizado = recheckAdmin.admin
 
-    // 12.2 Reconsultar o estado atual do caso
+    // Validação de formato do e-mail de destino (apenas um e-mail válido aceito)
+    if (!isValidEmail(adminAtualizado.email)) {
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: `Endereço de e-mail do destinatário inválido: ${adminAtualizado.email}`,
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'falhou' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'falhou',
+          notificacao_aceita_smtp: false,
+          error: 'Endereço de e-mail do administrador destinatário é inválido.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 422,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // 13.3 Reconsultar o caso: SEM fallback para tarefa original. Caso não encontrado, status ausente ou erro bloqueia o envio.
     const { data: preSmtpTarefa, error: preSmtpErr } = await supabase
       .from('task_tarefas')
-      .select('id, arquivado_at, deleted_at, status_id, status:task_status(finaliza)')
+      .select(`
+        id,
+        numero_caso,
+        identificacao_caso,
+        pasta_cliente,
+        pasta_ricci,
+        prazo_conclusao,
+        nome_controle_id,
+        status_id,
+        arquivado_at,
+        deleted_at,
+        executor_core_usuario_id,
+        responsavel_core_usuario_id,
+        executor_usuario_id,
+        responsavel_usuario_id,
+        nome_controle:task_nomes_controle(nome),
+        status:task_status(id, codigo, nome, finaliza)
+      `)
       .eq('id', tarefa.id)
       .maybeSingle()
 
@@ -1131,6 +1411,7 @@ export async function processSolicitacaoAdiamento(
         })
         .eq('id', eventoId)
         .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
 
       await supabase
         .from('task_solicitacoes_adiamento')
@@ -1153,20 +1434,88 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    const effectivePreTarefa: any = preSmtpTarefa || tarefa
-
-    const isPreFinaliza = Boolean(
-      Array.isArray(effectivePreTarefa.status)
-        ? effectivePreTarefa.status[0]?.finaliza
-        : effectivePreTarefa.status?.finaliza,
-    )
-
-    if (effectivePreTarefa.deleted_at || effectivePreTarefa.arquivado_at || isPreFinaliza) {
+    if (!preSmtpTarefa) {
       await supabase
         .from('task_email_eventos')
-        .delete()
+        .update({
+          status: 'error',
+          erro: 'Caso não encontrado na verificação pré-SMTP.',
+        })
         .eq('id', eventoId)
         .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'falhou' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'falhou',
+          notificacao_aceita_smtp: false,
+          error: 'Caso não encontrado na verificação pré-SMTP.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const preSmtpStatusObj = Array.isArray(preSmtpTarefa.status)
+      ? preSmtpTarefa.status[0]
+      : preSmtpTarefa.status
+
+    if (!preSmtpStatusObj) {
+      // Status ausente bloqueia envio
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Status ausente do caso na verificação pré-SMTP.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'falhou' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'falhou',
+          notificacao_aceita_smtp: false,
+          error: 'Status ausente ou corrompido no caso antes do envio.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 422,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const isPreFinaliza = Boolean(preSmtpStatusObj.finaliza)
+
+    if (preSmtpTarefa.deleted_at || preSmtpTarefa.arquivado_at || isPreFinaliza) {
+      // Regra 6: preservar os eventos no cancelamento, sem apagá-los
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Envio cancelado: o caso não está mais aberto (excluído, arquivado ou finalizado).',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
 
       await supabase
         .from('task_solicitacoes_adiamento')
@@ -1179,9 +1528,9 @@ export async function processSolicitacaoAdiamento(
           solicitacao_registrada: true,
           email_status: 'cancelado',
           notificacao_aceita_smtp: false,
-          reason: effectivePreTarefa.deleted_at
+          reason: preSmtpTarefa.deleted_at
             ? 'caso_excluido'
-            : effectivePreTarefa.arquivado_at
+            : preSmtpTarefa.arquivado_at
               ? 'caso_arquivado'
               : 'caso_encerrado',
           message:
@@ -1195,13 +1544,171 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 13. Montagem do E-mail e Sanitização HTML (escapeHtml)
-    const nomeControleStr = (tarefa as any).nome_controle?.nome || ''
-    const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
-    const pastaRicciStr = (tarefa.pasta_ricci || '').trim()
-    const pastaClienteStr = (tarefa.pasta_cliente || '').trim()
-    const adminNome = destinatarioAdmin.nome || 'Administrador'
-    const solicitanteNome = solicitanteCoreUser.nome || 'Usuário'
+    // 13.4 Revalidar escopo de acesso do solicitante ao caso
+    const preScopeCheck = await checkTaskAccessScope(
+      supabase,
+      solicitanteAtualizado,
+      recheckCaller.perfil,
+      preSmtpTarefa,
+    )
+    if (!preScopeCheck.allowed) {
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Solicitante perdeu escopo de acesso ao caso antes do disparo SMTP.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'cancelado' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'cancelado',
+          notificacao_aceita_smtp: false,
+          reason: 'escopo_negado',
+          message: 'Solicitação registrada, mas notificação cancelada: acesso revogado.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // 13.5 Revalidar prazo vigente do caso
+    if (!preSmtpTarefa.prazo_conclusao) {
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Caso sem prazo de conclusão definido na revalidação pré-SMTP.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'cancelado' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'cancelado',
+          notificacao_aceita_smtp: false,
+          reason: 'sem_prazo',
+          message:
+            'Solicitação registrada, mas notificação cancelada: caso sem prazo de conclusão.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const recheckPrazoAtualStr = String(preSmtpTarefa.prazo_conclusao).split('T')[0]
+    if (prazoSolicitadoTrimmed <= recheckPrazoAtualStr) {
+      await supabase
+        .from('task_email_eventos')
+        .update({
+          status: 'error',
+          erro: 'Prazo solicitado não é mais posterior ao prazo do caso na revalidação pré-SMTP.',
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
+
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({ email_status: 'cancelado' })
+        .eq('id', solicitacaoId)
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'cancelado',
+          notificacao_aceita_smtp: false,
+          reason: 'prazo_invalido',
+          message:
+            'Solicitação registrada, mas notificação cancelada pois o prazo do caso foi modificado.',
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // 13.6 Revalidar providência pertencente ao caso e não excluída (se aplicável)
+    if (providenciaAlvo) {
+      const { data: recheckProv, error: recheckProvErr } = await supabase
+        .from('task_providencias')
+        .select('id, tarefa_id, deleted_at, providencia')
+        .eq('id', providenciaAlvo.id)
+        .maybeSingle()
+
+      if (
+        recheckProvErr ||
+        !recheckProv ||
+        recheckProv.tarefa_id !== preSmtpTarefa.id ||
+        recheckProv.deleted_at
+      ) {
+        await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro: 'Providência foi alterada, excluída ou desvinculada antes do despacho SMTP.',
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+          .eq('status', 'pending')
+
+        await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({ email_status: 'cancelado' })
+          .eq('id', solicitacaoId)
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            solicitacao_registrada: true,
+            email_status: 'cancelado',
+            notificacao_aceita_smtp: false,
+            reason: 'providencia_invalida',
+            message:
+              'Solicitação registrada, mas notificação cancelada pois a providência foi excluída ou desvinculada.',
+            solicitacao_id: solicitacaoId,
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        )
+      }
+    }
+
+    // 14. Montagem do E-mail e Sanitização HTML (escapeHtml)
+    const nomeControleStr = (preSmtpTarefa as any).nome_controle?.nome || ''
+    const numeroCasoStr = preSmtpTarefa.numero_caso != null ? String(preSmtpTarefa.numero_caso) : ''
+    const pastaRicciStr = (preSmtpTarefa.pasta_ricci || '').trim()
+    const pastaClienteStr = (preSmtpTarefa.pasta_cliente || '').trim()
+    const adminNome = adminAtualizado.nome || 'Administrador'
+    const solicitanteNome = solicitanteAtualizado.nome || 'Usuário'
 
     const subject = `Solicitação de Adiamento [Caso ${numeroCasoStr}] - Ricci Task`
 
@@ -1214,8 +1721,8 @@ export async function processSolicitacaoAdiamento(
     bodyLines.push('')
     if (nomeControleStr) bodyLines.push(`Controle: ${nomeControleStr}`)
     bodyLines.push(`Caso: ${numeroCasoStr}`)
-    if (tarefa.identificacao_caso?.trim()) {
-      bodyLines.push(`Identificação: ${tarefa.identificacao_caso.trim()}`)
+    if (preSmtpTarefa.identificacao_caso?.trim()) {
+      bodyLines.push(`Identificação: ${preSmtpTarefa.identificacao_caso.trim()}`)
     }
     if (pastaRicciStr) {
       bodyLines.push(`Pasta Ricci: ${pastaRicciStr}`)
@@ -1223,7 +1730,7 @@ export async function processSolicitacaoAdiamento(
     if (pastaClienteStr) {
       bodyLines.push(`Pasta Cliente: ${pastaClienteStr}`)
     }
-    bodyLines.push(`Solicitante: ${solicitanteNome} (${solicitanteCoreUser.email})`)
+    bodyLines.push(`Solicitante: ${solicitanteNome} (${solicitanteAtualizado.email})`)
     bodyLines.push('')
     bodyLines.push(`Providência: ${textoProvidenciaFinal}`)
     bodyLines.push(`Conclusão Atual do Caso: ${formatDateBR(prazoCasoAtualStr)}`)
@@ -1259,62 +1766,20 @@ export async function processSolicitacaoAdiamento(
 
     const emailText = bodyLines.join('\n')
 
-    // 14. Obtenção do Transporter SMTP
-    let transporter = deps.transporter
-    let senderEmail = 'nao-responder@riccitask.com.br'
-    let replyTo: string | undefined = undefined
-
-    if (!transporter) {
-      const { data: setting, error: settingError } = await supabase
-        .from('email_settings')
-        .select('*')
-        .eq('active', true)
-        .limit(1)
-        .maybeSingle()
-
-      if (settingError || !setting) {
-        throw new Error('Nenhuma configuração de e-mail ativa encontrada.')
-      }
-
-      senderEmail = setting.sender_email
-      replyTo = setting.reply_to || undefined
-
-      const { data: secretData } = await supabase
-        .from('email_secrets')
-        .select('secret_value')
-        .eq('setting_id', setting.id)
-        .limit(1)
-        .maybeSingle()
-
-      const secret = secretData?.secret_value
-      if (!secret) {
-        throw new Error('A senha do transporte SMTP não foi configurada.')
-      }
-
-      const transporterOptions: any = {
-        host: setting.smtp_host,
-        port: setting.smtp_port,
-        secure: setting.smtp_secure,
-        auth: {
-          user: setting.smtp_user,
-          pass: secret,
-        },
-      }
-
-      if (setting.smtp_host === 'smtp.office365.com') {
-        transporterOptions.port = 587
-        transporterOptions.secure = false
-        transporterOptions.requireTLS = true
-        transporterOptions.tls = { ciphers: 'SSLv3' }
-      }
-
-      transporter = nodemailer.createTransport(transporterOptions)
+    // Atualiza to_email no evento se o e-mail do admin tiver mudado
+    if (adminAtualizado.email !== destinatarioAdmin.email) {
+      await supabase
+        .from('task_email_eventos')
+        .update({ to_email: adminAtualizado.email })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'pending')
     }
 
     const mailOptions = {
       from: `"Ricci Task" <${senderEmail}>`,
-      to: destinatarioAdmin.email,
-      replyTo: replyTo || solicitanteCoreUser.email,
+      to: adminAtualizado.email,
+      replyTo: replyTo || solicitanteAtualizado.email,
       subject,
       text: emailText,
       html: emailHtml,
@@ -1357,9 +1822,10 @@ export async function processSolicitacaoAdiamento(
 
     // 16. Disparo SMTP e Classificação de Falha (Definitiva vs Incerta)
     let sendErrorMessage: string | null = null
+    let sendResult: any = null
 
     try {
-      await transporter.sendMail(mailOptions)
+      sendResult = await transporter.sendMail(mailOptions)
     } catch (sendError: any) {
       console.error('[solicitacao-adiamento] Erro no transporte SMTP:', sendError)
       sendErrorMessage = sendError.message || String(sendError)
@@ -1373,7 +1839,8 @@ export async function processSolicitacaoAdiamento(
       const errorStatus = isTimeoutOrNetwork ? 'uncertain' : 'error'
       const solStatus = isTimeoutOrNetwork ? 'incerto' : 'falhou'
 
-      await supabase
+      // Proteção por owner_token e status esperado 'smtp_maybe_sent'
+      const { data: updatedErrRows } = await supabase
         .from('task_email_eventos')
         .update({
           status: errorStatus,
@@ -1381,15 +1848,19 @@ export async function processSolicitacaoAdiamento(
         })
         .eq('id', eventoId)
         .eq('owner_token', callOwnerToken)
+        .eq('status', 'smtp_maybe_sent')
+        .select('id')
 
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: solStatus })
-        .eq('id', solicitacaoId)
+      if (updatedErrRows && updatedErrRows.length > 0) {
+        await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({ email_status: solStatus })
+          .eq('id', solicitacaoId)
+      }
 
       await supabase.from('email_send_logs').insert({
         type: 'ricci_task_solicitacao_adiamento',
-        to_email: destinatarioAdmin.email,
+        to_email: adminAtualizado.email,
         subject: mailOptions.subject,
         status: errorStatus,
         error_message: sendErrorMessage,
@@ -1415,7 +1886,108 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 17. Pós-SMTP: Confirmação de Sucesso
+    // Regra 4: Confira a aceitação do destinatário no retorno de sendMail. Resultado potencialmente incerto não permite reenvio automático.
+    const isRecipientAccepted = (): { accepted: boolean; uncertain: boolean; reason: string } => {
+      if (!sendResult) return { accepted: true, uncertain: false, reason: '' }
+
+      // Se nodemailer retornou rejected contendo o destinatário
+      if (Array.isArray(sendResult.rejected) && sendResult.rejected.length > 0) {
+        const adminEmailLower = adminAtualizado.email.toLowerCase()
+        const rejectedFound = sendResult.rejected.some((r: any) =>
+          String(r).toLowerCase().includes(adminEmailLower),
+        )
+        if (rejectedFound) {
+          return {
+            accepted: false,
+            uncertain: false,
+            reason: `Destinatário rejeitado pelo servidor SMTP: ${adminAtualizado.email}`,
+          }
+        }
+      }
+
+      // Se houver lista de aceitos explícita, garantir que o destinatário está nela
+      if (Array.isArray(sendResult.accepted)) {
+        if (sendResult.accepted.length === 0) {
+          // Nenhum destinatário aceito explicitamente
+          return {
+            accepted: false,
+            uncertain: true,
+            reason: 'Nenhum destinatário foi confirmado na lista de aceitação do servidor SMTP.',
+          }
+        }
+        const adminEmailLower = adminAtualizado.email.toLowerCase()
+        const acceptedFound = sendResult.accepted.some((a: any) =>
+          String(a).toLowerCase().includes(adminEmailLower),
+        )
+        if (!acceptedFound) {
+          return {
+            accepted: false,
+            uncertain: true,
+            reason: `Destinatário ${adminAtualizado.email} não consta na lista de aceitos do servidor SMTP.`,
+          }
+        }
+      }
+
+      return { accepted: true, uncertain: false, reason: '' }
+    }
+
+    const recipientCheck = isRecipientAccepted()
+    if (!recipientCheck.accepted) {
+      console.warn(
+        '[solicitacao-adiamento] Destinatário não aceito no retorno do sendMail:',
+        recipientCheck,
+      )
+      const errorStatus = recipientCheck.uncertain ? 'uncertain' : 'error'
+      const solStatus = recipientCheck.uncertain ? 'incerto' : 'falhou'
+
+      // Proteção de transição por owner_token e status esperado
+      const { data: updatedRejRows } = await supabase
+        .from('task_email_eventos')
+        .update({
+          status: errorStatus,
+          erro: recipientCheck.reason,
+        })
+        .eq('id', eventoId)
+        .eq('owner_token', callOwnerToken)
+        .eq('status', 'smtp_maybe_sent')
+        .select('id')
+
+      if (updatedRejRows && updatedRejRows.length > 0) {
+        await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({ email_status: solStatus })
+          .eq('id', solicitacaoId)
+      }
+
+      await supabase.from('email_send_logs').insert({
+        type: 'ricci_task_solicitacao_adiamento',
+        to_email: adminAtualizado.email,
+        subject: mailOptions.subject,
+        status: errorStatus,
+        error_message: recipientCheck.reason,
+        created_by: user.id,
+        created_at: new Date().toISOString(),
+      })
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: solStatus,
+          notificacao_aceita_smtp: false,
+          error: recipientCheck.uncertain
+            ? `Resultado potencialmente incerto retornado pelo servidor SMTP: ${recipientCheck.reason}. Reenvio automático bloqueado para evitar duplicidade.`
+            : `Destinatário rejeitado pelo servidor SMTP: ${recipientCheck.reason}`,
+          solicitacao_id: solicitacaoId,
+        }),
+        {
+          status: recipientCheck.uncertain ? 409 : 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // 17. Pós-SMTP: Confirmação de Sucesso com verificação rigorosa de owner_token e linhas afetadas
     const agoraIso = new Date().toISOString()
     let persistenceFailed = false
 
@@ -1429,6 +2001,7 @@ export async function processSolicitacaoAdiamento(
         })
         .eq('id', eventoId)
         .eq('owner_token', callOwnerToken)
+        .eq('status', 'smtp_maybe_sent')
         .select('id, status')
 
       if (updateSuccessErr || !updatedSuccessRows || updatedSuccessRows.length === 0) {
@@ -1437,6 +2010,7 @@ export async function processSolicitacaoAdiamento(
           '[solicitacao-adiamento] Falha crítica de persistência pós-SMTP em task_email_eventos:',
           updateSuccessErr,
         )
+        // Tentativa de marcar como incerto se ainda mantiver o lock
         await supabase
           .from('task_email_eventos')
           .update({
@@ -1452,19 +2026,36 @@ export async function processSolicitacaoAdiamento(
       console.error('[solicitacao-adiamento] Exceção na persistência pós-SMTP:', persErr)
     }
 
-    // Atualiza registro em task_solicitacoes_adiamento com status 'enviado' e email_enviado_at
-    const finalEmailStatus = persistenceFailed ? 'incerto' : 'enviado'
-    await supabase
-      .from('task_solicitacoes_adiamento')
-      .update({
-        email_status: finalEmailStatus,
-        email_enviado_at: persistenceFailed ? null : agoraIso,
-      })
-      .eq('id', solicitacaoId)
+    // Se perdeu o lock (0 linhas afetadas), NÃO sobrescrever estados
+    if (!persistenceFailed) {
+      const { data: updatedSolRows, error: updateSolErr } = await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({
+          email_status: 'enviado',
+          email_enviado_at: agoraIso,
+        })
+        .eq('id', solicitacaoId)
+        .select('id')
+
+      if (updateSolErr || !updatedSolRows || updatedSolRows.length === 0) {
+        console.warn(
+          '[solicitacao-adiamento] 0 linhas afetadas ao atualizar task_solicitacoes_adiamento para enviado:',
+          updateSolErr,
+        )
+      }
+    } else {
+      await supabase
+        .from('task_solicitacoes_adiamento')
+        .update({
+          email_status: 'incerto',
+          email_enviado_at: null,
+        })
+        .eq('id', solicitacaoId)
+    }
 
     await supabase.from('email_send_logs').insert({
       type: 'ricci_task_solicitacao_adiamento',
-      to_email: destinatarioAdmin.email,
+      to_email: adminAtualizado.email,
       subject: mailOptions.subject,
       status: persistenceFailed ? 'uncertain' : 'success',
       created_by: user.id,
@@ -1505,9 +2096,9 @@ export async function processSolicitacaoAdiamento(
         solicitacao_id: solicitacaoId,
         chave_idempotencia,
         destinatario: {
-          id: destinatarioAdmin.id,
-          nome: destinatarioAdmin.nome,
-          email: destinatarioAdmin.email,
+          id: adminAtualizado.id,
+          nome: adminAtualizado.nome,
+          email: adminAtualizado.email,
         },
       }),
       {
