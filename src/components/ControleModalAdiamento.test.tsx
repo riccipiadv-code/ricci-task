@@ -19,10 +19,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ControleModal } from './ControleModal'
 import { controleService } from '@/services/controleService'
 import { supabase } from '@/lib/supabase/client'
-import * as authHook from '@/hooks/use-auth'
+import { useAuth } from '@/hooks/use-auth'
 
 // Mock de useAuth
-vi.mock('@hooks/use-auth', () => ({
+vi.mock('@/hooks/use-auth', () => ({
   useAuth: vi.fn(),
 }))
 
@@ -56,7 +56,24 @@ vi.mock('@/lib/supabase/client', () => ({
 }))
 
 describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
-  const mockUseAuth = vi.spyOn(authHook, 'useAuth')
+  const mockUseAuth = vi.mocked(useAuth)
+
+  const alterarPrazoProvidencia = async (de: string, para: string) => {
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Providência/i }))
+    await waitFor(() => {
+      const inputs = document.querySelectorAll('input[type="date"]')
+      const targetInput = Array.from(inputs).find((el) => (el as HTMLInputElement).value === de) as
+        | HTMLInputElement
+        | undefined
+      expect(targetInput).toBeDefined()
+    })
+    const inputs = document.querySelectorAll('input[type="date"]')
+    const targetInput = Array.from(inputs).find(
+      (el) => (el as HTMLInputElement).value === de,
+    ) as HTMLInputElement
+    fireEvent.change(targetInput, { target: { value: para } })
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Dados do Caso/i }))
+  }
 
   const baseStatus = [
     { id: 'st-1', codigo: 'pendente', nome: 'Pendente', ativo: true, ordem: 1, finaliza: false },
@@ -277,7 +294,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     await screen.findByDisplayValue('Caso Histórico Alterado por Admin')
 
     // Administrador altera o prazo de conclusão do caso de 15/06/2026 para 20/06/2026
-    const inputPrazoCaso = screen.getByLabelText(/Prazo de Conclusão \(Caso\)/i)
+    const inputPrazoCaso = document.getElementById('prazo-conclusao') as HTMLInputElement
     fireEvent.change(inputPrazoCaso, { target: { value: '2026-06-20' } })
 
     const btnSalvar = screen.getByRole('button', { name: /Salvar Alterações/i })
@@ -307,7 +324,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-excedente',
           providencia: 'Providência com prazo maior',
-          prazo_conclusao: '2026-06-20', // Maior que 2026-06-15!
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -327,6 +344,8 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Prazo Violado')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-20')
 
     const btnSalvar = screen.getByRole('button', { name: /Salvar Alterações/i })
     fireEvent.click(btnSalvar)
@@ -355,7 +374,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-nao',
           providencia: 'Providência excedente',
-          prazo_conclusao: '2026-06-25',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -375,6 +394,8 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Não Adiamento')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-25')
 
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
@@ -410,7 +431,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-sim',
           providencia: 'Apresentar Memoriais Conclusivos',
-          prazo_conclusao: '2026-06-28',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -437,6 +458,8 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Sim Adiamento')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-28')
 
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
@@ -465,7 +488,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-ex',
           providencia: 'Providência pendente',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -490,6 +513,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Sem Admin Elegível')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
     const btnSim = await screen.findByRole('button', { name: 'Sim' })
@@ -520,7 +546,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-mot',
           providencia: 'Providência teste',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -545,6 +571,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Teste Motivo')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
@@ -583,7 +612,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-envio',
           providencia: 'Providência aguardando perito',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -617,6 +646,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Envio Sucesso')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
@@ -661,7 +693,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-incerto',
           providencia: 'Providência com SMTP incerto',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -695,6 +727,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Incerto SMTP')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
@@ -750,7 +785,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-sem-smtp',
           providencia: 'Providência sem confirmação',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -784,6 +819,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Sem Confirmação SMTP')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -822,7 +860,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-env',
           providencia: 'Providência enviando',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -853,6 +891,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Enviando')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -888,7 +929,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-falhou',
           providencia: 'Providência falhou',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -920,6 +961,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Falhou Registrado')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -954,7 +998,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-canc',
           providencia: 'Providência cancelada',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -986,6 +1030,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Cancelado')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -1016,7 +1063,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-alt',
           providencia: 'Providência com alteração',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -1050,6 +1097,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Nova Chave')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -1090,7 +1140,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-reload',
           providencia: 'Providência reload',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -1118,6 +1168,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Reload Admin')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -1156,7 +1209,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-dc',
           providencia: 'Providência duplo clique',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -1188,6 +1241,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Duplo Clique')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
 
@@ -1227,7 +1283,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
         {
           id: 'prov-idemp',
           providencia: 'Providência teste idemp',
-          prazo_conclusao: '2026-06-30',
+          prazo_conclusao: '2026-06-10',
           status_id: 'sp-1',
           tipo_prazo_id: 'tp-1',
         },
@@ -1269,6 +1325,9 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     )
 
     await screen.findByDisplayValue('Caso Idempotência')
+
+    await alterarPrazoProvidencia('2026-06-10', '2026-06-30')
+
     fireEvent.click(screen.getByRole('button', { name: /Salvar Alterações/i }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sim' }))
