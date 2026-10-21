@@ -1213,13 +1213,23 @@ export function ControleModal({
         if (!prazoProv) return false
         if (prazoProv <= effectiveCaseDeadline) return false
 
-        // Se a providência for persistida no caso existente e seu prazo_conclusao não mudou, não bloquear
+        // Se a providência for persistida no caso existente e tanto o prazo da providência
+        // quanto o prazo de conclusão do caso permanecerem inalterados, não bloquear
         if (p.isPersisted && p.id && controleToEdit?.providencias) {
           const original = controleToEdit.providencias.find((op) => op.id === p.id)
           const originalPrazo = (
             original?.prazo_conclusao ? original.prazo_conclusao.split('T')[0] : ''
           ).trim()
-          if (originalPrazo && originalPrazo === prazoProv) {
+          const originalCasoPrazo = (
+            controleToEdit.prazo_conclusao ? controleToEdit.prazo_conclusao.split('T')[0] : ''
+          ).trim()
+
+          if (
+            originalPrazo &&
+            originalPrazo === prazoProv &&
+            originalCasoPrazo &&
+            originalCasoPrazo === effectiveCaseDeadline
+          ) {
             // Histórico inconsistente inalterado: permitido
             return false
           }

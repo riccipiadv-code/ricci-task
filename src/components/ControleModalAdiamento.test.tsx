@@ -175,6 +175,125 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     ).toBeNull()
   })
 
+  it('histórico inconsistente inalterado: salva sem abrir diálogo quando prazo da providência E prazo do caso permanecem inalterados', async () => {
+    const casoHistorico: any = {
+      id: 'caso-hist-inalterado',
+      identificacao_caso: 'Caso Histórico Inalterado',
+      nome_controle_id: 'nc-1',
+      status_id: 'st-1',
+      prazo_conclusao: '2026-06-15',
+      responsavel_usuario_id: 'u-1',
+      executor_usuario_id: 'u-1',
+      providencias: [
+        {
+          id: 'prov-hist-1',
+          providencia: 'Providência histórica antiga',
+          prazo_conclusao: '2026-06-30', // Inconsistente com o caso (30 > 15), mas já salvo!
+          status_id: 'sp-1',
+          tipo_prazo_id: 'tp-1',
+        },
+      ],
+    }
+
+    vi.mocked(controleService.saveControleTransacional).mockResolvedValue({
+      controle: { ...casoHistorico, updated_at: '2026-06-15T10:00:00Z' },
+      providencias: casoHistorico.providencias,
+      perda_acesso: false,
+    } as any)
+
+    const onSavedMock = vi.fn()
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        controleToEdit={casoHistorico}
+        statusList={baseStatus as any}
+        statusProvidenciaList={baseStatusProv as any}
+        tiposPrazoList={baseTiposPrazo as any}
+        onSaved={onSavedMock}
+      />,
+    )
+
+    await screen.findByDisplayValue('Caso Histórico Inalterado')
+
+    // Salva sem alterar nada
+    const btnSalvar = screen.getByRole('button', { name: /Salvar Alterações/i })
+    fireEvent.click(btnSalvar)
+
+    await waitFor(() => {
+      expect(controleService.saveControleTransacional).toHaveBeenCalled()
+      expect(onSavedMock).toHaveBeenCalled()
+    })
+
+    // O diálogo de confirmação NÃO deve ter sido aberto
+    expect(
+      screen.queryByText(
+        /A data da providência não pode ser maior que a data de conclusão do caso/i,
+      ),
+    ).toBeNull()
+  })
+
+  it('histórico inconsistente: se administrador altera o prazo do caso, a providência entra na validação e abre o diálogo', async () => {
+    // Configura perfil de administrador para permitir edição do prazo do caso
+    mockUseAuth.mockReturnValue({
+      user: { id: 'auth-user-admin' },
+      corePerfil: 'ADMINISTRADOR',
+      coreUserId: 'u-admin',
+      hasSystemAccess: true,
+      loadingAccess: false,
+    } as any)
+
+    const casoHistorico: any = {
+      id: 'caso-hist-alterado',
+      identificacao_caso: 'Caso Histórico Alterado por Admin',
+      nome_controle_id: 'nc-1',
+      status_id: 'st-1',
+      prazo_conclusao: '2026-06-15',
+      responsavel_usuario_id: 'u-1',
+      executor_usuario_id: 'u-1',
+      providencias: [
+        {
+          id: 'prov-hist-2',
+          providencia: 'Providência histórica persistida',
+          prazo_conclusao: '2026-06-30', // Providência salva com prazo 30/06/2026
+          status_id: 'sp-1',
+          tipo_prazo_id: 'tp-1',
+        },
+      ],
+    }
+
+    render(
+      <ControleModal
+        open={true}
+        onOpenChange={vi.fn()}
+        controleToEdit={casoHistorico}
+        statusList={baseStatus as any}
+        statusProvidenciaList={baseStatusProv as any}
+        tiposPrazoList={baseTiposPrazo as any}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    await screen.findByDisplayValue('Caso Histórico Alterado por Admin')
+
+    // Administrador altera o prazo de conclusão do caso de 15/06/2026 para 20/06/2026
+    const inputPrazoCaso = screen.getByLabelText(/Prazo de Conclusão \(Caso\)/i)
+    fireEvent.change(inputPrazoCaso, { target: { value: '2026-06-20' } })
+
+    const btnSalvar = screen.getByRole('button', { name: /Salvar Alterações/i })
+    fireEvent.click(btnSalvar)
+
+    // O salvamento NÃO deve ser chamado
+    expect(controleService.saveControleTransacional).not.toHaveBeenCalled()
+
+    // O salvamento é interrompido e aparece o diálogo com o texto exato e os botões Sim e Não
+    const textoExato =
+      'A data da providência não pode ser maior que a data de conclusão do caso. Deseja solicitar adiamento para um administrador?'
+    expect(await screen.findByText(textoExato)).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Sim' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Não' })).toBeDefined()
+  })
+
   it('interrompe salvamento e exibe texto exato quando providência tem data maior que o caso salvo', async () => {
     const casoSalvo: any = {
       id: 'caso-2',
