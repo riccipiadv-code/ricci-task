@@ -46,7 +46,8 @@ import {
   TaskTipoPrazoRecord,
   SaveControleInput,
 } from '@/types/task'
-import { formatDateTimeBR } from '@/lib/formatters'
+import { formatDateBR, formatDateTimeBR } from '@/lib/formatters'
+import { supabase } from '@/lib/supabase/client'
 import { controleService } from '@/services/controleService'
 import { useToast } from '@/hooks/use-toast'
 import { useAuth } from '@/hooks/use-auth'
@@ -173,8 +174,180 @@ export function ControleModal({
   const [loadingAdminsElegiveis, setLoadingAdminsElegiveis] = useState(false)
   const [adminSelecionadoId, setAdminSelecionadoId] = useState('')
   const [motivoAdiamento, setMotivoAdiamento] = useState('')
+  const [chaveIdempotenciaAdiamento, setChaveIdempotenciaAdiamento] = useState<string>('')
+  const [resultadoIncertoAdiamento, setResultadoIncertoAdiamento] = useState(false)
   const [enviandoSolicitacaoAdiamento, setEnviandoSolicitacaoAdiamento] = useState(false)
   const [erroAdiamento, setErroAdiamento] = useState<string | null>(null)
+
+  // Gerador utilitário para chave de idempotência fixa por ciclo de pedido
+  const gerarChaveIdempotencia = useCallback(() => {
+    return typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+  }, [])
+
+  // Carrega administradores elegíveis para o modal de solicitação
+  const carregarAdministradoresAdiamento = useCallback(async () => {
+    setLoadingAdminsElegiveis(true)
+    setErroAdiamento(null)
+    try {
+      const res = await controleService.listarAdministradoresAdiamento()
+      if (res.success && res.administradores) {
+        setAdministradoresElegiveis(res.administradores)
+        // Se houver administradores e nenhum estiver selecionado, seleciona o primeiro por padrão
+        if (res.administradores.length > 0) {
+          setAdminSelecionadoId((prev) => prev || res.administradores[0].id)
+        }
+      } else {
+        setAdministradoresElegiveis([])
+        setErroAdiamento(res.error || 'Não foi possível carregar os administradores elegíveis.')
+      }
+    } catch (err: any) {
+      console.error('Erro ao listar administradores para adiamento:', err)
+      setAdministradoresElegiveis([])
+      setErroAdiamento(err?.message || 'Falha ao carregar administradores elegíveis.')
+    } finally {
+      setLoadingAdminsElegiveis(false)
+    }
+  }, [])
+
+  // Ações do diálogo Sim/Não de Confirmação de Adiamento
+  const handleEscolhaNaoAdiamento = useCallback(() => {
+    // "Não": retorna ao formulário preservando TODO o preenchimento, sem gravar nada.
+    setConfirmarAdiamentoDialogOpen(false)
+  }, [])
+
+  const handleEscolhaSimAdiamento = useCallback(() => {
+    // "Sim": abre a janela de solicitação, sem gravar o caso ou a providência.
+    setConfirmarAdiamentoDialogOpen(false)
+    setMotivoAdiamento('')
+    setErroAdiamento(null)
+    setResultadoIncertoAdiamento(false)
+    // Inicializa a chave de idempotência para este novo pedido (mantida fixa para retentativas deste pedido)
+    setChaveIdempotenciaAdiamento(gerarChaveIdempotencia())
+    setModalAdiamentoOpen(true)
+    carregarAdministradoresAdiamento()
+  }, [carregarAdministradoresAdiamento, gerarChaveIdempotencia])
+
+  // Envio da solicitação de adiamento
+  const handleEnviarSolicitacaoAdiamento = useCallback(async () => {
+    if (!controleToEdit?.id) {
+      toast({
+        variant: 'destructive',
+        title: 'Caso não salvo',
+        description: 'É necessário que o caso esteja salvo para solicitar adiamento.',
+      })
+      return
+    }
+
+    if (!adminSelecionadoId) {
+      setErroAdiamento('Selecione um administrador para enviar a solicitação.')
+      return
+    }
+
+    const motivoTrimmed = motivoAdiamento.trim()
+    if (!motivoTrimmed) {
+      setErroAdiamento('O motivo da solicitação é obrigatório.')
+      return
+    }
+
+    if (motivoTrimmed.length > 200) {
+      setErroAdiamento('O motivo deve conter no máximo 200 caracteres.')
+      return
+    }
+
+    if (resultadoIncertoAdiamento) {
+      toast({
+        variant: 'destructive',
+        title: 'Reenvio bloqueado',
+        description:
+          'O resultado anterior do envio foi incerto (SMTP). O reenvio automático está bloqueado para evitar duplicidade. Aguarde a confirmação do administrador.',
+      })
+      return
+    }
+
+    setEnviandoSolicitacaoAdiamento(true)
+    setErroAdiamento(null)
+
+    // Preserva a MESMA chave de idempotência nas tentativas do mesmo pedido
+    const chaveAtual = chaveIdempotenciaAdiamento || gerarChaveIdempotencia()
+    if (!chaveIdempotenciaAdiamento) {
+      setChaveIdempotenciaAdiamento(chaveAtual)
+    }
+
+    try {
+      const res = await controleService.solicitarAdiamento({
+        tarefaId: controleToEdit.id,
+        administradorCoreUsuarioId: adminSelecionadoId,
+        motivo: motivoTrimmed,
+        prazoSolicitado: providenciaParaAdiamento?.prazoPretendido || '',
+        providenciaTexto: providenciaParaAdiamento?.providenciaItem.providencia || undefined,
+        chaveIdempotencia: chaveAtual,
+      })
+
+      // Se a chave retornada pelo backend for diferente (ou confirmada), preservamos
+      if (res.chave_idempotencia) {
+        setChaveIdempotenciaAdiamento(res.chave_idempotencia)
+      }
+
+      if (res.email_status === 'incerto') {
+        // Resultado incerto (não confirmado pelo SMTP) não permite reenvio automático — informe o estado ao usuário
+        setResultadoIncertoAdiamento(true)
+        const msgIncerto =
+          res.error ||
+          res.message ||
+          'Solicitação registrada, mas o status de envio do e-mail é incerto. Reenvio automático bloqueado para evitar duplicação.'
+        setErroAdiamento(msgIncerto)
+        toast({
+          variant: 'destructive',
+          title: 'Envio com status incerto',
+          description: msgIncerto,
+        })
+        return
+      }
+
+      if (res.success) {
+        toast({
+          title: 'Solicitação de adiamento enviada',
+          description:
+            res.message ||
+            'Sua solicitação de adiamento foi registrada e encaminhada ao administrador.',
+        })
+        // Enviar chama solicitarAdiamento() e registra/notifica SOMENTE o pedido:
+        // não salva a providência, não altera o prazo do caso e não continua o salvamento automaticamente.
+        // Fecha a janela de solicitação preservando o rascunho do formulário de controle.
+        setModalAdiamentoOpen(false)
+      } else {
+        const errorMsg = res.error || 'Falha ao processar solicitação de adiamento.'
+        setErroAdiamento(errorMsg)
+        toast({
+          variant: 'destructive',
+          title: 'Falha na solicitação',
+          description: errorMsg,
+        })
+      }
+    } catch (err: any) {
+      console.error('Erro ao enviar solicitação de adiamento:', err)
+      const exMsg = err?.message || 'Falha inesperada ao enviar solicitação de adiamento.'
+      setErroAdiamento(exMsg)
+      toast({
+        variant: 'destructive',
+        title: 'Erro de comunicação',
+        description: exMsg,
+      })
+    } finally {
+      setEnviandoSolicitacaoAdiamento(false)
+    }
+  }, [
+    controleToEdit,
+    adminSelecionadoId,
+    motivoAdiamento,
+    resultadoIncertoAdiamento,
+    chaveIdempotenciaAdiamento,
+    gerarChaveIdempotencia,
+    providenciaParaAdiamento,
+    toast,
+  ])
 
   // Status de providência padrão: providência nova deve iniciar como "Em andamento"
   const statusProvPadraoId = useMemo(() => {
@@ -904,6 +1077,9 @@ export function ControleModal({
       }
     }
 
+    // Resolve se estamos em modo de edição
+    const isEditMode = Boolean(controleToEdit?.id)
+
     // Regra de Validação de Prazos de Providências vs Conclusão do Caso:
     // "Ao tentar salvar uma providência com prazo superior à conclusão do caso, interrompa o salvamento e mostre:
     // 'A data da providência não pode ser maior que a data de conclusão do caso. Deseja solicitar adiamento para um administrador?'"
@@ -971,7 +1147,6 @@ export function ControleModal({
     }
 
     // Resolve os vínculos centrais a partir da lista validada ou preservada:
-    const isEditMode = Boolean(controleToEdit?.id)
     const prevRespCore =
       controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
     const prevExecCore =
@@ -1266,11 +1441,53 @@ export function ControleModal({
       onOpenChange(false)
     } catch (err: any) {
       console.error('Erro ao salvar controle:', err)
-      toast({
-        variant: 'destructive',
-        title: 'Falha ao salvar controle',
-        description: err?.message || 'Ocorreu um erro no banco de dados Supabase.',
-      })
+
+      // Tratamento de rejeição do banco por violação de regra de datas / mudança concorrente de prazo:
+      // Capturar o erro da gravação (ex.: mensagem/código da trigger/RPC indicando violação da regra de datas).
+      // Preservar todo o preenchimento do formulário e atualizar o prazo conhecido do caso no formulário
+      // com o valor atual vindo do banco/erro quando disponível, informando o usuário.
+      const errMsg = err?.message || ''
+      const isRegraDataRejection =
+        err?.code === '23514' ||
+        errMsg.includes('A data da providência') ||
+        errMsg.includes('não pode ser maior que a data de conclusão do caso') ||
+        errMsg.includes('não pode ser reduzida para uma data anterior ao prazo da providência') ||
+        errMsg.includes('A conclusão do caso')
+
+      if (isRegraDataRejection && controleToEdit?.id) {
+        // Tenta consultar o estado persistido mais recente do caso para atualizar o prazo conhecido no formulário
+        try {
+          const { data: casoAtual } = await supabase
+            .from('task_tarefas')
+            .select('prazo_conclusao')
+            .eq('id', controleToEdit.id)
+            .maybeSingle()
+
+          if (casoAtual && casoAtual.prazo_conclusao) {
+            const novoPrazoCasoIso = (casoAtual.prazo_conclusao as string).split('T')[0]
+            setPrazoConclusao(novoPrazoCasoIso)
+            if (controleToEdit) {
+              controleToEdit.prazo_conclusao = casoAtual.prazo_conclusao
+            }
+          }
+        } catch (fetchAtualErr) {
+          console.warn('Aviso ao consultar prazo atualizado do caso no Supabase:', fetchAtualErr)
+        }
+
+        toast({
+          variant: 'destructive',
+          title: 'Conflito de datas com o banco de dados',
+          description:
+            errMsg ||
+            'A data da providência não pode ser maior que a data de conclusão do caso. O prazo atual do caso foi atualizado no formulário; revise as datas para prosseguir.',
+        })
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Falha ao salvar controle',
+          description: errMsg || 'Ocorreu um erro no banco de dados Supabase.',
+        })
+      }
     } finally {
       setSaving(false)
     }
@@ -2453,6 +2670,266 @@ export function ControleModal({
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Diálogo Sim/Não de Confirmação de Adiamento:
+          Texto exato exigido:
+          "A data da providência não pode ser maior que a data de conclusão do caso. Deseja solicitar adiamento para um administrador?"
+          Botões "Sim" e "Não".
+          "Não": retorna ao formulário preservando TODO o preenchimento, sem gravar nada.
+          "Sim": abre a janela de solicitação.
+          Nenhuma escolha grava o caso ou a providência. */}
+      <Dialog
+        open={confirmarAdiamentoDialogOpen}
+        onOpenChange={(openVal) => {
+          if (!openVal) handleEscolhaNaoAdiamento()
+        }}
+      >
+        <DialogContent className="max-w-md rounded-2xl p-6 bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-500" />
+              <span>Solicitação de Adiamento</span>
+            </DialogTitle>
+            <DialogDescription className="text-sm text-foreground/90 pt-2 leading-relaxed">
+              A data da providência não pode ser maior que a data de conclusão do caso. Deseja
+              solicitar adiamento para um administrador?
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="pt-4 flex flex-row items-center justify-end gap-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleEscolhaNaoAdiamento}
+              className="h-9 px-4 rounded-xl text-xs font-medium"
+            >
+              Não
+            </Button>
+            <Button
+              type="button"
+              onClick={handleEscolhaSimAdiamento}
+              className="h-9 px-4 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
+            >
+              Sim
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Janela Modal de Solicitação de Adiamento:
+          - Administrador OBRIGATÓRIO (lista retornada por listarAdministradoresAdiamento(); se vazia, explicar
+            que não há administrador elegível — usuário ativo, ADMINISTRADOR ativo no Ricci Task e flag adiamento=true — e bloquear envio)
+          - Motivo OBRIGATÓRIO com trim, máximo 200 caracteres e CONTADOR visível (x/200)
+          - Data pretendida exibida AUTOMATICAMENTE (a data que violou a regra)
+          - Botão "Enviar". Enviar chama solicitarAdiamento() e registra/notifica SOMENTE o pedido.
+            Não salva providência, não altera prazo do caso e não continua o salvamento automaticamente.
+            Preserva o rascunho do formulário ao fechar a janela.
+          - Chave de idempotência preservada nas tentativas do mesmo pedido.
+          - Resultado incerto não permite reenvio automático — informa o estado ao usuário. */}
+      <Dialog
+        open={modalAdiamentoOpen}
+        onOpenChange={(openVal) => {
+          if (!openVal && !enviandoSolicitacaoAdiamento) {
+            setModalAdiamentoOpen(false)
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg rounded-2xl p-6 bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <Clock className="w-5 h-5 text-primary" />
+              <span>Solicitar Adiamento do Caso</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Envie um pedido de adiamento ao administrador responsável para apreciação.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Data pretendida (exibida automaticamente) */}
+            <div className="space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/70 text-xs">
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="font-medium">Data Pretendida para o Caso:</span>
+                <span className="font-bold text-foreground">
+                  {providenciaParaAdiamento?.prazoPretendido
+                    ? formatDateBR(providenciaParaAdiamento.prazoPretendido)
+                    : 'Não informada'}
+                </span>
+              </div>
+              {providenciaParaAdiamento?.providenciaItem?.providencia && (
+                <div className="text-[11px] text-muted-foreground pt-1 border-t border-border/40 truncate">
+                  <span className="font-semibold text-foreground/80">Providência vinculada: </span>
+                  {providenciaParaAdiamento.providenciaItem.providencia}
+                </div>
+              )}
+            </div>
+
+            {/* Administrador elegível (obrigatório) */}
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="select-admin-adiamento"
+                className="text-xs font-semibold text-foreground flex items-center justify-between"
+              >
+                <span>
+                  Administrador Destinatário <span className="text-destructive">*</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">Obrigatório</span>
+              </Label>
+
+              {loadingAdminsElegiveis ? (
+                <div className="h-10 px-3 rounded-xl border border-border flex items-center gap-2 text-xs text-muted-foreground bg-muted/30">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                  <span>Carregando administradores elegíveis...</span>
+                </div>
+              ) : administradoresElegiveis.length === 0 ? (
+                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive space-y-1">
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>Nenhum administrador elegível encontrado</span>
+                  </div>
+                  <p className="text-[11px] text-destructive/90 leading-snug">
+                    Não há administrador elegível para receber solicitações de adiamento
+                    (requisitos: usuário ativo, com perfil ADMINISTRADOR ativo no sistema Ricci Task
+                    e permissão de adiamento habilitada). O envio está bloqueado.
+                  </p>
+                </div>
+              ) : (
+                <Select
+                  value={adminSelecionadoId}
+                  onValueChange={(val) => {
+                    setAdminSelecionadoId(val)
+                    if (erroAdiamento) setErroAdiamento(null)
+                  }}
+                  disabled={enviandoSolicitacaoAdiamento}
+                >
+                  <SelectTrigger
+                    id="select-admin-adiamento"
+                    className="h-10 rounded-xl bg-background text-xs sm:text-sm"
+                  >
+                    <SelectValue placeholder="Selecione um administrador..." />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl">
+                    {administradoresElegiveis.map((admin) => (
+                      <SelectItem key={admin.id} value={admin.id} className="py-2">
+                        <div className="flex flex-col text-left">
+                          <span className="font-semibold text-xs text-foreground">
+                            {admin.nome}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">{admin.email}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            {/* Motivo (obrigatório, máximo 200 caracteres, contador x/200 visível) */}
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="motivo-adiamento-input"
+                className="text-xs font-semibold text-foreground flex items-center justify-between"
+              >
+                <span>
+                  Motivo da Solicitação <span className="text-destructive">*</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">Máx. 200 caracteres</span>
+              </Label>
+              <Textarea
+                id="motivo-adiamento-input"
+                value={motivoAdiamento}
+                onChange={(e) => {
+                  setMotivoAdiamento(e.target.value)
+                  if (erroAdiamento) setErroAdiamento(null)
+                }}
+                maxLength={200}
+                rows={3}
+                disabled={enviandoSolicitacaoAdiamento || resultadoIncertoAdiamento}
+                placeholder="Descreva a justificativa para prorrogar a conclusão do caso..."
+                className={cn(
+                  'resize-none rounded-xl bg-background text-xs sm:text-sm',
+                  motivoAdiamento.trim().length > 200 &&
+                    'border-destructive focus-visible:ring-destructive',
+                )}
+              />
+              <div className="flex items-center justify-between text-[11px]">
+                <span
+                  className={cn(
+                    motivoAdiamento.trim().length === 0
+                      ? 'text-muted-foreground'
+                      : 'text-foreground',
+                  )}
+                >
+                  {motivoAdiamento.trim().length === 0
+                    ? 'Obrigatório (não pode ser vazio ou espaços)'
+                    : ''}
+                </span>
+                <span
+                  className={cn(
+                    'font-mono font-medium',
+                    motivoAdiamento.trim().length > 200
+                      ? 'text-destructive font-bold'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  {motivoAdiamento.trim().length}/200
+                </span>
+              </div>
+            </div>
+
+            {/* Mensagem de Erro ou Estado Incerto */}
+            {erroAdiamento && (
+              <div
+                className={cn(
+                  'p-3 rounded-xl border text-xs flex items-start gap-2',
+                  resultadoIncertoAdiamento
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                    : 'bg-destructive/10 border-destructive/20 text-destructive',
+                )}
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div className="space-y-1 leading-snug">
+                  <span className="font-semibold block">
+                    {resultadoIncertoAdiamento ? 'Envio Incerto (SMTP)' : 'Atenção'}
+                  </span>
+                  <span>{erroAdiamento}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="pt-2 flex flex-row items-center justify-end gap-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={enviandoSolicitacaoAdiamento}
+              onClick={() => setModalAdiamentoOpen(false)}
+              className="h-9 px-4 rounded-xl text-xs font-medium"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                enviandoSolicitacaoAdiamento ||
+                loadingAdminsElegiveis ||
+                administradoresElegiveis.length === 0 ||
+                !adminSelecionadoId ||
+                motivoAdiamento.trim().length === 0 ||
+                motivoAdiamento.trim().length > 200 ||
+                resultadoIncertoAdiamento
+              }
+              onClick={handleEnviarSolicitacaoAdiamento}
+              className="h-9 px-5 rounded-xl text-xs font-semibold bg-primary text-primary-foreground hover:bg-[#4A4AC2]"
+            >
+              {enviandoSolicitacaoAdiamento && (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              )}
+              <span>Enviar</span>
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
