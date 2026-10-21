@@ -28,7 +28,7 @@ function createMockContext(envOverrides: Record<string, string> = {}): MockConte
       sentMails,
       sendMail: vi.fn(async (options: any) => {
         sentMails.push(options)
-        return { messageId: 'mock-msg-123' }
+        return { messageId: 'mock-msg-123', accepted: [options.to], rejected: [] }
       }),
     },
     supabase: {} as any,

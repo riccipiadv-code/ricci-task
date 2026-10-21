@@ -160,6 +160,22 @@ export function ControleModal({
   const [executorError, setExecutorError] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  // Estados para o fluxo de Solicitação de Adiamento
+  const [confirmarAdiamentoDialogOpen, setConfirmarAdiamentoDialogOpen] = useState(false)
+  const [modalAdiamentoOpen, setModalAdiamentoOpen] = useState(false)
+  const [providenciaParaAdiamento, setProvidenciaParaAdiamento] = useState<{
+    providenciaItem: DraftProvidenciaItem
+    prazoPretendido: string
+  } | null>(null)
+  const [administradoresElegiveis, setAdministradoresElegiveis] = useState<
+    Array<{ id: string; nome: string; email: string }>
+  >([])
+  const [loadingAdminsElegiveis, setLoadingAdminsElegiveis] = useState(false)
+  const [adminSelecionadoId, setAdminSelecionadoId] = useState('')
+  const [motivoAdiamento, setMotivoAdiamento] = useState('')
+  const [enviandoSolicitacaoAdiamento, setEnviandoSolicitacaoAdiamento] = useState(false)
+  const [erroAdiamento, setErroAdiamento] = useState<string | null>(null)
+
   // Status de providência padrão: providência nova deve iniciar como "Em andamento"
   const statusProvPadraoId = useMemo(() => {
     const emAndamento = statusProvLista.find(
@@ -885,6 +901,72 @@ export function ControleModal({
           })
           return
         }
+      }
+    }
+
+    // Regra de Validação de Prazos de Providências vs Conclusão do Caso:
+    // "Ao tentar salvar uma providência com prazo superior à conclusão do caso, interrompa o salvamento e mostre:
+    // 'A data da providência não pode ser maior que a data de conclusão do caso. Deseja solicitar adiamento para um administrador?'"
+    // - Igualdade é permitida (prazo_prov <= prazo_caso).
+    // - Conclusão do caso vazia mantém o comportamento atual (não bloqueia).
+    // - Não bloqueie histórico inconsistente quando seus prazos não forem alterados.
+    // - Em caso ainda não salvo (novo caso / !controleToEdit?.id), solicite ajuste das datas sem criar registro parcial.
+    const effectiveCaseDeadline = (
+      (!isAdmin && isEditMode && controleToEdit
+        ? controleToEdit.prazo_conclusao
+          ? controleToEdit.prazo_conclusao.split('T')[0]
+          : ''
+        : prazoConclusao
+          ? prazoConclusao.split('T')[0]
+          : '') || ''
+    ).trim()
+
+    if (effectiveCaseDeadline) {
+      // Localiza a primeira providência que ultrapasse a conclusão do caso e que não seja histórico inalterado
+      const provComPrazoMaior = providencias.find((p) => {
+        const prazoProv = (p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : '').trim()
+        if (!prazoProv) return false
+        if (prazoProv <= effectiveCaseDeadline) return false
+
+        // Se a providência for persistida no caso existente e seu prazo_conclusao não mudou, não bloquear
+        if (p.isPersisted && p.id && controleToEdit?.providencias) {
+          const original = controleToEdit.providencias.find((op) => op.id === p.id)
+          const originalPrazo = (
+            original?.prazo_conclusao ? original.prazo_conclusao.split('T')[0] : ''
+          ).trim()
+          if (originalPrazo && originalPrazo === prazoProv) {
+            // Histórico inconsistente inalterado: permitido
+            return false
+          }
+        }
+
+        return true
+      })
+
+      if (provComPrazoMaior) {
+        const prazoExcedente = (
+          provComPrazoMaior.prazo_conclusao ? provComPrazoMaior.prazo_conclusao.split('T')[0] : ''
+        ).trim()
+
+        if (!isEditMode || !controleToEdit?.id) {
+          // Caso ainda não salvo: solicitar ajuste das datas sem criar registro parcial
+          setActiveTab('providencias')
+          toast({
+            variant: 'destructive',
+            title: 'Prazo da providência superior ao caso',
+            description:
+              'A data da providência não pode ser maior que a data de conclusão do caso. Ajuste as datas para salvar o novo caso.',
+          })
+          return
+        }
+
+        // Caso salvo existente: interrompe e abre diálogo de confirmação
+        setProvidenciaParaAdiamento({
+          providenciaItem: provComPrazoMaior,
+          prazoPretendido: prazoExcedente,
+        })
+        setConfirmarAdiamentoDialogOpen(true)
+        return
       }
     }
 

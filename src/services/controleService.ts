@@ -1436,4 +1436,133 @@ export const controleService = {
       }
     }
   },
+
+  /**
+   * Lista administradores ativos no Ricci Task e elegíveis para receber solicitações de adiamento (adiamento = true).
+   */
+  async listarAdministradoresAdiamento(): Promise<{
+    success: boolean
+    administradores: Array<{ id: string; nome: string; email: string }>
+    error?: string
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke('solicitacao-adiamento', {
+        body: {
+          operacao: 'listar_administradores',
+        },
+      })
+
+      if (error) {
+        console.error('Erro ao listar administradores elegíveis para adiamento:', error)
+        return {
+          success: false,
+          administradores: [],
+          error: error.message || 'Erro ao carregar lista de administradores elegíveis.',
+        }
+      }
+
+      if (data && data.success === false) {
+        return {
+          success: false,
+          administradores: [],
+          error: data.error || 'Não foi possível listar os administradores.',
+        }
+      }
+
+      return {
+        success: true,
+        administradores: data?.administradores || [],
+      }
+    } catch (err: any) {
+      console.error('Exceção ao listar administradores para adiamento:', err)
+      return {
+        success: false,
+        administradores: [],
+        error: err?.message || 'Falha de comunicação ao buscar administradores elegíveis.',
+      }
+    }
+  },
+
+  /**
+   * Registra uma solicitação de adiamento de prazo para um administrador via Edge Function.
+   */
+  async solicitarAdiamento(params: {
+    tarefaId: string
+    administradorCoreUsuarioId: string
+    motivo: string
+    prazoSolicitado: string
+    providenciaTexto?: string
+    chaveIdempotencia?: string
+  }): Promise<{
+    success: boolean
+    solicitacao_registrada?: boolean
+    email_status?: 'enviado' | 'falha' | 'incerto'
+    notificacao_aceita_smtp?: boolean
+    solicitacao_id?: string
+    chave_idempotencia?: string
+    message?: string
+    error?: string
+  }> {
+    try {
+      const chaveIdempotencia =
+        params.chaveIdempotencia ||
+        (typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`)
+
+      const { data, error } = await supabase.functions.invoke('solicitacao-adiamento', {
+        body: {
+          operacao: 'solicitar_adiamento',
+          tarefa_id: params.tarefaId,
+          administrador_core_usuario_id: params.administradorCoreUsuarioId,
+          motivo: params.motivo,
+          prazo_solicitado: params.prazoSolicitado,
+          providencia_texto: params.providenciaTexto,
+          chave_idempotencia: chaveIdempotencia,
+        },
+      })
+
+      if (error) {
+        console.error('Erro retornado na Edge Function solicitacao-adiamento:', error)
+        return {
+          success: false,
+          solicitacao_registrada: data?.solicitacao_registrada,
+          email_status: data?.email_status,
+          notificacao_aceita_smtp: data?.notificacao_aceita_smtp,
+          solicitacao_id: data?.solicitacao_id,
+          chave_idempotencia: chaveIdempotencia,
+          error: error.message || data?.error || 'Erro ao processar solicitação de adiamento.',
+        }
+      }
+
+      if (data && data.success === false) {
+        return {
+          success: false,
+          solicitacao_registrada: data.solicitacao_registrada,
+          email_status: data.email_status,
+          notificacao_aceita_smtp: data.notificacao_aceita_smtp,
+          solicitacao_id: data.solicitacao_id,
+          chave_idempotencia: data.chave_idempotencia || chaveIdempotencia,
+          error: data.error || 'A solicitação foi recusada pelo servidor.',
+        }
+      }
+
+      return {
+        success: true,
+        solicitacao_registrada: data?.solicitacao_registrada ?? true,
+        email_status: data?.email_status,
+        notificacao_aceita_smtp: data?.notificacao_aceita_smtp,
+        solicitacao_id: data?.solicitacao_id,
+        chave_idempotencia: data?.chave_idempotencia || chaveIdempotencia,
+        message: data?.message || 'Solicitação de adiamento enviada com sucesso.',
+      }
+    } catch (err: any) {
+      console.error('Exceção ao solicitar adiamento:', err)
+      return {
+        success: false,
+        error:
+          err?.message || 'Falha de rede ao conectar com o serviço de solicitação de adiamento.',
+      }
+    }
+  },
 }

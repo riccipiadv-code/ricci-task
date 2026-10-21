@@ -1886,9 +1886,17 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // Regra 4: Confira a aceitação do destinatário no retorno de sendMail. Resultado potencialmente incerto não permite reenvio automático.
+    // Regra 4: Confira a aceitação do destinatário no retorno de sendMail.
+    // Não confirmar SMTP sem aceitação explícita do destinatário.
+    // Resultado potencialmente incerto não permite reenvio automático.
     const isRecipientAccepted = (): { accepted: boolean; uncertain: boolean; reason: string } => {
-      if (!sendResult) return { accepted: true, uncertain: false, reason: '' }
+      if (!sendResult) {
+        return {
+          accepted: false,
+          uncertain: true,
+          reason: 'Nenhum resultado de envio retornado pelo transporte SMTP.',
+        }
+      }
 
       // Se nodemailer retornou rejected contendo o destinatário
       if (Array.isArray(sendResult.rejected) && sendResult.rejected.length > 0) {
@@ -1905,26 +1913,24 @@ export async function processSolicitacaoAdiamento(
         }
       }
 
-      // Se houver lista de aceitos explícita, garantir que o destinatário está nela
-      if (Array.isArray(sendResult.accepted)) {
-        if (sendResult.accepted.length === 0) {
-          // Nenhum destinatário aceito explicitamente
-          return {
-            accepted: false,
-            uncertain: true,
-            reason: 'Nenhum destinatário foi confirmado na lista de aceitação do servidor SMTP.',
-          }
+      // Exigência de aceitação explícita do destinatário: não aceitar retorno sem accepted
+      if (!Array.isArray(sendResult.accepted) || sendResult.accepted.length === 0) {
+        return {
+          accepted: false,
+          uncertain: true,
+          reason: 'Nenhum destinatário foi confirmado na lista de aceitação do servidor SMTP.',
         }
-        const adminEmailLower = adminAtualizado.email.toLowerCase()
-        const acceptedFound = sendResult.accepted.some((a: any) =>
-          String(a).toLowerCase().includes(adminEmailLower),
-        )
-        if (!acceptedFound) {
-          return {
-            accepted: false,
-            uncertain: true,
-            reason: `Destinatário ${adminAtualizado.email} não consta na lista de aceitos do servidor SMTP.`,
-          }
+      }
+
+      const adminEmailLower = adminAtualizado.email.toLowerCase()
+      const acceptedFound = sendResult.accepted.some((a: any) =>
+        String(a).toLowerCase().includes(adminEmailLower),
+      )
+      if (!acceptedFound) {
+        return {
+          accepted: false,
+          uncertain: true,
+          reason: `Destinatário ${adminAtualizado.email} não consta na lista de aceitos do servidor SMTP.`,
         }
       }
 
@@ -2068,10 +2074,10 @@ export async function processSolicitacaoAdiamento(
     if (persistenceFailed) {
       return new Response(
         JSON.stringify({
-          success: true,
+          success: false,
           solicitacao_registrada: true,
           email_status: 'incerto',
-          notificacao_aceita_smtp: true,
+          notificacao_aceita_smtp: false,
           message:
             'Solicitação registrada e e-mail despachado pelo SMTP, porém houve falha de persistência da confirmação. Evento marcado como incerto para evitar reenvio duplicado.',
           solicitacao_id: solicitacaoId,
