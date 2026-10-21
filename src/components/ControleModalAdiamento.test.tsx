@@ -623,7 +623,7 @@ describe('ControleModal - Fluxo de Solicitação de Adiamento', () => {
     vi.mocked(controleService.solicitarAdiamento).mockResolvedValueOnce({
       success: false,
       solicitacao_registrada: false,
-      email_status: 'falha',
+      email_status: 'falhou',
       error: 'Erro de conexão transitório. Tente novamente.',
     })
 

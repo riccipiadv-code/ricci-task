@@ -1511,14 +1511,7 @@ export const controleService = {
     success: boolean
     http_status?: number
     solicitacao_registrada?: boolean
-    email_status?:
-      | 'pendente'
-      | 'enviando'
-      | 'enviado'
-      | 'falhou'
-      | 'incerto'
-      | 'cancelado'
-      | 'falha'
+    email_status?: 'pendente' | 'enviando' | 'enviado' | 'falhou' | 'incerto' | 'cancelado'
     notificacao_aceita_smtp?: boolean
     solicitacao_id?: string
     chave_idempotencia?: string
@@ -1556,14 +1549,7 @@ export const controleService = {
       const repassados: {
         http_status?: number
         solicitacao_registrada?: boolean
-        email_status?:
-          | 'pendente'
-          | 'enviando'
-          | 'enviado'
-          | 'falhou'
-          | 'incerto'
-          | 'cancelado'
-          | 'falha'
+        email_status?: 'pendente' | 'enviando' | 'enviado' | 'falhou' | 'incerto' | 'cancelado'
         notificacao_aceita_smtp?: boolean
         solicitacao_id?: string
         chave_idempotencia?: string
