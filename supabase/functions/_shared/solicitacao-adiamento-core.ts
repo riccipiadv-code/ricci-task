@@ -41,6 +41,39 @@ export function isValidEmail(email?: string | null): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
 }
 
+/**
+ * Normaliza endereço de e-mail para comparação estrita e canônica.
+ * - Aceita texto simples ("Daniel@RicciPI.com.br"), formato com nome ("\"Nome\" <email>") e objeto ({ address: 'email' })
+ * - Remove espaços, extrai o conteúdo entre < e > quando houver e converte para minúsculas
+ * - Para valores vazios, inválidos ou sem formato reconhecido, devolve texto vazio ('')
+ */
+export function normalizarEmail(val?: any): string {
+  if (val == null) return ''
+  let raw: string = ''
+  if (typeof val === 'string') {
+    raw = val
+  } else if (typeof val === 'object' && val !== null) {
+    if (typeof (val as any).address === 'string') {
+      raw = (val as any).address
+    } else {
+      return ''
+    }
+  } else {
+    return ''
+  }
+
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+
+  // Se contiver delimitadores de ângulo <...>, extrai o que estiver dentro
+  const angleMatch = /<([^>]+)>/.exec(trimmed)
+  const candidate = angleMatch ? angleMatch[1] : trimmed
+
+  // Remove aspas restantes e espaços em branco ao redor
+  const cleaned = candidate.replace(/["']/g, '').trim().toLowerCase()
+  return cleaned
+}
+
 export interface AdministradorElegivel {
   id: string
   nome: string
@@ -1767,7 +1800,7 @@ export async function processSolicitacaoAdiamento(
     const emailText = bodyLines.join('\n')
 
     // Atualiza to_email no evento se o e-mail do admin tiver mudado
-    if (adminAtualizado.email !== destinatarioAdmin.email) {
+    if (normalizarEmail(adminAtualizado.email) !== normalizarEmail(destinatarioAdmin.email)) {
       await supabase
         .from('task_email_eventos')
         .update({ to_email: adminAtualizado.email })
@@ -1898,11 +1931,12 @@ export async function processSolicitacaoAdiamento(
         }
       }
 
-      // Se nodemailer retornou rejected contendo o destinatário
+      const adminNormalized = normalizarEmail(adminAtualizado.email)
+
+      // Se nodemailer retornou rejected contendo exatamente o destinatário normalizado
       if (Array.isArray(sendResult.rejected) && sendResult.rejected.length > 0) {
-        const adminEmailLower = adminAtualizado.email.toLowerCase()
-        const rejectedFound = sendResult.rejected.some((r: any) =>
-          String(r).toLowerCase().includes(adminEmailLower),
+        const rejectedFound = sendResult.rejected.some(
+          (r: any) => normalizarEmail(r) === adminNormalized,
         )
         if (rejectedFound) {
           return {
@@ -1922,9 +1956,8 @@ export async function processSolicitacaoAdiamento(
         }
       }
 
-      const adminEmailLower = adminAtualizado.email.toLowerCase()
-      const acceptedFound = sendResult.accepted.some((a: any) =>
-        String(a).toLowerCase().includes(adminEmailLower),
+      const acceptedFound = sendResult.accepted.some(
+        (a: any) => normalizarEmail(a) === adminNormalized,
       )
       if (!acceptedFound) {
         return {

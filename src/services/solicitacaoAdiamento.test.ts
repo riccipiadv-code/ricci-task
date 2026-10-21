@@ -6,6 +6,7 @@ import {
   isValidDateStr,
   isValidUUID,
   isValidEmail,
+  normalizarEmail,
   formatDateBR,
   SolicitacaoAdiamentoDependencies,
 } from '../../supabase/functions/_shared/solicitacao-adiamento-core'
@@ -52,6 +53,43 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
   })
 
   describe('Utilitários e Formatação', () => {
+    describe('normalizarEmail', () => {
+      it('normaliza texto simples com maiúsculas e espaços', () => {
+        expect(normalizarEmail('  Daniel@RicciPI.com.br  ')).toBe('daniel@riccipi.com.br')
+        expect(normalizarEmail('DANIEL.ADENSOHN@RICCIPI.COM.BR')).toBe(
+          'daniel.adensohn@riccipi.com.br',
+        )
+      })
+
+      it('normaliza formato com "Nome" <email>', () => {
+        expect(normalizarEmail('"Daniel Adensohn" <daniel.adensohn@riccipi.com.br>')).toBe(
+          'daniel.adensohn@riccipi.com.br',
+        )
+        expect(normalizarEmail('"Daniel" <DANIEL.ADENSOHN@RICCIPI.COM.BR>')).toBe(
+          'daniel.adensohn@riccipi.com.br',
+        )
+        expect(normalizarEmail('Helcio Ricci <helcio.ricci@riccipi.com.br>')).toBe(
+          'helcio.ricci@riccipi.com.br',
+        )
+      })
+
+      it('normaliza objeto { address: email } do nodemailer', () => {
+        expect(normalizarEmail({ address: 'Daniel@RicciPI.com.br' })).toBe('daniel@riccipi.com.br')
+        expect(normalizarEmail({ address: ' "Admin" <admin@riccipi.com.br> ' })).toBe(
+          'admin@riccipi.com.br',
+        )
+      })
+
+      it('retorna texto vazio para valores nulos, vazios ou inválidos', () => {
+        expect(normalizarEmail(null)).toBe('')
+        expect(normalizarEmail(undefined)).toBe('')
+        expect(normalizarEmail('')).toBe('')
+        expect(normalizarEmail('   ')).toBe('')
+        expect(normalizarEmail({})).toBe('')
+        expect(normalizarEmail(12345 as any)).toBe('')
+      })
+    })
+
     it('isValidDateStr: valida formato YYYY-MM-DD e rejeita datas inválidas', () => {
       expect(isValidDateStr('2026-05-15')).toBe(true)
       expect(isValidDateStr('2026-02-28')).toBe(true)
@@ -3118,6 +3156,282 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
       expect(isValidEmail('invalid-email')).toBe(false)
       expect(isValidEmail(null as any)).toBe(false)
       expect(isValidEmail(undefined as any)).toBe(false)
+    })
+
+    it('7. Conferência de accepted e rejected deve exigir igualdade exata e não aceitar por substring/contains', async () => {
+      const { auth, coreUser, corePerfil, coreSistema } = makeAuthMock()
+
+      const buildSupabase = (adminEmail: string = 'daniel@ricci.com.br') => ({
+        auth,
+        from: vi.fn((table: string) => {
+          if (table === 'core_usuarios') {
+            const chain: any = {
+              eq: () => chain,
+              maybeSingle: () => Promise.resolve({ data: coreUser, error: null }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-1',
+                      ativo: true,
+                      core_sistemas: coreSistema,
+                      core_perfis: corePerfil,
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'task_tarefas') {
+            const chain: any = {
+              eq: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                    numero_caso: 607,
+                    prazo_conclusao: '2026-05-15',
+                    executor_core_usuario_id: coreUser.id,
+                    status: { finaliza: false },
+                  },
+                  error: null,
+                }),
+            }
+            return { select: () => chain }
+          }
+          if (table === 'core_usuario_sistemas' || table === 'task_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { id: 'sol-607', email_status: 'pendente' },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (vals: any) => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({ data: [{ id: 'sol-607', ...vals }], error: null }),
+                  then: (resolve: any) =>
+                    resolve({ data: [{ id: 'sol-607', ...vals }], error: null }),
+                }),
+              }),
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-607',
+                        owner_token: 'mock-token',
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (vals: any) => {
+                const chain: any = {
+                  eq: () => chain,
+                  in: () => chain,
+                  select: () =>
+                    Promise.resolve({ data: [{ id: 'evt-607', ...vals }], error: null }),
+                  then: (resolve: any) =>
+                    resolve({ data: [{ id: 'evt-607', ...vals }], error: null }),
+                }
+                return chain
+              },
+            }
+          }
+          if (table === 'email_send_logs') {
+            return {
+              insert: () => Promise.resolve({ data: [], error: null }),
+            }
+          }
+          return {}
+        }),
+      })
+
+      // Admin elegível: daniel@ricci.com.br
+      // Caso A: accepted contém apenas endereço com substring 'outro.daniel@ricci.com.br'
+      // O envio NÃO deve ser confirmado — deve ficar incerto (409)
+      const transporterSubstring = {
+        sendMail: vi.fn().mockResolvedValue({
+          accepted: ['outro.daniel@ricci.com.br'],
+          rejected: [],
+        }),
+      }
+
+      // Mock getValidatedEligibleAdmin interno via consulta do banco core_usuario_sistemas
+      const mockSupabaseA: any = buildSupabase('daniel@ricci.com.br')
+      // Customiza retorno de core_usuario_sistemas para o admin
+      const originalFromA = mockSupabaseA.from
+      mockSupabaseA.from = vi.fn((table: string) => {
+        if (table === 'core_usuario_sistemas') {
+          return {
+            select: () => ({
+              eq: (col: string, val: any) => {
+                const chain2: any = {
+                  eq: () => chain2,
+                  in: () => chain2,
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cus-admin',
+                        ativo: true,
+                        core_usuarios: {
+                          id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                          nome: 'Daniel',
+                          email: 'daniel@ricci.com.br',
+                          ativo: true,
+                          adiamento: true,
+                        },
+                        core_sistemas: { id: 's-1', codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { id: 'p-1', codigo: 'ADMINISTRADOR', ativo: true },
+                      },
+                      error: null,
+                    }),
+                  then: (resolve: any) =>
+                    resolve({
+                      data: [
+                        {
+                          id: 'cus-1',
+                          ativo: true,
+                          core_sistemas: coreSistema,
+                          core_perfis: corePerfil,
+                        },
+                      ],
+                      error: null,
+                    }),
+                }
+                return chain2
+              },
+            }),
+          }
+        }
+        return originalFromA(table)
+      })
+
+      const reqA = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Providência teste',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste',
+          prazo_solicitado: '2026-05-20',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111107',
+        }),
+      })
+
+      const resA = await handleSolicitacao(reqA, {
+        supabase: mockSupabaseA,
+        transporter: transporterSubstring,
+        env: { SUPABASE_URL: 'https://mock.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'mock-key' },
+      })
+      expect(resA.status).toBe(409)
+      const dataA = await resA.json()
+      expect(dataA.email_status).toBe('incerto')
+      expect(dataA.notificacao_aceita_smtp).toBe(false)
+      expect(dataA.error).toContain('incerto')
+
+      // Caso B: rejected contém endereço que apenas possui a substring (ex: outro.daniel@ricci.com.br),
+      // mas accepted traz exatamente o admin no formato '"Daniel" <DANIEL@RICCI.COM.BR>'.
+      // NÃO deve ser tratado como rejeitado, e SIM confirmado com sucesso!
+      const transporterExactFormatted = {
+        sendMail: vi.fn().mockResolvedValue({
+          accepted: ['"Daniel" <DANIEL@RICCI.COM.BR>'],
+          rejected: ['outro.daniel@ricci.com.br'],
+        }),
+      }
+
+      const reqB = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Providência teste',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste',
+          prazo_solicitado: '2026-05-20',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111108',
+        }),
+      })
+
+      const resB = await handleSolicitacao(reqB, {
+        supabase: mockSupabaseA,
+        transporter: transporterExactFormatted,
+        env: { SUPABASE_URL: 'https://mock.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'mock-key' },
+      })
+      expect(resB.status).toBe(200)
+      const dataB = await resB.json()
+      expect(dataB.email_status).toBe('enviado')
+      expect(dataB.notificacao_aceita_smtp).toBe(true)
+
+      // Caso C: accepted traz objeto { address: 'daniel@ricci.com.br' }
+      const transporterObject = {
+        sendMail: vi.fn().mockResolvedValue({
+          accepted: [{ address: 'daniel@ricci.com.br' }],
+          rejected: [],
+        }),
+      }
+
+      const reqC = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Providência teste',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste',
+          prazo_solicitado: '2026-05-20',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111109',
+        }),
+      })
+
+      const resC = await handleSolicitacao(reqC, {
+        supabase: mockSupabaseA,
+        transporter: transporterObject,
+        env: { SUPABASE_URL: 'https://mock.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'mock-key' },
+      })
+      expect(resC.status).toBe(200)
+      const dataC = await resC.json()
+      expect(dataC.email_status).toBe('enviado')
+      expect(dataC.notificacao_aceita_smtp).toBe(true)
     })
   })
 })
