@@ -493,6 +493,41 @@ export function ControleModal({
     setErroUsuariosCentrais(null)
     setErroListasAuxiliares(null)
 
+    // Aproveitamento imediato da prop usuariosAtivos ao carregar (se houver)
+    if (usuariosProp && usuariosProp.length > 0) {
+      let listaInicial = [...usuariosProp]
+      const respCoreInit =
+        controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
+      const execCoreInit =
+        controleToEdit?.executor_core_usuario_id || controleToEdit?.executor_usuario_id
+
+      if (
+        respCoreInit &&
+        !listaInicial.some((u) => u.id === respCoreInit || u.core_usuario_id === respCoreInit)
+      ) {
+        listaInicial.push({
+          id: respCoreInit,
+          nome: controleToEdit?.responsavel_usuario?.nome || 'Usuário do caso',
+          email: controleToEdit?.responsavel_usuario?.email || '',
+          ativo: true,
+          core_usuario_id: respCoreInit,
+        })
+      }
+      if (
+        execCoreInit &&
+        !listaInicial.some((u) => u.id === execCoreInit || u.core_usuario_id === execCoreInit)
+      ) {
+        listaInicial.push({
+          id: execCoreInit,
+          nome: controleToEdit?.executor_usuario?.nome || 'Usuário do caso',
+          email: controleToEdit?.executor_usuario?.email || '',
+          ativo: true,
+          core_usuario_id: execCoreInit,
+        })
+      }
+      setUsuariosLista(listaInicial)
+    }
+
     try {
       let fetchUsersError: Error | null = null
       let fetchAuxError: Error | null = null
@@ -500,28 +535,32 @@ export function ControleModal({
       let nomes: TaskNomeControleRecord[] = []
       let stProv: TaskStatusProvidenciaRecord[] = []
 
-      // 1. Carregar listas auxiliares (nomes de controle e status de providência)
-      try {
-        const [nomesRes, stProvRes] = await Promise.all([
-          controleService.getNomesControle({ incluirInativos: true }),
-          statusProvidenciaList.length > 0
-            ? Promise.resolve(statusProvidenciaList)
-            : controleService.getStatusProvidencia(),
-        ])
-        nomes = nomesRes
-        stProv = stProvRes
-      } catch (auxErr: any) {
-        console.error('Falha ao carregar listas auxiliares no ControleModal:', auxErr)
-        fetchAuxError = auxErr
-      }
+      // PARTE B: Buscar ao mesmo tempo, num único Promise.all:
+      // getNomesControle, getStatusProvidencia (ou lista recebida por prop) e getUsuariosAtivos
+      const [nomesRes, stProvRes, usersRes] = await Promise.all([
+        controleService.getNomesControle({ incluirInativos: true }).catch((err: any) => {
+          console.error('Falha ao carregar nomes de controle no ControleModal:', err)
+          fetchAuxError = err
+          return [] as TaskNomeControleRecord[]
+        }),
+        (statusProvidenciaList.length > 0
+          ? Promise.resolve(statusProvidenciaList)
+          : controleService.getStatusProvidencia()
+        ).catch((err: any) => {
+          console.error('Falha ao carregar status de providência no ControleModal:', err)
+          if (!fetchAuxError) fetchAuxError = err
+          return [] as TaskStatusProvidenciaRecord[]
+        }),
+        controleService.getUsuariosAtivos().catch((err: any) => {
+          console.error('Falha ao carregar usuários elegíveis com dados centrais:', err)
+          fetchUsersError = err
+          return [] as TaskUsuarioAtivoRecord[]
+        }),
+      ])
 
-      // 2. Carregar validação central de usuários
-      try {
-        usersValidados = await controleService.getUsuariosAtivos()
-      } catch (fetchErr: any) {
-        console.error('Falha ao carregar usuários elegíveis com dados centrais:', fetchErr)
-        fetchUsersError = fetchErr
-      }
+      nomes = nomesRes
+      stProv = stProvRes
+      usersValidados = usersRes
 
       // Ignora respostas obsoletas de carregamentos simultâneos anteriores
       if (requestId !== activeRequestIdRef.current) {
@@ -533,7 +572,7 @@ export function ControleModal({
           (fetchAuxError as any)?.message ||
           'Falha técnica ao carregar listas auxiliares do controle.'
         setErroListasAuxiliares(msgAux)
-        toast({
+        toastRef.current({
           variant: 'destructive',
           title: 'Erro ao carregar listas auxiliares',
           description: msgAux,
@@ -546,7 +585,7 @@ export function ControleModal({
           'Falha técnica ao consultar dados centrais no Gestor de Acessos. Novos vínculos estão temporariamente suspensos.'
         setErroUsuariosCentrais(errorMsg)
         setValidacaoUsuariosStatus('falhou')
-        toast({
+        toastRef.current({
           variant: 'destructive',
           title: 'Erro ao carregar usuários elegíveis',
           description: errorMsg,
@@ -599,7 +638,12 @@ export function ControleModal({
       if (nomes.length > 0) {
         setNomesLista(nomes)
       }
-      setUsuariosLista(listaCombinada)
+      // PARTE A (item 5): Quando a busca terminar, troca pela lista atualizada do banco
+      if (!fetchUsersError && usersValidados.length > 0) {
+        setUsuariosLista(listaCombinada)
+      } else if (listaCombinada.length > 0) {
+        setUsuariosLista(listaCombinada)
+      }
       if (stProv.length > 0) {
         setStatusProvLista(stProv)
       }
@@ -614,7 +658,7 @@ export function ControleModal({
         setLoadingListas(false)
       }
     }
-  }, [statusProvidenciaList, toast, controleToEdit])
+  }, [statusProvidenciaList, controleToEdit, usuariosProp])
 
   const { corePerfil, coreUserId } = useAuth()
   const isAdmin = corePerfil === 'ADMINISTRADOR'
@@ -643,6 +687,28 @@ export function ControleModal({
     setBuscaExecSelect('')
   }, [statusPadraoId])
 
+  // Guardar funções em useRef para evitar que funções recriadas reiniciem o formulário ao abrir
+  const onOpenChangeRef = useRef(onOpenChange)
+  onOpenChangeRef.current = onOpenChange
+
+  const carregarListasAuxiliaresRef = useRef(carregarListasAuxiliares)
+  carregarListasAuxiliaresRef.current = carregarListasAuxiliares
+
+  const resetFormStateRef = useRef(resetFormState)
+  resetFormStateRef.current = resetFormState
+
+  const toastRef = useRef(toast)
+  toastRef.current = toast
+
+  const statusPadraoIdRef = useRef(statusPadraoId)
+  statusPadraoIdRef.current = statusPadraoId
+
+  const tipoPrazoPadraoIdRef = useRef(tipoPrazoPadraoId)
+  tipoPrazoPadraoIdRef.current = tipoPrazoPadraoId
+
+  const statusProvPadraoIdRef = useRef(statusProvPadraoId)
+  statusProvPadraoIdRef.current = statusProvPadraoId
+
   // Popula o formulário ao abrir
   useEffect(() => {
     const generation = ++accessRequestIdRef.current
@@ -660,9 +726,9 @@ export function ControleModal({
     // Caso NÃO haja controleToEdit (criação de novo caso): fluxo imediato sem bloqueio
     if (!controleToEdit) {
       setVerificandoAcesso(false)
-      carregarListasAuxiliares()
+      carregarListasAuxiliaresRef.current()
       setActiveTab(initialTab || 'dados')
-      resetFormState()
+      resetFormStateRef.current()
       return () => {
         accessRequestIdRef.current++
       }
@@ -671,7 +737,7 @@ export function ControleModal({
     // Fail-closed para caso existente:
     // Limpa dados imediatamente enquanto a verificação assíncrona estiver pendente
     setVerificandoAcesso(true)
-    resetFormState()
+    resetFormStateRef.current()
 
     const currentContextKey = `${controleToEdit.id || 'sem-id'}::${coreUserId || 'sem-user'}::${corePerfil || 'sem-perfil'}`
 
@@ -691,19 +757,19 @@ export function ControleModal({
         if (!permitido) {
           setAuthorizedContext(null)
           setVerificandoAcesso(false)
-          toast({
+          toastRef.current({
             variant: 'destructive',
             title: 'Acesso negado',
             description: 'Você não possui permissão para visualizar ou editar este caso.',
           })
-          onOpenChange(false)
+          onOpenChangeRef.current(false)
           return
         }
 
         // Acesso explicitamente autorizado e geração válida: registrar autorização explícita e popular dados
         setAuthorizedContext(currentContextKey)
         setVerificandoAcesso(false)
-        carregarListasAuxiliares()
+        carregarListasAuxiliaresRef.current()
         setActiveTab(initialTab || 'dados')
         setNomeControleError(false)
         setIdentificacaoError(false)
@@ -716,7 +782,7 @@ export function ControleModal({
 
         setNomeControleId(controleToEdit.nome_controle_id || '')
         setIdentificacaoCaso(controleToEdit.identificacao_caso || '')
-        setStatusId(controleToEdit.status_id || statusPadraoId)
+        setStatusId(controleToEdit.status_id || statusPadraoIdRef.current)
         setDataAutorizacao(
           controleToEdit.data_autorizacao ? controleToEdit.data_autorizacao.split('T')[0] : '',
         )
@@ -742,8 +808,8 @@ export function ControleModal({
             tempId: p.id || `existing-${idx}`,
             providencia: p.providencia || '',
             prazo_conclusao: p.prazo_conclusao ? p.prazo_conclusao.split('T')[0] : '',
-            tipo_prazo_id: p.tipo_prazo_id || tipoPrazoPadraoId,
-            status_id: p.status_id || statusProvPadraoId,
+            tipo_prazo_id: p.tipo_prazo_id || tipoPrazoPadraoIdRef.current,
+            status_id: p.status_id || statusProvPadraoIdRef.current,
             ordem: p.ordem ?? idx,
             data_conclusao: p.data_conclusao ? p.data_conclusao.split('T')[0] : '',
             email_alertas: p.email_alertas ?? false,
@@ -761,8 +827,8 @@ export function ControleModal({
             tempId: autoTempId,
             providencia: '',
             prazo_conclusao: '',
-            tipo_prazo_id: tipoPrazoPadraoId,
-            status_id: statusProvPadraoId,
+            tipo_prazo_id: tipoPrazoPadraoIdRef.current,
+            status_id: statusProvPadraoIdRef.current,
             ordem: maiorOrdem + 1,
             data_conclusao: null,
             email_alertas: false,
@@ -781,12 +847,12 @@ export function ControleModal({
         }
         setAuthorizedContext(null)
         setVerificandoAcesso(false)
-        toast({
+        toastRef.current({
           variant: 'destructive',
           title: 'Acesso negado',
           description: 'Você não possui permissão para visualizar ou editar este caso.',
         })
-        onOpenChange(false)
+        onOpenChangeRef.current(false)
       }
     }
 
@@ -796,21 +862,7 @@ export function ControleModal({
       // Invalida requisições pendentes no cleanup do efeito
       accessRequestIdRef.current++
     }
-  }, [
-    open,
-    controleToEdit,
-    corePerfil,
-    coreUserId,
-    statusPadraoId,
-    tipoPrazoPadraoId,
-    statusProvPadraoId,
-    initialTab,
-    autoAddNewProvidencia,
-    carregarListasAuxiliares,
-    resetFormState,
-    onOpenChange,
-    toast,
-  ])
+  }, [open, controleToEdit?.id, coreUserId, corePerfil, initialTab, autoAddNewProvidencia])
 
   // Opções de Status do Controle
   const opcoesStatusControle = useMemo(() => {
@@ -830,18 +882,16 @@ export function ControleModal({
   }, [nomesLista, nomeControleId, buscaNomeSelect])
 
   // Opções de Responsáveis:
-  // Três estados da validação central: 'carregando', 'válida' ou 'falhou'.
-  // Durante o carregamento inicial e durante "Tentar novamente" (estado !== 'válida'),
-  // NÃO permite selecionar novos candidatos; mantém exclusivamente o responsável histórico
-  // já gravado visível na edição. Libera novas escolhas somente após a validação completa ('válida').
+  // Se houver lista de usuários (previamente carregada ou validada), exibe os candidatos e permite seleção imediata.
+  // Caso a validação central tenha explicitamente falhado, novas escolhas ficam suspensas.
   const opcoesResponsaveis = useMemo(() => {
     const editRespId =
       controleToEdit?.responsavel_core_usuario_id || controleToEdit?.responsavel_usuario_id
     let list = usuariosLista.filter((u) => {
       // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo na visualização)
       if (editRespId && (u.id === editRespId || u.core_usuario_id === editRespId)) return true
-      // Durante carregando ou falhou, NÃO oferece candidatos novos
-      if (validacaoUsuariosStatus !== 'válida') return false
+      // Se a validação central falhou explicitamente, suspende candidatos novos
+      if (validacaoUsuariosStatus === 'falhou') return false
       return u.ativo ?? true
     })
     if (buscaRespSelect.trim()) {
@@ -854,17 +904,16 @@ export function ControleModal({
   }, [usuariosLista, controleToEdit, validacaoUsuariosStatus, buscaRespSelect])
 
   // Opções de Executores:
-  // Durante carregamento inicial e "Tentar novamente" (estado !== 'válida'),
-  // NÃO permite selecionar novos candidatos; mantém exclusivamente o executor histórico
-  // já gravado visível na edição. Libera novas escolhas somente após a validação completa ('válida').
+  // Se houver lista de usuários (previamente carregada ou validada), exibe os candidatos e permite seleção imediata.
+  // Caso a validação central tenha explicitamente falhado, novas escolhas ficam suspensas.
   const opcoesExecutores = useMemo(() => {
     const editExecId =
       controleToEdit?.executor_core_usuario_id || controleToEdit?.executor_usuario_id
     let list = usuariosLista.filter((u) => {
       // Sempre permitir o usuário histórico que já está gravado no caso (para preservá-lo na visualização)
       if (editExecId && (u.id === editExecId || u.core_usuario_id === editExecId)) return true
-      // Durante carregando ou falhou, NÃO oferece candidatos novos
-      if (validacaoUsuariosStatus !== 'válida') return false
+      // Se a validação central falhou explicitamente, suspende candidatos novos
+      if (validacaoUsuariosStatus === 'falhou') return false
       return u.ativo ?? true
     })
     if (buscaExecSelect.trim()) {
@@ -1972,21 +2021,20 @@ export function ControleModal({
                           <Select
                             value={responsavelUsuarioId}
                             disabled={
-                              (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
-                              !controleToEdit?.responsavel_usuario_id
+                              opcoesResponsaveis.length === 0 ||
+                              (validacaoUsuariosStatus === 'falhou' &&
+                                !controleToEdit?.responsavel_usuario_id)
                             }
                             onValueChange={(val) => {
                               if (
-                                (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                validacaoUsuariosStatus === 'falhou' &&
                                 val !== controleToEdit?.responsavel_usuario_id
                               ) {
                                 toast({
                                   variant: 'destructive',
                                   title: 'Seleção bloqueada',
                                   description:
-                                    validacaoUsuariosStatus === 'carregando' || loadingListas
-                                      ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
-                                      : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
+                                    'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
                                 })
                                 return
                               }
@@ -1999,6 +2047,11 @@ export function ControleModal({
                             }}
                           >
                             <SelectTrigger
+                              disabled={
+                                opcoesResponsaveis.length === 0 ||
+                                (validacaoUsuariosStatus === 'falhou' &&
+                                  !controleToEdit?.responsavel_usuario_id)
+                              }
                               className={cn(
                                 'h-12 rounded-xl bg-background text-sm font-medium',
                                 responsavelError &&
@@ -2022,7 +2075,8 @@ export function ControleModal({
                                 </div>
                               </div>
 
-                              {validacaoUsuariosStatus === 'carregando' ? (
+                              {validacaoUsuariosStatus === 'carregando' &&
+                              opcoesResponsaveis.length === 0 ? (
                                 <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
                                   <span>Validando responsáveis centrais...</span>
@@ -2109,21 +2163,20 @@ export function ControleModal({
                             value={executorUsuarioId}
                             disabled={
                               executorIsResponsavel ||
-                              ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                              opcoesExecutores.length === 0 ||
+                              (validacaoUsuariosStatus === 'falhou' &&
                                 !controleToEdit?.executor_usuario_id)
                             }
                             onValueChange={(val) => {
                               if (
-                                (validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                validacaoUsuariosStatus === 'falhou' &&
                                 val !== controleToEdit?.executor_usuario_id
                               ) {
                                 toast({
                                   variant: 'destructive',
                                   title: 'Seleção bloqueada',
                                   description:
-                                    validacaoUsuariosStatus === 'carregando' || loadingListas
-                                      ? 'Aguarde o carregamento e validação concluir antes de fazer novas escolhas.'
-                                      : 'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
+                                    'Não é possível selecionar novos usuários durante falha das listas ou validação central.',
                                 })
                                 return
                               }
@@ -2134,7 +2187,8 @@ export function ControleModal({
                             <SelectTrigger
                               disabled={
                                 executorIsResponsavel ||
-                                ((validacaoUsuariosStatus !== 'válida' || loadingListas) &&
+                                opcoesExecutores.length === 0 ||
+                                (validacaoUsuariosStatus === 'falhou' &&
                                   !controleToEdit?.executor_usuario_id)
                               }
                               className={cn(
@@ -2162,7 +2216,8 @@ export function ControleModal({
                                 </div>
                               </div>
 
-                              {validacaoUsuariosStatus === 'carregando' ? (
+                              {validacaoUsuariosStatus === 'carregando' &&
+                              opcoesExecutores.length === 0 ? (
                                 <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
                                   <span>Validando executores centrais...</span>
@@ -2700,7 +2755,7 @@ export function ControleModal({
                   verificandoAcesso ||
                   saving ||
                   loadingListas ||
-                  (!controleToEdit && validacaoUsuariosStatus !== 'válida')
+                  validacaoUsuariosStatus !== 'válida'
                 }
                 onClick={() => handleSubmitControle()}
                 className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary text-primary-foreground shadow-sm hover:bg-[#4A4AC2]"

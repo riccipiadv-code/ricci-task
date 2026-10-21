@@ -291,6 +291,10 @@ export default function TarefasPage() {
     }
   }, [])
 
+  const handleModalSaved = useCallback(() => {
+    refreshControles()
+  }, [refreshControles])
+
   // Modais sequenciais de pós-encerramento de Providência
   // Modal 1: "Sem mais providências nesse controle / Deseja inserir uma nova providência?"
   const [dialogNovaProvidenciaOpen, setDialogNovaProvidenciaOpen] = useState(false)
@@ -2728,9 +2732,7 @@ export default function TarefasPage() {
         usuariosAtivos={usuariosAtivos}
         initialTab={modalInitialTab}
         autoAddNewProvidencia={modalAutoAddNewProvidencia}
-        onSaved={() => {
-          refreshControles()
-        }}
+        onSaved={handleModalSaved}
       />
 
       {/* Modal 1 de pós-encerramento de providência: Sem mais providências nesse controle */}
