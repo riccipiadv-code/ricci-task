@@ -1781,9 +1781,12 @@ export async function processSolicitacaoAdiamento(
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
           ${bodyLines
             .filter((line) => line !== 'https://ricci-task.goskip.app/')
-            .map((line) =>
-              line === '' ? '<br/>' : `<p style="margin: 4px 0;">${escapeHtml(line)}</p>`,
-            )
+            .map((line) => {
+              if (line === '') return '<br/>'
+              const escaped = escapeHtml(line)
+              const isBoldLine = line.startsWith('Data Solicitada:') || line.startsWith('Motivo:')
+              return `<p style="margin: 4px 0;">${isBoldLine ? `<strong>${escaped}</strong>` : escaped}</p>`
+            })
             .join('')}
         </div>
         <p style="margin-top: 24px;">

@@ -2032,6 +2032,13 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
       expect(sentMailPayload.html).toContain('Pasta Ricci: R-999')
       expect(sentMailPayload.html).toContain('15/05/2026')
       expect(sentMailPayload.html).toContain('28/05/2026')
+      // Checa negrito em Data Solicitada e Motivo com escape interno
+      expect(sentMailPayload.html).toContain(
+        '<p style="margin: 4px 0;"><strong>Data Solicitada: 28/05/2026</strong></p>',
+      )
+      expect(sentMailPayload.html).toContain(
+        '<p style="margin: 4px 0;"><strong>Motivo: Aguardando certidão cartorária &lt;urgente&gt;</strong></p>',
+      )
     })
   })
 
