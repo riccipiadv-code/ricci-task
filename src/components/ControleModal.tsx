@@ -2866,7 +2866,7 @@ export function ControleModal({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 space-y-4 py-2 pr-1">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 space-y-4 py-2 px-1 pb-1 -mx-1 pr-1">
             {/* Data pretendida (exibida automaticamente) */}
             <div className="space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/70 text-xs min-w-0">
               <div className="flex flex-wrap items-center justify-between gap-1 text-muted-foreground min-w-0">
@@ -2928,7 +2928,7 @@ export function ControleModal({
                 >
                   <SelectTrigger
                     id="select-admin-adiamento"
-                    className="h-10 rounded-xl bg-background text-xs sm:text-sm min-w-0"
+                    className="h-10 w-full rounded-xl bg-background text-xs sm:text-sm min-w-0"
                   >
                     <SelectValue placeholder="Selecione um administrador..." />
                   </SelectTrigger>
@@ -2973,7 +2973,7 @@ export function ControleModal({
                 disabled={enviandoSolicitacaoAdiamento || resultadoIncertoAdiamento}
                 placeholder="Descreva a justificativa para prorrogar a conclusão do caso..."
                 className={cn(
-                  'resize-none rounded-xl bg-background text-xs sm:text-sm min-w-0',
+                  'w-full resize-none rounded-xl bg-background text-xs sm:text-sm min-w-0',
                   motivoAdiamento.trim().length > 200 &&
                     'border-destructive focus-visible:ring-destructive',
                 )}
