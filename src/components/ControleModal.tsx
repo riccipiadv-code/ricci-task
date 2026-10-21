@@ -2855,30 +2855,33 @@ export function ControleModal({
           }
         }}
       >
-        <DialogContent className="max-w-lg rounded-2xl p-6 bg-card border-border">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <Clock className="w-5 h-5 text-primary" />
-              <span>Solicitar Adiamento do Caso</span>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg max-h-[90vh] overflow-x-hidden flex flex-col rounded-2xl p-6 bg-card border-border">
+          <DialogHeader className="shrink-0 min-w-0">
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2 min-w-0">
+              <Clock className="w-5 h-5 text-primary shrink-0" />
+              <span className="break-words">Solicitar Adiamento do Caso</span>
             </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
+            <DialogDescription className="text-xs text-muted-foreground break-words">
               Envie um pedido de adiamento ao administrador responsável para apreciação.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 space-y-4 py-2 pr-1">
             {/* Data pretendida (exibida automaticamente) */}
-            <div className="space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/70 text-xs">
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="font-medium">Data Pretendida para o Caso:</span>
-                <span className="font-bold text-foreground">
+            <div className="space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/70 text-xs min-w-0">
+              <div className="flex flex-wrap items-center justify-between gap-1 text-muted-foreground min-w-0">
+                <span className="font-medium break-words">Data Pretendida para o Caso:</span>
+                <span className="font-bold text-foreground break-words">
                   {providenciaParaAdiamento?.prazoPretendido
                     ? formatDateBR(providenciaParaAdiamento.prazoPretendido)
                     : 'Não informada'}
                 </span>
               </div>
               {providenciaParaAdiamento?.providenciaItem?.providencia && (
-                <div className="text-[11px] text-muted-foreground pt-1 border-t border-border/40 truncate">
+                <div
+                  className="text-[11px] text-muted-foreground pt-1 border-t border-border/40 min-w-0 line-clamp-3 break-words"
+                  title={providenciaParaAdiamento.providenciaItem.providencia}
+                >
                   <span className="font-semibold text-foreground/80">Providência vinculada: </span>
                   {providenciaParaAdiamento.providenciaItem.providencia}
                 </div>
@@ -2886,29 +2889,29 @@ export function ControleModal({
             </div>
 
             {/* Administrador elegível (obrigatório) */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label
                 htmlFor="select-admin-adiamento"
-                className="text-xs font-semibold text-foreground flex items-center justify-between"
+                className="text-xs font-semibold text-foreground flex flex-wrap items-center justify-between gap-1 min-w-0"
               >
-                <span>
+                <span className="break-words">
                   Administrador Destinatário <span className="text-destructive">*</span>
                 </span>
                 <span className="text-[11px] text-muted-foreground">Obrigatório</span>
               </Label>
 
               {loadingAdminsElegiveis ? (
-                <div className="h-10 px-3 rounded-xl border border-border flex items-center gap-2 text-xs text-muted-foreground bg-muted/30">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-                  <span>Carregando administradores elegíveis...</span>
+                <div className="h-10 px-3 rounded-xl border border-border flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 min-w-0">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                  <span className="break-words">Carregando administradores elegíveis...</span>
                 </div>
               ) : administradoresElegiveis.length === 0 ? (
-                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive space-y-1">
-                  <div className="font-semibold flex items-center gap-1.5">
+                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive space-y-1 min-w-0">
+                  <div className="font-semibold flex items-center gap-1.5 min-w-0">
                     <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>Nenhum administrador elegível encontrado</span>
+                    <span className="break-words">Nenhum administrador elegível encontrado</span>
                   </div>
-                  <p className="text-[11px] text-destructive/90 leading-snug">
+                  <p className="text-[11px] text-destructive/90 leading-snug break-words">
                     Não há administrador elegível para receber solicitações de adiamento
                     (requisitos: usuário ativo, com perfil ADMINISTRADOR ativo no sistema Ricci Task
                     e permissão de adiamento habilitada). O envio está bloqueado.
@@ -2925,18 +2928,20 @@ export function ControleModal({
                 >
                   <SelectTrigger
                     id="select-admin-adiamento"
-                    className="h-10 rounded-xl bg-background text-xs sm:text-sm"
+                    className="h-10 rounded-xl bg-background text-xs sm:text-sm min-w-0"
                   >
                     <SelectValue placeholder="Selecione um administrador..." />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl">
                     {administradoresElegiveis.map((admin) => (
                       <SelectItem key={admin.id} value={admin.id} className="py-2">
-                        <div className="flex flex-col text-left">
-                          <span className="font-semibold text-xs text-foreground">
+                        <div className="flex flex-col text-left min-w-0">
+                          <span className="font-semibold text-xs text-foreground truncate">
                             {admin.nome}
                           </span>
-                          <span className="text-[10px] text-muted-foreground">{admin.email}</span>
+                          <span className="text-[10px] text-muted-foreground truncate">
+                            {admin.email}
+                          </span>
                         </div>
                       </SelectItem>
                     ))}
@@ -2946,12 +2951,12 @@ export function ControleModal({
             </div>
 
             {/* Motivo (obrigatório, máximo 200 caracteres, contador x/200 visível) */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label
                 htmlFor="motivo-adiamento-input"
-                className="text-xs font-semibold text-foreground flex items-center justify-between"
+                className="text-xs font-semibold text-foreground flex flex-wrap items-center justify-between gap-1 min-w-0"
               >
-                <span>
+                <span className="break-words">
                   Motivo da Solicitação <span className="text-destructive">*</span>
                 </span>
                 <span className="text-[11px] text-muted-foreground">Máx. 200 caracteres</span>
@@ -2968,14 +2973,15 @@ export function ControleModal({
                 disabled={enviandoSolicitacaoAdiamento || resultadoIncertoAdiamento}
                 placeholder="Descreva a justificativa para prorrogar a conclusão do caso..."
                 className={cn(
-                  'resize-none rounded-xl bg-background text-xs sm:text-sm',
+                  'resize-none rounded-xl bg-background text-xs sm:text-sm min-w-0',
                   motivoAdiamento.trim().length > 200 &&
                     'border-destructive focus-visible:ring-destructive',
                 )}
               />
-              <div className="flex items-center justify-between text-[11px]">
+              <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] min-w-0">
                 <span
                   className={cn(
+                    'break-words',
                     motivoAdiamento.trim().length === 0
                       ? 'text-muted-foreground'
                       : 'text-foreground',
@@ -2987,7 +2993,7 @@ export function ControleModal({
                 </span>
                 <span
                   className={cn(
-                    'font-mono font-medium',
+                    'font-mono font-medium shrink-0',
                     motivoAdiamento.trim().length > 200
                       ? 'text-destructive font-bold'
                       : 'text-muted-foreground',
@@ -3002,24 +3008,24 @@ export function ControleModal({
             {erroAdiamento && (
               <div
                 className={cn(
-                  'p-3 rounded-xl border text-xs flex items-start gap-2',
+                  'p-3 rounded-xl border text-xs flex items-start gap-2 min-w-0',
                   resultadoIncertoAdiamento
                     ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
                     : 'bg-destructive/10 border-destructive/20 text-destructive',
                 )}
               >
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div className="space-y-1 leading-snug">
-                  <span className="font-semibold block">
+                <div className="space-y-1 leading-snug min-w-0">
+                  <span className="font-semibold block break-words">
                     {resultadoIncertoAdiamento ? 'Envio Incerto (SMTP)' : 'Atenção'}
                   </span>
-                  <span>{erroAdiamento}</span>
+                  <span className="break-words">{erroAdiamento}</span>
                 </div>
               </div>
             )}
           </div>
 
-          <DialogFooter className="pt-2 flex flex-row items-center justify-end gap-2.5">
+          <DialogFooter className="pt-2 shrink-0 flex flex-row items-center justify-end gap-2.5 min-w-0">
             <Button
               type="button"
               variant="outline"
