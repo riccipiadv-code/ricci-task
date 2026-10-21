@@ -4878,4 +4878,544 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
       expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
     })
   })
+
+  describe('Tratamento Pós-SMTP: Confirmação de Sucesso e Preservação de Estado (0.0.120)', () => {
+    const buildContextParaPosSmtp = () => {
+      const emailEventosUpdates: any[] = []
+      const solicitacoesUpdates: any[] = []
+      const emailSendLogsInserts: any[] = []
+
+      let mockEmailEventosUpdate = (_vals: any): any => {
+        const chain: any = {
+          eq: () => chain,
+          select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+        }
+        return chain
+      }
+
+      let mockSolicitacoesUpdate = (_vals: any): any => {
+        const chain: any = {
+          eq: () => chain,
+          select: () => Promise.resolve({ data: [{ id: 'sol-post-1' }], error: null }),
+        }
+        return chain
+      }
+
+      const mockCtx: any = {
+        transporter: {
+          sendMail: vi.fn().mockResolvedValue({ messageId: 'msg-pos-smtp-ok' }),
+        },
+        supabase: {
+          auth: {
+            getUser: vi.fn().mockResolvedValue({
+              data: { user: { id: 'auth-user-pos-smtp' } },
+              error: null,
+            }),
+          },
+          from: vi.fn().mockImplementation((table: string) => {
+            if (table === 'core_usuarios') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'cu-caller-1',
+                          auth_user_id: 'auth-user-pos-smtp',
+                          nome: 'Solicitante Teste',
+                          email: 'solicitante@riccipi.com.br',
+                          ativo: true,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'core_usuario_sistemas') {
+              const chain: any = {
+                eq: () => chain,
+                in: () => chain,
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: 'cus-admin-1',
+                      ativo: true,
+                      core_usuarios: {
+                        id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                        nome: 'Admin Elegível',
+                        email: 'admin@riccipi.com.br',
+                        ativo: true,
+                        adiamento: true,
+                      },
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                    },
+                    error: null,
+                  }),
+                then: (resolve: any) =>
+                  resolve({
+                    data: [
+                      {
+                        id: 'cus-op-1',
+                        ativo: true,
+                        core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                        core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                      },
+                    ],
+                    error: null,
+                  }),
+              }
+              return { select: () => chain }
+            }
+            if (table === 'task_tarefas') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                          numero_caso: 701,
+                          identificacao_caso: 'Caso Teste Pós-SMTP',
+                          pasta_ricci: 'R-701',
+                          pasta_cliente: 'C-701',
+                          prazo_conclusao: '2026-05-15',
+                          executor_core_usuario_id: 'cu-caller-1',
+                          responsavel_core_usuario_id: 'cu-caller-1',
+                          deleted_at: null,
+                          arquivado_at: null,
+                          nome_controle: { nome: 'Controle Pós-SMTP' },
+                          status: {
+                            id: 'st-1',
+                            codigo: 'ANDAMENTO',
+                            nome: 'Andamento',
+                            finaliza: false,
+                          },
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_providencias') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: '88888888-8888-4888-8888-888888888888',
+                          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                          providencia: 'Providência pós-SMTP',
+                          prazo_conclusao: '2026-05-15',
+                          deleted_at: null,
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }
+            }
+            if (table === 'task_solicitacoes_adiamento') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }),
+                }),
+                insert: () => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'sol-post-1',
+                          chave_idempotencia: '11111111-1111-4111-8111-111111111199',
+                          email_status: 'pendente',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+                update: (vals: any) => {
+                  solicitacoesUpdates.push(vals)
+                  return mockSolicitacoesUpdate(vals)
+                },
+              }
+            }
+            if (table === 'task_email_eventos') {
+              return {
+                select: () => ({
+                  eq: () => ({
+                    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                  }),
+                }),
+                insert: (row: any) => ({
+                  select: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: 'evt-post-1',
+                          owner_token: row.owner_token,
+                          status: 'pending',
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+                update: (vals: any) => {
+                  emailEventosUpdates.push(vals)
+                  return mockEmailEventosUpdate(vals)
+                },
+              }
+            }
+            if (table === 'email_send_logs') {
+              return {
+                insert: (row: any) => {
+                  emailSendLogsInserts.push(row)
+                  return Promise.resolve({ data: [], error: null })
+                },
+              }
+            }
+            return {}
+          }),
+        },
+      }
+
+      const createRequest = () =>
+        new Request('https://edge.local/solicitacao-adiamento', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer token-test',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            operacao: 'solicitar_adiamento',
+            tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+            providencia_id: '88888888-8888-4888-8888-888888888888',
+            administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+            motivo: 'Motivo teste pós-SMTP',
+            prazo_solicitado: '2026-05-30',
+            chave_idempotencia: '11111111-1111-4111-8111-111111111199',
+          }),
+        })
+
+      return {
+        mockCtx,
+        createRequest,
+        emailEventosUpdates,
+        solicitacoesUpdates,
+        emailSendLogsInserts,
+        setMockEmailEventosUpdate: (fn: any) => {
+          mockEmailEventosUpdate = fn
+        },
+        setMockSolicitacoesUpdate: (fn: any) => {
+          mockSolicitacoesUpdate = fn
+        },
+      }
+    }
+
+    it('(1) Caminho feliz pós-SMTP: success OK -> solicitação email_status "enviado" e resposta 200', async () => {
+      const helper = buildContextParaPosSmtp()
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.success).toBe(true)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('enviado')
+      expect(data.notificacao_aceita_smtp).toBe(true)
+
+      // Verifica atualizações
+      const postSmtpEvt = helper.emailEventosUpdates.find((u) => u.status === 'success')
+      expect(postSmtpEvt).toBeDefined()
+      expect(postSmtpEvt.erro).toBeNull()
+
+      const postSmtpSol = helper.solicitacoesUpdates.find((u) => u.email_status === 'enviado')
+      expect(postSmtpSol).toBeDefined()
+      expect(postSmtpSol.email_enviado_at).toBeDefined()
+
+      const sendLog = helper.emailSendLogsInserts.find((l) => l.status === 'success')
+      expect(sendLog).toBeDefined()
+    })
+
+    it('(2) Caminho feliz pós-SMTP com falha na gravação da solicitação: apenas loga e mantém 200 de sucesso', async () => {
+      const helper = buildContextParaPosSmtp()
+      helper.setMockSolicitacoesUpdate((vals: any) => {
+        if (vals.email_status === 'enviado') {
+          // Simula erro de banco ou 0 linhas na gravação de 'enviado' da solicitação
+          return {
+            eq: () => ({
+              select: () =>
+                Promise.resolve({ data: [], error: { message: 'db error on solicitacao update' } }),
+            }),
+          }
+        }
+        return {
+          eq: () => ({
+            select: () => Promise.resolve({ data: [{ id: 'sol-post-1' }], error: null }),
+          }),
+        }
+      })
+
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.success).toBe(true)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('enviado')
+      expect(data.notificacao_aceita_smtp).toBe(true)
+
+      // Evento foi marcado como success
+      const postSmtpEvt = helper.emailEventosUpdates.find((u) => u.status === 'success')
+      expect(postSmtpEvt).toBeDefined()
+    })
+
+    it('(3) Outra requisição assumiu o evento (marcação success afeta 0 linhas): propriedade perdida diretamente, nada gravado, resposta 500 incerto', async () => {
+      const helper = buildContextParaPosSmtp()
+      helper.setMockEmailEventosUpdate((vals: any) => {
+        if (vals.status === 'success') {
+          // 0 linhas afetadas sem erro
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          eq: () => ({
+            eq: () => ({
+              eq: () => ({
+                select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+              }),
+            }),
+          }),
+        }
+      })
+
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('incerto')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-post-1')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111199')
+
+      // Não tentou marcar o evento como uncertain
+      const uncertainEvt = helper.emailEventosUpdates.find((u) => u.status === 'uncertain')
+      expect(uncertainEvt).toBeUndefined()
+
+      // Não alterou a solicitação para incerto (preservou estado gravado pela outra)
+      const incertoSol = helper.solicitacoesUpdates.find((u) => u.email_status === 'incerto')
+      expect(incertoSol).toBeUndefined()
+
+      // Log registrado com status uncertain e propriedade perdida
+      const log = helper.emailSendLogsInserts.find((l) => l.status === 'uncertain')
+      expect(log).toBeDefined()
+      expect(log.error_message).toContain('propriedade do evento perdida')
+    })
+
+    it('(4) Falha por ERRO de banco na marcação de success e propriedade retida (marcação uncertain afeta 1 linha): evento vira uncertain, solicitação vira incerto, resposta 500', async () => {
+      const helper = buildContextParaPosSmtp()
+      helper.setMockEmailEventosUpdate((vals: any) => {
+        if (vals.status === 'success') {
+          // Erro de banco retornado pelo Supabase
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({ data: null, error: { message: 'Database connection blip' } }),
+                }),
+              }),
+            }),
+          }
+        }
+        if (vals.status === 'uncertain') {
+          // Marcação de uncertain tem sucesso e afeta 1 linha
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          eq: () => ({
+            eq: () => ({
+              eq: () => ({
+                select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+              }),
+            }),
+          }),
+        }
+      })
+
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('incerto')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-post-1')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111199')
+
+      // Evento foi marcado como uncertain
+      const uncertainEvt = helper.emailEventosUpdates.find((u) => u.status === 'uncertain')
+      expect(uncertainEvt).toBeDefined()
+
+      // Solicitação foi atualizada para incerto (pois a propriedade foi retida)
+      const incertoSol = helper.solicitacoesUpdates.find((u) => u.email_status === 'incerto')
+      expect(incertoSol).toBeDefined()
+    })
+
+    it('(5) Erro de banco no success E marcação uncertain também falha (retorna erro): propriedade perdida, nada gravado na solicitação, resposta 500', async () => {
+      const helper = buildContextParaPosSmtp()
+      helper.setMockEmailEventosUpdate((vals: any) => {
+        if (vals.status === 'success') {
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({ data: null, error: { message: 'DB fail on success' } }),
+                }),
+              }),
+            }),
+          }
+        }
+        if (vals.status === 'uncertain') {
+          // Falha na marcação uncertain
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({ data: null, error: { message: 'DB fail on uncertain' } }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          eq: () => ({
+            eq: () => ({
+              eq: () => ({
+                select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+              }),
+            }),
+          }),
+        }
+      })
+
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('incerto')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+
+      // NÃO alterou a solicitação para incerto (pois propriedade foi perdida)
+      const incertoSol = helper.solicitacoesUpdates.find((u) => u.email_status === 'incerto')
+      expect(incertoSol).toBeUndefined()
+    })
+
+    it('(6) Erro de banco no success E marcação uncertain afeta 0 linhas (outra assumiu): propriedade perdida, nada gravado na solicitação, resposta 500', async () => {
+      const helper = buildContextParaPosSmtp()
+      helper.setMockEmailEventosUpdate((vals: any) => {
+        if (vals.status === 'success') {
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () =>
+                    Promise.resolve({ data: null, error: { message: 'DB fail on success' } }),
+                }),
+              }),
+            }),
+          }
+        }
+        if (vals.status === 'uncertain') {
+          // 0 linhas afetadas na tentativa uncertain
+          return {
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  select: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          eq: () => ({
+            eq: () => ({
+              eq: () => ({
+                select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+              }),
+            }),
+          }),
+        }
+      })
+
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('incerto')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+
+      // NÃO alterou a solicitação para incerto (pois propriedade foi perdida)
+      const incertoSol = helper.solicitacoesUpdates.find((u) => u.email_status === 'incerto')
+      expect(incertoSol).toBeUndefined()
+    })
+
+    it('(7) Exceção inesperada lançada no bloco pós-SMTP: conta como propriedade perdida, nada gravado na solicitação, resposta 500', async () => {
+      const helper = buildContextParaPosSmtp()
+      helper.setMockEmailEventosUpdate((vals: any) => {
+        if (vals.status === 'success') {
+          // Lança exceção de runtime no update de success
+          throw new Error('Crash inesperado no driver do banco')
+        }
+        return {
+          eq: () => ({
+            eq: () => ({
+              eq: () => ({
+                select: () => Promise.resolve({ data: [{ id: 'evt-post-1' }], error: null }),
+              }),
+            }),
+          }),
+        }
+      })
+
+      const res = await handleSolicitacao(helper.createRequest(), helper.mockCtx)
+      expect(res.status).toBe(500)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('incerto')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+
+      // NÃO gravou na solicitação
+      const incertoSol = helper.solicitacoesUpdates.find((u) => u.email_status === 'incerto')
+      expect(incertoSol).toBeUndefined()
+
+      // Log registrado com uncertain
+      const log = helper.emailSendLogsInserts.find((l) => l.status === 'uncertain')
+      expect(log).toBeDefined()
+      expect(log.error_message).toContain('propriedade do evento perdida')
+    })
+  })
 })

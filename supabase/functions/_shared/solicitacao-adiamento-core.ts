@@ -2061,7 +2061,8 @@ export async function processSolicitacaoAdiamento(
 
     // 17. Pós-SMTP: Confirmação de Sucesso com verificação rigorosa de owner_token e linhas afetadas
     const agoraIso = new Date().toISOString()
-    let persistenceFailed = false
+    let postSmtpSuccess = false
+    let propriedadePerdida = false
 
     try {
       const { data: updatedSuccessRows, error: updateSuccessErr } = await supabase
@@ -2076,30 +2077,50 @@ export async function processSolicitacaoAdiamento(
         .eq('status', 'smtp_maybe_sent')
         .select('id, status')
 
-      if (updateSuccessErr || !updatedSuccessRows || updatedSuccessRows.length === 0) {
-        persistenceFailed = true
+      if (updateSuccessErr) {
+        // Caso 1: ERRO DE BANCO na marcação de success
         console.error(
-          '[solicitacao-adiamento] Falha crítica de persistência pós-SMTP em task_email_eventos:',
+          '[solicitacao-adiamento] Falha crítica de persistência pós-SMTP em task_email_eventos (erro de banco):',
           updateSuccessErr,
         )
-        // Tentativa de marcar como incerto se ainda mantiver o lock
-        await supabase
+        // Tenta marcar o evento como uncertain com os MESMOS três filtros e .select('id')
+        const { data: updatedUncertainRows, error: updateUncertainErr } = await supabase
           .from('task_email_eventos')
           .update({
             status: 'uncertain',
             sent_at: agoraIso,
-            erro: `Enviado via SMTP mas falha na persistência final: ${updateSuccessErr?.message || '0 linhas afetadas'}`,
+            erro: `Enviado via SMTP mas falha na persistência final: ${updateSuccessErr.message || 'erro de banco'}`,
           })
           .eq('id', eventoId)
           .eq('owner_token', callOwnerToken)
+          .eq('status', 'smtp_maybe_sent')
+          .select('id')
+
+        if (updateUncertainErr || !updatedUncertainRows || updatedUncertainRows.length === 0) {
+          // Segunda tentativa falhou OU não afetou nenhuma linha: propriedade perdida
+          propriedadePerdida = true
+        } else {
+          // Propriedade retida e evento marcado como uncertain
+          propriedadePerdida = false
+        }
+      } else if (!updatedSuccessRows || updatedSuccessRows.length === 0) {
+        // Caso 2: NENHUMA LINHA AFETADA sem erro (zero linhas na marcação de success)
+        // Considera a propriedade do evento PERDIDA diretamente (não tenta uncertain)
+        propriedadePerdida = true
+      } else {
+        // Sucesso na marcação do evento
+        postSmtpSuccess = true
       }
     } catch (persErr: any) {
-      persistenceFailed = true
+      // Caso 3: Exceção lançada nesse trecho também conta como propriedade PERDIDA
+      propriedadePerdida = true
       console.error('[solicitacao-adiamento] Exceção na persistência pós-SMTP:', persErr)
     }
 
-    // Se perdeu o lock (0 linhas afetadas), NÃO sobrescrever estados
-    if (!persistenceFailed) {
+    if (postSmtpSuccess) {
+      // Quando o evento for marcado como success normalmente:
+      // grave email_status: 'enviado' e email_enviado_at na solicitação com .select('id').
+      // Se essa gravação falhar, APENAS registre o erro em log e mantenha a resposta de sucesso.
       const { data: updatedSolRows, error: updateSolErr } = await supabase
         .from('task_solicitacoes_adiamento')
         .update({
@@ -2111,33 +2132,50 @@ export async function processSolicitacaoAdiamento(
 
       if (updateSolErr || !updatedSolRows || updatedSolRows.length === 0) {
         console.warn(
-          '[solicitacao-adiamento] 0 linhas afetadas ao atualizar task_solicitacoes_adiamento para enviado:',
+          '[solicitacao-adiamento] Falha ao atualizar task_solicitacoes_adiamento para enviado (resposta de sucesso mantida pois evento já é success):',
           updateSolErr,
         )
       }
+
+      await supabase.from('email_send_logs').insert({
+        type: 'ricci_task_solicitacao_adiamento',
+        to_email: adminAtualizado.email,
+        subject: mailOptions.subject,
+        status: 'success',
+        created_by: user.id,
+        created_at: agoraIso,
+        error_message: null,
+      })
     } else {
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({
-          email_status: 'incerto',
-          email_enviado_at: null,
-        })
-        .eq('id', solicitacaoId)
-    }
+      // Falha pós-SMTP:
+      // Grave email_status: 'incerto' na solicitação SOMENTE quando houve falha na marcação de success
+      // E a propriedade do evento NÃO foi perdida (ou seja: erro de banco, a marcação uncertain funcionou e afetou linha).
+      if (!propriedadePerdida) {
+        await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({
+            email_status: 'incerto',
+            email_enviado_at: null,
+          })
+          .eq('id', solicitacaoId)
+          .select('id')
+      }
+      // Se a propriedade foi PERDIDA: NÃO altere o evento e NÃO altere a solicitação.
 
-    await supabase.from('email_send_logs').insert({
-      type: 'ricci_task_solicitacao_adiamento',
-      to_email: adminAtualizado.email,
-      subject: mailOptions.subject,
-      status: persistenceFailed ? 'uncertain' : 'success',
-      created_by: user.id,
-      created_at: agoraIso,
-      error_message: persistenceFailed
-        ? 'Enviado via SMTP mas falha ao atualizar registro de evento.'
-        : null,
-    })
+      await supabase.from('email_send_logs').insert({
+        type: 'ricci_task_solicitacao_adiamento',
+        to_email: adminAtualizado.email,
+        subject: mailOptions.subject,
+        status: 'uncertain',
+        created_by: user.id,
+        created_at: agoraIso,
+        error_message: propriedadePerdida
+          ? 'Enviado via SMTP mas propriedade do evento perdida na confirmação final.'
+          : 'Enviado via SMTP mas falha ao atualizar registro de evento (evento marcado como uncertain).',
+      })
 
-    if (persistenceFailed) {
+      // Em QUALQUER falha deste trecho (success falhou com propriedade retida, propriedade perdida, exceção),
+      // a resposta continua HTTP 500 com success: false, solicitacao_registrada: true, email_status: 'incerto', notificacao_aceita_smtp: false.
       return new Response(
         JSON.stringify({
           success: false,
@@ -2145,7 +2183,7 @@ export async function processSolicitacaoAdiamento(
           email_status: 'incerto',
           notificacao_aceita_smtp: false,
           message:
-            'Solicitação registrada e e-mail despachado pelo SMTP, porém houve falha de persistência da confirmação. Evento marcado como incerto para evitar reenvio duplicado.',
+            'Solicitação registrada e e-mail despachado pelo SMTP, porém houve falha de persistência da confirmação. Evento mantido ou marcado como incerto para evitar reenvio duplicado.',
           solicitacao_id: solicitacaoId,
           chave_idempotencia,
         }),
