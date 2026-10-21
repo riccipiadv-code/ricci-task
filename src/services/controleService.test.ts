@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { controleService } from '@/services/controleService'
+import { controleService, lerRespostaEdgeFunction, gerarUuidV4 } from '@/services/controleService'
 import { supabase } from '@/lib/supabase/client'
 import { SaveControleInput } from '@/types/task'
 
@@ -1579,6 +1579,385 @@ describe('controleService.saveControle (Etapa de transição para IDs centrais)'
       expect(result.eventos_providencias).toBeDefined()
       expect(result.eventos_providencias).toHaveLength(2)
       expect(result.eventos_providencias).toEqual(mockEventos)
+    })
+  })
+
+  describe('Fluxo de Solicitação de Adiamento no controleService (Ajuste 0.0.121)', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    describe('gerarUuidV4', () => {
+      it('gera um UUID v4 no formato canônico padrão usando crypto.randomUUID() quando disponível', () => {
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        const id = gerarUuidV4()
+        expect(id).toMatch(uuidRegex)
+      })
+
+      it('gera UUID v4 válido mesmo quando crypto.randomUUID é indefinido (fallback)', () => {
+        const originalRandomUUID = crypto.randomUUID
+        try {
+          delete (crypto as { randomUUID?: () => string }).randomUUID
+          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          const id = gerarUuidV4()
+          expect(id).toMatch(uuidRegex)
+        } finally {
+          crypto.randomUUID = originalRandomUUID
+        }
+      })
+    })
+
+    describe('lerRespostaEdgeFunction', () => {
+      it('sem erro e com objeto: devolve payload data e httpStatus 200', async () => {
+        const data = { success: true, valor: 42 }
+        const res = await lerRespostaEdgeFunction(data, null)
+        expect(res).toEqual({ payload: data, httpStatus: 200 })
+      })
+
+      it('sem erro e com string JSON: converte para objeto e devolve httpStatus 200', async () => {
+        const dataStr = JSON.stringify({ success: true, count: 10 })
+        const res = await lerRespostaEdgeFunction(dataStr, null)
+        expect(res).toEqual({ payload: { success: true, count: 10 }, httpStatus: 200 })
+      })
+
+      it('sem erro e com data null: devolve payload null e httpStatus 200', async () => {
+        const res = await lerRespostaEdgeFunction(null, null)
+        expect(res).toEqual({ payload: null, httpStatus: 200 })
+      })
+
+      it('com erro HTTP e data objeto: devolve httpStatus de error.context.status e payload de data', async () => {
+        const error = {
+          message: 'Conflict',
+          context: { status: 409 },
+        }
+        const data = { solicitacao_id: 'sol-409', email_status: 'incerto' }
+        const res = await lerRespostaEdgeFunction(data, error)
+        expect(res).toEqual({
+          payload: data,
+          httpStatus: 409,
+        })
+      })
+
+      it('com erro HTTP e data null: lê payload de error.context com .json() / .clone()', async () => {
+        const errorBody = {
+          email_status: 'incerto',
+          solicitacao_id: 'sol-context-1',
+          message: 'Bloqueado',
+        }
+        const error = {
+          message: 'Conflict',
+          context: {
+            status: 409,
+            clone: () => ({
+              json: async () => errorBody,
+            }),
+            json: async () => errorBody,
+          },
+        }
+        const res = await lerRespostaEdgeFunction(null, error)
+        expect(res).toEqual({
+          payload: errorBody,
+          httpStatus: 409,
+        })
+      })
+
+      it('com erro HTTP e data null: lê payload de error.context com .text() convertido de JSON', async () => {
+        const errorBody = { error: 'Erro no servidor', email_status: 'falhou' }
+        const error = {
+          message: 'Internal Server Error',
+          context: {
+            status: 500,
+            text: async () => JSON.stringify(errorBody),
+          },
+        }
+        const res = await lerRespostaEdgeFunction(null, error)
+        expect(res).toEqual({
+          payload: errorBody,
+          httpStatus: 500,
+        })
+      })
+
+      it('com erro onde o corpo é ilegível/inválido: devolve payload null sem lançar exceção', async () => {
+        const error = {
+          message: 'Bad Gateway',
+          context: {
+            status: 502,
+            text: async () => '<html>502 Bad Gateway</html>',
+          },
+        }
+        const res = await lerRespostaEdgeFunction(null, error)
+        expect(res).toEqual({
+          payload: null,
+          httpStatus: 502,
+        })
+      })
+
+      it('nunca lança exceção mesmo com valores bizarros', async () => {
+        const res = await lerRespostaEdgeFunction(undefined, { context: {} })
+        expect(res.payload).toBeNull()
+      })
+    })
+
+    describe('controleService.solicitarAdiamento', () => {
+      it('sucesso real: 200 com email_status "enviado" e notificacao_aceita_smtp true', async () => {
+        const mockInvoke = vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: {
+            success: true,
+            solicitacao_registrada: true,
+            email_status: 'enviado',
+            notificacao_aceita_smtp: true,
+            solicitacao_id: 'sol-123',
+            chave_idempotencia: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+            message: 'Solicitação registrada e e-mail enviado com sucesso.',
+          },
+          error: null,
+        } as any)
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Preciso de adiamento',
+          prazoSolicitado: '2026-06-30',
+          chaveIdempotencia: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+        })
+
+        expect(mockInvoke).toHaveBeenCalled()
+        expect(res.success).toBe(true)
+        expect(res.http_status).toBe(200)
+        expect(res.solicitacao_registrada).toBe(true)
+        expect(res.email_status).toBe('enviado')
+        expect(res.notificacao_aceita_smtp).toBe(true)
+        expect(res.solicitacao_id).toBe('sol-123')
+        expect(res.chave_idempotencia).toBe('38cb3c4d-7198-40a3-8815-a8881a9f506b')
+        expect(res.message).toBe('Solicitação registrada e e-mail enviado com sucesso.')
+      })
+
+      it('200 sem notificacao_aceita_smtp true NÃO é tratado como sucesso', async () => {
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: {
+            success: false,
+            solicitacao_registrada: true,
+            email_status: 'incerto',
+            notificacao_aceita_smtp: false,
+            solicitacao_id: 'sol-incerto',
+            message: 'Status de envio incerto',
+          },
+          error: null,
+        } as any)
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Preciso de adiamento',
+          prazoSolicitado: '2026-06-30',
+          chaveIdempotencia: 'chave-teste-1',
+        })
+
+        expect(res.success).toBe(false)
+        expect(res.http_status).toBe(200)
+        expect(res.solicitacao_registrada).toBe(true)
+        expect(res.email_status).toBe('incerto')
+        expect(res.notificacao_aceita_smtp).toBe(false)
+        expect(res.solicitacao_id).toBe('sol-incerto')
+        expect(res.error).toBe('Status de envio incerto')
+        expect(res.chave_idempotencia).toBe('chave-teste-1')
+      })
+
+      it('resposta 409 com corpo JSON em error.context: payload lido, repassa campos, mesma chave e success false', async () => {
+        const errorJson = {
+          email_status: 'incerto',
+          solicitacao_id: 'sol-409',
+          message: 'Solicitação anterior já em processamento',
+          solicitacao_registrada: true,
+          notificacao_aceita_smtp: false,
+          reason: 'already_requested',
+        }
+
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: null,
+          error: {
+            message: 'Conflict',
+            context: {
+              status: 409,
+              clone: () => ({
+                json: async () => errorJson,
+              }),
+              json: async () => errorJson,
+            },
+          },
+        } as any)
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Motivo',
+          prazoSolicitado: '2026-06-30',
+          chaveIdempotencia: 'chave-fixa-409',
+        })
+
+        expect(res.success).toBe(false)
+        expect(res.http_status).toBe(409)
+        expect(res.email_status).toBe('incerto')
+        expect(res.solicitacao_id).toBe('sol-409')
+        expect(res.solicitacao_registrada).toBe(true)
+        expect(res.notificacao_aceita_smtp).toBe(false)
+        expect(res.reason).toBe('already_requested')
+        expect(res.error).toBe('Solicitação anterior já em processamento')
+        expect(res.chave_idempotencia).toBe('chave-fixa-409')
+      })
+
+      it('data = null sem erro não é tratado como sucesso e retorna mensagem apropriada', async () => {
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: null,
+          error: null,
+        } as any)
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Motivo',
+          prazoSolicitado: '2026-06-30',
+          chaveIdempotencia: 'chave-nula',
+        })
+
+        expect(res.success).toBe(false)
+        expect(res.http_status).toBe(200)
+        expect(res.chave_idempotencia).toBe('chave-nula')
+        expect(res.error).toBe(
+          'Resposta vazia ou inválida do servidor. Não foi possível confirmar o registro nem o envio da solicitação.',
+        )
+      })
+
+      it('corpo ilegível em erro HTTP (payload null) devolve mensagem apropriada e http_status', async () => {
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: null,
+          error: {
+            message: 'Internal Server Error',
+            context: {
+              status: 500,
+              text: async () => '<html>500 Server Crashed</html>',
+            },
+          },
+        } as any)
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Motivo',
+          prazoSolicitado: '2026-06-30',
+          chaveIdempotencia: 'chave-500',
+        })
+
+        expect(res.success).toBe(false)
+        expect(res.http_status).toBe(500)
+        expect(res.chave_idempotencia).toBe('chave-500')
+        expect(res.error).toBe(
+          'Resposta vazia ou inválida do servidor. Não foi possível confirmar o registro nem o envio da solicitação.',
+        )
+      })
+
+      it('exceção não capturada no invoke: devolve success false e sempre a mesma chave de idempotência', async () => {
+        vi.spyOn(supabase.functions, 'invoke').mockRejectedValue(
+          new Error('Falha catastrófica de rede'),
+        )
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Motivo',
+          prazoSolicitado: '2026-06-30',
+          chaveIdempotencia: 'chave-excecao-123',
+        })
+
+        expect(res.success).toBe(false)
+        expect(res.chave_idempotencia).toBe('chave-excecao-123')
+        expect(res.error).toBe('Falha catastrófica de rede')
+      })
+
+      it('gera chave de idempotência válida em formato UUID v4 quando chave não for informada', async () => {
+        const mockInvoke = vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: {
+            success: true,
+            solicitacao_registrada: true,
+            email_status: 'enviado',
+            notificacao_aceita_smtp: true,
+          },
+          error: null,
+        } as any)
+
+        const res = await controleService.solicitarAdiamento({
+          tarefaId: 'tarefa-1',
+          administradorCoreUsuarioId: 'admin-1',
+          motivo: 'Motivo',
+          prazoSolicitado: '2026-06-30',
+        })
+
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        expect(res.chave_idempotencia).toMatch(uuidRegex)
+        expect(mockInvoke).toHaveBeenCalledWith(
+          'solicitacao-adiamento',
+          expect.objectContaining({
+            body: expect.objectContaining({
+              chave_idempotencia: res.chave_idempotencia,
+            }),
+          }),
+        )
+      })
+    })
+
+    describe('controleService.listarAdministradoresAdiamento', () => {
+      it('sucesso: retorna lista de administradores elegíveis', async () => {
+        const admins = [
+          { id: 'admin-1', nome: 'Daniel', email: 'daniel@riccipi.com.br' },
+          { id: 'admin-2', nome: 'Helcio', email: 'helcio@riccipi.com.br' },
+        ]
+
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: { success: true, administradores: admins },
+          error: null,
+        } as any)
+
+        const res = await controleService.listarAdministradoresAdiamento()
+        expect(res.success).toBe(true)
+        expect(res.administradores).toEqual(admins)
+      })
+
+      it('em erro HTTP: extrai a mensagem de erro do corpo JSON de error.context', async () => {
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: null,
+          error: {
+            message: 'Forbidden',
+            context: {
+              status: 403,
+              clone: () => ({
+                json: async () => ({
+                  error: 'Apenas usuários com perfil ativo podem consultar administradores.',
+                }),
+              }),
+              json: async () => ({
+                error: 'Apenas usuários com perfil ativo podem consultar administradores.',
+              }),
+            },
+          },
+        } as any)
+
+        const res = await controleService.listarAdministradoresAdiamento()
+        expect(res.success).toBe(false)
+        expect(res.administradores).toEqual([])
+        expect(res.error).toBe('Apenas usuários com perfil ativo podem consultar administradores.')
+      })
+
+      it('se a resposta não trouxer a lista administradores: devolve success: false com a lista vazia', async () => {
+        vi.spyOn(supabase.functions, 'invoke').mockResolvedValue({
+          data: { success: true }, // sem a chave administradores
+          error: null,
+        } as any)
+
+        const res = await controleService.listarAdministradoresAdiamento()
+        expect(res.success).toBe(false)
+        expect(res.administradores).toEqual([])
+        expect(res.error).toBe('Não foi possível listar os administradores.')
+      })
     })
   })
 })

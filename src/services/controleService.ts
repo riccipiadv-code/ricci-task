@@ -1452,26 +1452,40 @@ export const controleService = {
         },
       })
 
+      const { payload } = await lerRespostaEdgeFunction(data, error)
+
       if (error) {
         console.error('Erro ao listar administradores elegíveis para adiamento:', error)
         return {
           success: false,
           administradores: [],
-          error: error.message || 'Erro ao carregar lista de administradores elegíveis.',
+          error:
+            (payload && (payload.error || payload.message)) ||
+            error.message ||
+            'Erro ao carregar lista de administradores elegíveis.',
         }
       }
 
-      if (data && data.success === false) {
+      if (!payload || !Array.isArray(payload.administradores)) {
         return {
           success: false,
           administradores: [],
-          error: data.error || 'Não foi possível listar os administradores.',
+          error:
+            payload?.error || payload?.message || 'Não foi possível listar os administradores.',
+        }
+      }
+
+      if (payload.success === false) {
+        return {
+          success: false,
+          administradores: [],
+          error: payload.error || payload.message || 'Não foi possível listar os administradores.',
         }
       }
 
       return {
         success: true,
-        administradores: data?.administradores || [],
+        administradores: payload.administradores,
       }
     } catch (err: any) {
       console.error('Exceção ao listar administradores para adiamento:', err)
@@ -1495,21 +1509,26 @@ export const controleService = {
     chaveIdempotencia?: string
   }): Promise<{
     success: boolean
+    http_status?: number
     solicitacao_registrada?: boolean
-    email_status?: 'enviado' | 'falha' | 'incerto'
+    email_status?:
+      | 'pendente'
+      | 'enviando'
+      | 'enviado'
+      | 'falhou'
+      | 'incerto'
+      | 'cancelado'
+      | 'falha'
     notificacao_aceita_smtp?: boolean
     solicitacao_id?: string
     chave_idempotencia?: string
+    reason?: string
     message?: string
     error?: string
   }> {
-    try {
-      const chaveIdempotencia =
-        params.chaveIdempotencia ||
-        (typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`)
+    const chaveIdempotencia = params.chaveIdempotencia || gerarUuidV4()
 
+    try {
       const { data, error } = await supabase.functions.invoke('solicitacao-adiamento', {
         body: {
           operacao: 'solicitar_adiamento',
@@ -1522,47 +1541,187 @@ export const controleService = {
         },
       })
 
-      if (error) {
-        console.error('Erro retornado na Edge Function solicitacao-adiamento:', error)
+      const { payload, httpStatus } = await lerRespostaEdgeFunction(data, error)
+
+      if (payload === null) {
         return {
           success: false,
-          solicitacao_registrada: data?.solicitacao_registrada,
-          email_status: data?.email_status,
-          notificacao_aceita_smtp: data?.notificacao_aceita_smtp,
-          solicitacao_id: data?.solicitacao_id,
+          http_status: httpStatus,
           chave_idempotencia: chaveIdempotencia,
-          error: error.message || data?.error || 'Erro ao processar solicitação de adiamento.',
+          error:
+            'Resposta vazia ou inválida do servidor. Não foi possível confirmar o registro nem o envio da solicitação.',
         }
       }
 
-      if (data && data.success === false) {
+      const repassados: {
+        http_status?: number
+        solicitacao_registrada?: boolean
+        email_status?:
+          | 'pendente'
+          | 'enviando'
+          | 'enviado'
+          | 'falhou'
+          | 'incerto'
+          | 'cancelado'
+          | 'falha'
+        notificacao_aceita_smtp?: boolean
+        solicitacao_id?: string
+        chave_idempotencia?: string
+        reason?: string
+      } = {}
+
+      if (httpStatus !== undefined) repassados.http_status = httpStatus
+      if (payload.solicitacao_registrada !== undefined)
+        repassados.solicitacao_registrada = payload.solicitacao_registrada
+      if (payload.email_status !== undefined) repassados.email_status = payload.email_status
+      if (payload.notificacao_aceita_smtp !== undefined)
+        repassados.notificacao_aceita_smtp = payload.notificacao_aceita_smtp
+      if (payload.solicitacao_id !== undefined) repassados.solicitacao_id = payload.solicitacao_id
+      repassados.chave_idempotencia = payload.chave_idempotencia || chaveIdempotencia
+      if (payload.reason !== undefined) repassados.reason = payload.reason
+
+      if (
+        !error &&
+        payload.email_status === 'enviado' &&
+        payload.notificacao_aceita_smtp === true
+      ) {
         return {
-          success: false,
-          solicitacao_registrada: data.solicitacao_registrada,
-          email_status: data.email_status,
-          notificacao_aceita_smtp: data.notificacao_aceita_smtp,
-          solicitacao_id: data.solicitacao_id,
-          chave_idempotencia: data.chave_idempotencia || chaveIdempotencia,
-          error: data.error || 'A solicitação foi recusada pelo servidor.',
+          success: true,
+          ...repassados,
+          message: payload.message || 'Solicitação de adiamento enviada com sucesso.',
         }
       }
+
+      const mensagemErro =
+        payload.error ||
+        payload.message ||
+        (error && error.message) ||
+        'Falha ao processar solicitação de adiamento.'
 
       return {
-        success: true,
-        solicitacao_registrada: data?.solicitacao_registrada ?? true,
-        email_status: data?.email_status,
-        notificacao_aceita_smtp: data?.notificacao_aceita_smtp,
-        solicitacao_id: data?.solicitacao_id,
-        chave_idempotencia: data?.chave_idempotencia || chaveIdempotencia,
-        message: data?.message || 'Solicitação de adiamento enviada com sucesso.',
+        success: false,
+        ...repassados,
+        ...(payload.message ? { message: payload.message } : {}),
+        error: mensagemErro,
       }
     } catch (err: any) {
       console.error('Exceção ao solicitar adiamento:', err)
       return {
         success: false,
+        chave_idempotencia: chaveIdempotencia,
         error:
           err?.message || 'Falha de rede ao conectar com o serviço de solicitação de adiamento.',
       }
     }
   },
+}
+
+/**
+ * Lê e normaliza a resposta de uma chamada supabase.functions.invoke.
+ * Extrai payload JSON e código de status HTTP independente de ser sucesso ou erro (4xx/5xx).
+ * Nunca lança exceção.
+ */
+export async function lerRespostaEdgeFunction(
+  data: any,
+  error: any,
+): Promise<{ payload: any; httpStatus: number | undefined }> {
+  try {
+    if (!error) {
+      if (data !== null && typeof data === 'object') {
+        return { payload: data, httpStatus: 200 }
+      }
+      if (typeof data === 'string') {
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed !== null && typeof parsed === 'object') {
+            return { payload: parsed, httpStatus: 200 }
+          }
+        } catch {
+          // data não é JSON válido
+        }
+      }
+      return { payload: null, httpStatus: 200 }
+    }
+
+    // Com erro
+    let httpStatus: number | undefined
+    if (error && typeof error === 'object' && error.context) {
+      if (typeof error.context.status === 'number') {
+        httpStatus = error.context.status
+      }
+    }
+
+    if (data !== null && typeof data === 'object') {
+      return { payload: data, httpStatus }
+    }
+
+    if (error && typeof error === 'object' && error.context) {
+      const ctx = error.context
+
+      // Tentativa 1: .clone().json() ou .json()
+      try {
+        const target = typeof ctx.clone === 'function' ? ctx.clone() : ctx
+        if (typeof target.json === 'function') {
+          const parsed = await target.json()
+          if (parsed !== null && typeof parsed === 'object') {
+            return { payload: parsed, httpStatus }
+          }
+        }
+      } catch {
+        // Falha ao ler como json direto
+      }
+
+      // Tentativa 2: .clone().text() ou .text() e converter de JSON
+      try {
+        const target = typeof ctx.clone === 'function' ? ctx.clone() : ctx
+        if (typeof target.text === 'function') {
+          const textVal = await target.text()
+          if (typeof textVal === 'string' && textVal.trim().length > 0) {
+            const parsed = JSON.parse(textVal)
+            if (parsed !== null && typeof parsed === 'object') {
+              return { payload: parsed, httpStatus }
+            }
+          }
+        }
+      } catch {
+        // Falha ao ler como texto JSON
+      }
+
+      // Tentativa 3: Se ctx for Response ou possuir body com dados já parseados
+      if (ctx.data && typeof ctx.data === 'object') {
+        return { payload: ctx.data, httpStatus }
+      }
+    }
+
+    return { payload: null, httpStatus }
+  } catch {
+    return { payload: null, httpStatus: undefined }
+  }
+}
+
+/**
+ * Gera um UUID v4 canônico válido.
+ * Utiliza crypto.randomUUID() quando disponível no ambiente; caso contrário, gera um UUID v4 RFC 4122 válido.
+ */
+export function gerarUuidV4(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+
+  // Fallback: geração manual de UUID v4 seguindo RFC 4122
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    bytes[6] = (bytes[6] & 0x0f) | 0x40 // versão 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80 // variante RFC 4122
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+
+  // Fallback puro Math.random caso crypto não exista
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
 }
