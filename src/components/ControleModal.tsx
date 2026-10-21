@@ -179,32 +179,56 @@ export function ControleModal({
   const [enviandoSolicitacaoAdiamento, setEnviandoSolicitacaoAdiamento] = useState(false)
   const [erroAdiamento, setErroAdiamento] = useState<string | null>(null)
 
-  // Gerador utilitário para chave de idempotência fixa por ciclo de pedido
-  const gerarChaveIdempotencia = useCallback(() => {
-    return typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+  // Rastreamento do pedido atual e dos valores enviados na última tentativa
+  const [pedidoIdentificadorAtivo, setPedidoIdentificadorAtivo] = useState<string | null>(null)
+  const [ultimoAdminTentado, setUltimoAdminTentado] = useState<string | null>(null)
+  const [ultimoMotivoTentado, setUltimoMotivoTentado] = useState<string | null>(null)
+
+  // Gerador utilitário para chave de idempotência na própria tela: sempre UUID v4 válido
+  const gerarChaveIdempotencia = useCallback((): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16)
+      crypto.getRandomValues(bytes)
+      bytes[6] = (bytes[6] & 0x0f) | 0x40 // versão 4
+      bytes[8] = (bytes[8] & 0x3f) | 0x80 // variante RFC 4122
+      const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0
+      const v = c === 'x' ? r : (r & 0x3) | 0x8
+      return v.toString(16)
+    })
   }, [])
 
   // Carrega administradores elegíveis para o modal de solicitação
+  // Requisito 5: mantém o administrador selecionado se continuar elegível.
+  // Caso contrário, seleciona o primeiro da lista, ou nenhum se vazia.
   const carregarAdministradoresAdiamento = useCallback(async () => {
     setLoadingAdminsElegiveis(true)
-    setErroAdiamento(null)
     try {
       const res = await controleService.listarAdministradoresAdiamento()
       if (res.success && res.administradores) {
-        setAdministradoresElegiveis(res.administradores)
-        // Se houver administradores e nenhum estiver selecionado, seleciona o primeiro por padrão
-        if (res.administradores.length > 0) {
-          setAdminSelecionadoId((prev) => prev || res.administradores[0].id)
-        }
+        const admins = res.administradores
+        setAdministradoresElegiveis(admins)
+        setAdminSelecionadoId((prevId) => {
+          if (prevId && admins.some((a) => a.id === prevId)) {
+            return prevId
+          }
+          return admins.length > 0 ? admins[0].id : ''
+        })
       } else {
         setAdministradoresElegiveis([])
+        setAdminSelecionadoId('')
         setErroAdiamento(res.error || 'Não foi possível carregar os administradores elegíveis.')
       }
     } catch (err: any) {
       console.error('Erro ao listar administradores para adiamento:', err)
       setAdministradoresElegiveis([])
+      setAdminSelecionadoId('')
       setErroAdiamento(err?.message || 'Falha ao carregar administradores elegíveis.')
     } finally {
       setLoadingAdminsElegiveis(false)
@@ -220,17 +244,65 @@ export function ControleModal({
   const handleEscolhaSimAdiamento = useCallback(() => {
     // "Sim": abre a janela de solicitação, sem gravar o caso ou a providência.
     setConfirmarAdiamentoDialogOpen(false)
-    setMotivoAdiamento('')
-    setErroAdiamento(null)
-    setResultadoIncertoAdiamento(false)
-    // Inicializa a chave de idempotência para este novo pedido (mantida fixa para retentativas deste pedido)
-    setChaveIdempotenciaAdiamento(gerarChaveIdempotencia())
+
+    // Requisito 3: Identifica o pedido por caso + providência + data pretendida
+    const casoId = controleToEdit?.id || 'sem-caso'
+    const provId =
+      providenciaParaAdiamento?.providenciaItem.id ||
+      providenciaParaAdiamento?.providenciaItem.tempId ||
+      providenciaParaAdiamento?.providenciaItem.providencia ||
+      'sem-prov'
+    const prazo = providenciaParaAdiamento?.prazoPretendido || 'sem-prazo'
+    const novoIdentificador = `${casoId}::${provId}::${prazo}`
+
+    const isMesmoPedido = pedidoIdentificadorAtivo === novoIdentificador
+
+    if (isMesmoPedido) {
+      // Ao clicar em "Sim" de novo para o MESMO pedido, NÃO apague o motivo,
+      // o administrador escolhido, a chave de idempotência nem a marcação de "envio incerto".
+      // Se o pedido estava incerto, mostre de novo o alerta "Envio Incerto (SMTP)" e mantenha o bloqueio.
+      if (resultadoIncertoAdiamento) {
+        setErroAdiamento((prev) => prev || 'Envio incerto (SMTP). Reenvio automático bloqueado.')
+      }
+    } else {
+      // Para um pedido DIFERENTE, comece do zero: motivo vazio, nova chave e sem bloqueio.
+      setPedidoIdentificadorAtivo(novoIdentificador)
+      setMotivoAdiamento('')
+      setErroAdiamento(null)
+      setResultadoIncertoAdiamento(false)
+      setChaveIdempotenciaAdiamento(gerarChaveIdempotencia())
+      setUltimoAdminTentado(null)
+      setUltimoMotivoTentado(null)
+    }
+
     setModalAdiamentoOpen(true)
     carregarAdministradoresAdiamento()
-  }, [carregarAdministradoresAdiamento, gerarChaveIdempotencia])
+  }, [
+    controleToEdit,
+    providenciaParaAdiamento,
+    pedidoIdentificadorAtivo,
+    resultadoIncertoAdiamento,
+    gerarChaveIdempotencia,
+    carregarAdministradoresAdiamento,
+  ])
 
   // Envio da solicitação de adiamento
   const handleEnviarSolicitacaoAdiamento = useCallback(async () => {
+    // Requisito 6: ignore novo clique se já estiver em andamento (duplo clique) ou bloqueado
+    if (enviandoSolicitacaoAdiamento) {
+      return
+    }
+
+    if (resultadoIncertoAdiamento) {
+      toast({
+        variant: 'destructive',
+        title: 'Reenvio bloqueado',
+        description:
+          'O resultado anterior do envio foi incerto (SMTP). O reenvio automático está bloqueado para evitar duplicidade. Aguarde a confirmação do administrador.',
+      })
+      return
+    }
+
     if (!controleToEdit?.id) {
       toast({
         variant: 'destructive',
@@ -256,24 +328,26 @@ export function ControleModal({
       return
     }
 
-    if (resultadoIncertoAdiamento) {
-      toast({
-        variant: 'destructive',
-        title: 'Reenvio bloqueado',
-        description:
-          'O resultado anterior do envio foi incerto (SMTP). O reenvio automático está bloqueado para evitar duplicidade. Aguarde a confirmação do administrador.',
-      })
-      return
+    // Requisito 4: Chave de idempotência
+    // - Retentativas do mesmo pedido com o mesmo administrador e o mesmo motivo usam a MESMA chave.
+    // - Se o usuário mudar o administrador ou o motivo depois de uma tentativa que NÃO foi incerta, gere NOVA chave.
+    let chaveAtual = chaveIdempotenciaAdiamento
+    const houveTentativaAnterior = ultimoAdminTentado !== null || ultimoMotivoTentado !== null
+    const dadosMudaram =
+      houveTentativaAnterior &&
+      (ultimoAdminTentado !== adminSelecionadoId || ultimoMotivoTentado !== motivoTrimmed)
+
+    if (!chaveAtual || dadosMudaram) {
+      chaveAtual = gerarChaveIdempotencia()
+      setChaveIdempotenciaAdiamento(chaveAtual)
     }
+
+    // Atualiza rastreamento dos últimos dados tentados
+    setUltimoAdminTentado(adminSelecionadoId)
+    setUltimoMotivoTentado(motivoTrimmed)
 
     setEnviandoSolicitacaoAdiamento(true)
     setErroAdiamento(null)
-
-    // Preserva a MESMA chave de idempotência nas tentativas do mesmo pedido
-    const chaveAtual = chaveIdempotenciaAdiamento || gerarChaveIdempotencia()
-    if (!chaveIdempotenciaAdiamento) {
-      setChaveIdempotenciaAdiamento(chaveAtual)
-    }
 
     try {
       const res = await controleService.solicitarAdiamento({
@@ -285,65 +359,100 @@ export function ControleModal({
         chaveIdempotencia: chaveAtual,
       })
 
-      // Se a chave retornada pelo backend for diferente (ou confirmada), preservamos
       if (res.chave_idempotencia) {
         setChaveIdempotenciaAdiamento(res.chave_idempotencia)
       }
 
-      if (res.email_status === 'incerto') {
-        // Resultado incerto (não confirmado pelo SMTP) não permite reenvio automático — informe o estado ao usuário
-        setResultadoIncertoAdiamento(true)
-        const msgIncerto =
-          res.error ||
-          res.message ||
-          'Solicitação registrada, mas o status de envio do e-mail é incerto. Reenvio automático bloqueado para evitar duplicação.'
-        setErroAdiamento(msgIncerto)
-        toast({
-          variant: 'destructive',
-          title: 'Envio com status incerto',
-          description: msgIncerto,
-        })
-        return
-      }
-
-      if (res.success) {
+      // Requisito 1: Anúncio de envio:
+      // SÓ mostre a mensagem "Solicitação de adiamento enviada" (toast/feedback) e feche a janela
+      // quando o retorno tiver success === true E email_status === 'enviado' E notificacao_aceita_smtp === true.
+      // Em qualquer outro retorno, a janela continua aberta com a mensagem de erro, e NADA é anunciado como enviado.
+      if (
+        res.success === true &&
+        res.email_status === 'enviado' &&
+        res.notificacao_aceita_smtp === true
+      ) {
         toast({
           title: 'Solicitação de adiamento enviada',
           description:
             res.message ||
             'Sua solicitação de adiamento foi registrada e encaminhada ao administrador.',
         })
-        // Enviar chama solicitarAdiamento() e registra/notifica SOMENTE o pedido:
-        // não salva a providência, não altera o prazo do caso e não continua o salvamento automaticamente.
-        // Fecha a janela de solicitação preservando o rascunho do formulário de controle.
+        // Limpa a chave, o motivo e a identificação do pedido após envio confirmado (sucesso real)
+        setChaveIdempotenciaAdiamento('')
+        setMotivoAdiamento('')
+        setPedidoIdentificadorAtivo(null)
+        setUltimoAdminTentado(null)
+        setUltimoMotivoTentado(null)
+        setResultadoIncertoAdiamento(false)
+        setErroAdiamento(null)
+
+        // Fecha a janela de solicitação preservando o rascunho do formulário principal
         setModalAdiamentoOpen(false)
-      } else {
-        const errorMsg = res.error || 'Falha ao processar solicitação de adiamento.'
-        setErroAdiamento(errorMsg)
-        toast({
-          variant: 'destructive',
-          title: 'Falha na solicitação',
-          description: errorMsg,
-        })
+        return
       }
+
+      // Requisito 2: Mensagens por situação (a janela continua aberta em todas, sem anúncio de envio):
+      if (res.email_status === 'incerto') {
+        // incerto: marque o pedido como "envio incerto", mostre o alerta "Envio Incerto (SMTP)"
+        // e BLOQUEIE o botão Enviar e os campos de administrador e motivo.
+        setResultadoIncertoAdiamento(true)
+        const msgIncerto =
+          res.error ||
+          res.message ||
+          'Solicitação registrada, mas o status de envio do e-mail é incerto. Reenvio automático bloqueado para evitar duplicação.'
+        setErroAdiamento(msgIncerto)
+        return
+      }
+
+      if (res.email_status === 'enviando') {
+        // enviando: mostrar a mensagem "O envio desta solicitação já está em processamento. Aguarde alguns instantes antes de tentar novamente."
+        setErroAdiamento(
+          'O envio desta solicitação já está em processamento. Aguarde alguns instantes antes de tentar novamente.',
+        )
+        return
+      }
+
+      if (res.email_status === 'falhou' && res.solicitacao_registrada) {
+        // falhou com a solicitação registrada: mostrar a mensagem do servidor,
+        // seguida de "A solicitação foi registrada, mas o administrador não foi notificado. Você pode tentar novamente."
+        const msgServidor = res.error || res.message || 'Falha ao notificar o administrador.'
+        setErroAdiamento(
+          `${msgServidor} A solicitação foi registrada, mas o administrador não foi notificado. Você pode tentar novamente.`,
+        )
+        return
+      }
+
+      if (res.email_status === 'cancelado') {
+        // cancelado: mostrar a mensagem do servidor.
+        const msgCancelado =
+          res.error || res.message || 'A solicitação de adiamento foi cancelada pelo servidor.'
+        setErroAdiamento(msgCancelado)
+        return
+      }
+
+      // Outros casos de falha (inclusive success: true sem notificacao_aceita_smtp: true)
+      const errorMsg =
+        res.error ||
+        res.message ||
+        'Não foi possível confirmar o envio da notificação ao administrador.'
+      setErroAdiamento(errorMsg)
     } catch (err: any) {
       console.error('Erro ao enviar solicitação de adiamento:', err)
       const exMsg = err?.message || 'Falha inesperada ao enviar solicitação de adiamento.'
       setErroAdiamento(exMsg)
-      toast({
-        variant: 'destructive',
-        title: 'Erro de comunicação',
-        description: exMsg,
-      })
     } finally {
       setEnviandoSolicitacaoAdiamento(false)
     }
   }, [
+    enviandoSolicitacaoAdiamento,
+    resultadoIncertoAdiamento,
     controleToEdit,
     adminSelecionadoId,
     motivoAdiamento,
-    resultadoIncertoAdiamento,
     chaveIdempotenciaAdiamento,
+    ultimoAdminTentado,
+    ultimoMotivoTentado,
     gerarChaveIdempotencia,
     providenciaParaAdiamento,
     toast,
@@ -2800,9 +2909,9 @@ export function ControleModal({
                   value={adminSelecionadoId}
                   onValueChange={(val) => {
                     setAdminSelecionadoId(val)
-                    if (erroAdiamento) setErroAdiamento(null)
+                    if (erroAdiamento && !resultadoIncertoAdiamento) setErroAdiamento(null)
                   }}
-                  disabled={enviandoSolicitacaoAdiamento}
+                  disabled={enviandoSolicitacaoAdiamento || resultadoIncertoAdiamento}
                 >
                   <SelectTrigger
                     id="select-admin-adiamento"
@@ -2842,7 +2951,7 @@ export function ControleModal({
                 value={motivoAdiamento}
                 onChange={(e) => {
                   setMotivoAdiamento(e.target.value)
-                  if (erroAdiamento) setErroAdiamento(null)
+                  if (erroAdiamento && !resultadoIncertoAdiamento) setErroAdiamento(null)
                 }}
                 maxLength={200}
                 rows={3}
