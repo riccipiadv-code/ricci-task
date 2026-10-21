@@ -1277,12 +1277,29 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 12. Obtenção do Transporter SMTP
-    let transporter = deps.transporter
-    let senderEmail = 'nao-responder@riccitask.com.br'
-    let replyTo: string | undefined = undefined
+    // 12 e 13. Obtenção assíncrona paralela (Promise.all):
+    // - Configuração SMTP e secrets (somente se deps.transporter não for fornecido)
+    // - Revalidação do solicitante (verifyRicciTaskCaller)
+    // - Revalidação do administrador destinatário (getValidatedEligibleAdmin)
+    // - Reconsulta do caso (task_tarefas)
+    // - Reconsulta da providência (task_providencias, somente se existir providenciaAlvo)
 
-    if (!transporter) {
+    type SmtpResolution =
+      | { kind: 'provided'; transporter: any; senderEmail: string; replyTo?: string }
+      | { kind: 'error_setting'; error: string }
+      | { kind: 'error_secret'; error: string }
+      | { kind: 'ready'; transporter: any; senderEmail: string; replyTo?: string }
+
+    const smtpTask = async (): Promise<SmtpResolution> => {
+      if (deps.transporter) {
+        return {
+          kind: 'provided',
+          transporter: deps.transporter,
+          senderEmail: 'nao-responder@riccitask.com.br',
+          replyTo: undefined,
+        }
+      }
+
       const { data: setting, error: settingError } = await supabase
         .from('email_settings')
         .select('*')
@@ -1291,35 +1308,14 @@ export async function processSolicitacaoAdiamento(
         .maybeSingle()
 
       if (settingError || !setting) {
-        // Falha ao obter configuração/senha SMTP deve preservar o ID da solicitação e informar que já foi registrada
-        const ok = await encerrarEventoSemEnvio(
-          'Nenhuma configuração de e-mail ativa encontrada.',
-          'falhou',
-        )
-        if (!ok) {
-          return respostaConflitoDesistencia()
+        return {
+          kind: 'error_setting',
+          error: 'Nenhuma configuração de e-mail ativa encontrada.',
         }
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            solicitacao_registrada: true,
-            email_status: 'falhou',
-            notificacao_aceita_smtp: false,
-            error:
-              'Solicitação registrada com sucesso, porém o envio de notificação falhou: nenhuma configuração de e-mail ativa encontrada.',
-            solicitacao_id: solicitacaoId,
-            chave_idempotencia,
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
       }
 
-      senderEmail = setting.sender_email
-      replyTo = setting.reply_to || undefined
+      const senderEmail = setting.sender_email
+      const replyTo = setting.reply_to || undefined
 
       const { data: secretData, error: secretErr } = await supabase
         .from('email_secrets')
@@ -1330,31 +1326,10 @@ export async function processSolicitacaoAdiamento(
 
       const secret = secretData?.secret_value
       if (secretErr || !secret) {
-        // Falha ao obter senha SMTP deve preservar o ID da solicitação e informar que já foi registrada
-        const ok = await encerrarEventoSemEnvio(
-          'A senha do transporte SMTP não foi configurada.',
-          'falhou',
-        )
-        if (!ok) {
-          return respostaConflitoDesistencia()
+        return {
+          kind: 'error_secret',
+          error: 'A senha do transporte SMTP não foi configurada.',
         }
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            solicitacao_registrada: true,
-            email_status: 'falhou',
-            notificacao_aceita_smtp: false,
-            error:
-              'Solicitação registrada com sucesso, porém o envio de notificação falhou: a senha do transporte SMTP não foi configurada.',
-            solicitacao_id: solicitacaoId,
-            chave_idempotencia,
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        )
       }
 
       const transporterOptions: any = {
@@ -1374,15 +1349,119 @@ export async function processSolicitacaoAdiamento(
         transporterOptions.tls = { ciphers: 'SSLv3' }
       }
 
-      transporter = nodemailer.createTransport(transporterOptions)
+      const transporter = nodemailer.createTransport(transporterOptions)
+      return {
+        kind: 'ready',
+        transporter,
+        senderEmail,
+        replyTo,
+      }
     }
 
-    // 13. Revalidações Imediatamente ANTES do SMTP:
-    // solicitante ativo e autorizado, caso aberto, prazo vigente, providência pertencente ao caso e não excluída, administrador elegível.
-    // Usar o e-mail atualizado retornado pela revalidação.
+    const callerTask = verifyRicciTaskCaller(supabase, user.id)
+    const adminTask = getValidatedEligibleAdmin(supabase, destinatarioAdmin.id)
+    const tarefaTask = supabase
+      .from('task_tarefas')
+      .select(`
+        id,
+        numero_caso,
+        identificacao_caso,
+        pasta_cliente,
+        pasta_ricci,
+        prazo_conclusao,
+        nome_controle_id,
+        status_id,
+        arquivado_at,
+        deleted_at,
+        executor_core_usuario_id,
+        responsavel_core_usuario_id,
+        executor_usuario_id,
+        responsavel_usuario_id,
+        nome_controle:task_nomes_controle(nome),
+        status:task_status(id, codigo, nome, finaliza)
+      `)
+      .eq('id', tarefa.id)
+      .maybeSingle()
 
-    // 13.1 Solicitante ativo e autorizado
-    const recheckCaller = await verifyRicciTaskCaller(supabase, user.id)
+    const providenciaTask = providenciaAlvo
+      ? supabase
+          .from('task_providencias')
+          .select('id, tarefa_id, deleted_at, providencia')
+          .eq('id', providenciaAlvo.id)
+          .maybeSingle()
+      : Promise.resolve(null)
+
+    const [smtpResult, recheckCaller, recheckAdmin, tarefaQueryResult, providenciaQueryResult] =
+      await Promise.all([smtpTask(), callerTask, adminTask, tarefaTask, providenciaTask])
+
+    // Avaliação dos resultados na MESMA ordem estrita de hoje:
+    // 1. Configuração SMTP
+    // 2. Senha SMTP
+    // 3. Solicitante
+    // 4. Administrador
+    // 5. E-mail válido
+    // 6. Caso
+    // 7. Status do caso
+    // 8. Caso aberto (não excluído, não arquivado, não finalizado)
+    // 9. Escopo (checkTaskAccessScope - executado aqui após termos solicitante e caso)
+    // 10. Prazo
+    // 11. Providência
+
+    // 1. Configuração SMTP
+    if (smtpResult.kind === 'error_setting') {
+      const ok = await encerrarEventoSemEnvio(smtpResult.error, 'falhou')
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'falhou',
+          notificacao_aceita_smtp: false,
+          error:
+            'Solicitação registrada com sucesso, porém o envio de notificação falhou: nenhuma configuração de e-mail ativa encontrada.',
+          solicitacao_id: solicitacaoId,
+          chave_idempotencia,
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    // 2. Senha SMTP
+    if (smtpResult.kind === 'error_secret') {
+      const ok = await encerrarEventoSemEnvio(smtpResult.error, 'falhou')
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          solicitacao_registrada: true,
+          email_status: 'falhou',
+          notificacao_aceita_smtp: false,
+          error:
+            'Solicitação registrada com sucesso, porém o envio de notificação falhou: a senha do transporte SMTP não foi configurada.',
+          solicitacao_id: solicitacaoId,
+          chave_idempotencia,
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
+    const transporter = smtpResult.transporter
+    const senderEmail = smtpResult.senderEmail
+    const replyTo = smtpResult.replyTo
+
+    // 3. Solicitante ativo e autorizado
     if (!recheckCaller.allowed || !recheckCaller.coreUser) {
       const ok = await encerrarEventoSemEnvio(
         'Solicitante perdeu autorização antes do despacho SMTP.',
@@ -1411,8 +1490,7 @@ export async function processSolicitacaoAdiamento(
     }
     const solicitanteAtualizado = recheckCaller.coreUser
 
-    // 13.2 Administrador elegível + e-mail atualizado
-    const recheckAdmin = await getValidatedEligibleAdmin(supabase, destinatarioAdmin.id)
+    // 4. Administrador elegível
     if (!recheckAdmin.valid || !recheckAdmin.admin) {
       const ok = await encerrarEventoSemEnvio(
         'Administrador perdeu a elegibilidade antes do disparo SMTP.',
@@ -1441,7 +1519,7 @@ export async function processSolicitacaoAdiamento(
     }
     const adminAtualizado = recheckAdmin.admin
 
-    // Validação de formato do e-mail de destino (apenas um e-mail válido aceito)
+    // 5. E-mail válido
     if (!isValidEmail(adminAtualizado.email)) {
       const ok = await encerrarEventoSemEnvio(
         `Endereço de e-mail do destinatário inválido: ${adminAtualizado.email}`,
@@ -1467,30 +1545,8 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 13.3 Reconsultar o caso: SEM fallback para tarefa original. Caso não encontrado, status ausente ou erro bloqueia o envio.
-    const { data: preSmtpTarefa, error: preSmtpErr } = await supabase
-      .from('task_tarefas')
-      .select(`
-        id,
-        numero_caso,
-        identificacao_caso,
-        pasta_cliente,
-        pasta_ricci,
-        prazo_conclusao,
-        nome_controle_id,
-        status_id,
-        arquivado_at,
-        deleted_at,
-        executor_core_usuario_id,
-        responsavel_core_usuario_id,
-        executor_usuario_id,
-        responsavel_usuario_id,
-        nome_controle:task_nomes_controle(nome),
-        status:task_status(id, codigo, nome, finaliza)
-      `)
-      .eq('id', tarefa.id)
-      .maybeSingle()
-
+    // 6. Caso (reconsulta pré-SMTP)
+    const { data: preSmtpTarefa, error: preSmtpErr } = tarefaQueryResult
     if (preSmtpErr) {
       const ok = await encerrarEventoSemEnvio(
         `Falha técnica na reconsulta pré-SMTP: ${preSmtpErr.message}`,
@@ -1541,12 +1597,12 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
+    // 7. Status do caso
     const preSmtpStatusObj = Array.isArray(preSmtpTarefa.status)
       ? preSmtpTarefa.status[0]
       : preSmtpTarefa.status
 
     if (!preSmtpStatusObj) {
-      // Status ausente bloqueia envio
       const ok = await encerrarEventoSemEnvio(
         'Status ausente do caso na verificação pré-SMTP.',
         'falhou',
@@ -1571,10 +1627,9 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
+    // 8. Caso aberto (não excluído, não arquivado, não finalizado)
     const isPreFinaliza = Boolean(preSmtpStatusObj.finaliza)
-
     if (preSmtpTarefa.deleted_at || preSmtpTarefa.arquivado_at || isPreFinaliza) {
-      // Regra 6: preservar os eventos no cancelamento, sem apagá-los
       const ok = await encerrarEventoSemEnvio(
         'Envio cancelado: o caso não está mais aberto (excluído, arquivado ou finalizado).',
         'cancelado',
@@ -1605,7 +1660,7 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 13.4 Revalidar escopo de acesso do solicitante ao caso
+    // 9. Escopo de acesso do solicitante ao caso (executado depois do Promise.all com solicitanteAtualizado e preSmtpTarefa)
     const preScopeCheck = await checkTaskAccessScope(
       supabase,
       solicitanteAtualizado,
@@ -1638,7 +1693,7 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 13.5 Revalidar prazo vigente do caso
+    // 10. Prazo
     if (!preSmtpTarefa.prazo_conclusao) {
       const ok = await encerrarEventoSemEnvio(
         'Caso sem prazo de conclusão definido na revalidação pré-SMTP.',
@@ -1694,13 +1749,9 @@ export async function processSolicitacaoAdiamento(
       )
     }
 
-    // 13.6 Revalidar providência pertencente ao caso e não excluída (se aplicável)
+    // 11. Providência (se aplicável)
     if (providenciaAlvo) {
-      const { data: recheckProv, error: recheckProvErr } = await supabase
-        .from('task_providencias')
-        .select('id, tarefa_id, deleted_at, providencia')
-        .eq('id', providenciaAlvo.id)
-        .maybeSingle()
+      const { data: recheckProv, error: recheckProvErr } = providenciaQueryResult as any
 
       if (
         recheckProvErr ||
