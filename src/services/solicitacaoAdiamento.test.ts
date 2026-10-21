@@ -3434,4 +3434,431 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
       expect(dataC.notificacao_aceita_smtp).toBe(true)
     })
   })
+
+  describe('Pontos de Desistência com Auxiliar encerrarEventoSemEnvio', () => {
+    it('cenário dono do evento: caso arquivado antes do envio atualiza evento para error, solicitação para cancelado e responde 200 (reason: caso_arquivado)', async () => {
+      let eventoUpdatedWith: any = null
+      let solicitacaoUpdatedWith: any = null
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            let callCount = 0
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => {
+                    callCount++
+                    // Primeira consulta: tarefa aberta
+                    // Reconsulta pré-SMTP: tarefa arquivada!
+                    return Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 520,
+                        identificacao_caso: 'Caso Arquivado Antes do SMTP',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: callCount > 1 ? '2026-05-10T12:00:00Z' : null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    })
+                  },
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-desistencia-dono-1',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111130',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                solicitacaoUpdatedWith = upd
+                return {
+                  eq: () => ({
+                    select: () =>
+                      Promise.resolve({
+                        data: [{ id: 'sol-desistencia-dono-1' }],
+                        error: null,
+                      }),
+                    then: (resolve: any) =>
+                      resolve({
+                        data: [{ id: 'sol-desistencia-dono-1' }],
+                        error: null,
+                      }),
+                  }),
+                }
+              },
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-desistencia-dono-1',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                eventoUpdatedWith = upd
+                const chain: any = {
+                  eq: () => chain,
+                  select: () =>
+                    Promise.resolve({
+                      data: [{ id: 'evt-desistencia-dono-1' }],
+                      error: null,
+                    }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste desistência',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111130',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.success).toBe(true)
+      expect(data.reason).toBe('caso_arquivado')
+      expect(data.email_status).toBe('cancelado')
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.notificacao_aceita_smtp).toBe(false)
+
+      // Evento foi marcado como error
+      expect(eventoUpdatedWith).toEqual(
+        expect.objectContaining({
+          status: 'error',
+          erro: expect.stringContaining('o caso não está mais aberto'),
+        }),
+      )
+      // Solicitação foi marcada como cancelado
+      expect(solicitacaoUpdatedWith).toEqual(
+        expect.objectContaining({
+          email_status: 'cancelado',
+        }),
+      )
+      // Nenhum e-mail enviado
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+
+    it('cenário owner_token diferente / concorrente: outra requisição assumiu o evento, auxiliar devolve false, resposta é 409 sem alterar evento nem solicitação', async () => {
+      let solicitacaoUpdateTentado = false
+      let eventoUpdateChamado = false
+
+      ctx.supabase = {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: 'auth-op-1' } },
+            error: null,
+          }),
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'core_usuarios') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'cu-op-1',
+                        auth_user_id: 'auth-op-1',
+                        nome: 'Operador 1',
+                        email: 'op1@riccipi.com.br',
+                        ativo: true,
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            }
+          }
+          if (table === 'core_usuario_sistemas') {
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
+                }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
+            }
+          }
+          if (table === 'task_tarefas') {
+            let callCount = 0
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => {
+                    callCount++
+                    return Promise.resolve({
+                      data: {
+                        id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+                        numero_caso: 521,
+                        identificacao_caso: 'Caso Arquivado Concorrente',
+                        prazo_conclusao: '2026-05-15',
+                        executor_core_usuario_id: 'cu-op-1',
+                        responsavel_core_usuario_id: 'cu-resp-1',
+                        deleted_at: null,
+                        arquivado_at: callCount > 1 ? '2026-05-10T12:00:00Z' : null,
+                        status: {
+                          id: 'st-1',
+                          codigo: 'ANDAMENTO',
+                          nome: 'Andamento',
+                          finaliza: false,
+                        },
+                      },
+                      error: null,
+                    })
+                  },
+                }),
+              }),
+            }
+          }
+          if (table === 'task_solicitacoes_adiamento') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'sol-desistencia-concorrente-1',
+                        chave_idempotencia: '11111111-1111-4111-8111-111111111131',
+                        email_status: 'pendente',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                if (upd.email_status === 'cancelado' || upd.email_status === 'falhou') {
+                  solicitacaoUpdateTentado = true
+                }
+                return {
+                  eq: () => ({
+                    select: () =>
+                      Promise.resolve({
+                        data: [{ id: 'sol-desistencia-concorrente-1' }],
+                        error: null,
+                      }),
+                    then: (resolve: any) => resolve({ data: [], error: null }),
+                  }),
+                }
+              },
+            }
+          }
+          if (table === 'task_email_eventos') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 'evt-desistencia-concorrente-1',
+                        owner_token: row.owner_token,
+                        status: 'pending',
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+              update: (upd: any) => {
+                eventoUpdateChamado = true
+                // Simula que owner_token já pertence a outra requisição ou status já mudou:
+                // Retorna 0 linhas afetadas para update filtrando por owner_token e status pending!
+                const chain: any = {
+                  eq: () => chain,
+                  select: () => Promise.resolve({ data: [], error: null }),
+                }
+                return chain
+              },
+            }
+          }
+          return {}
+        }),
+      }
+
+      const req = new Request('https://edge.local/solicitacao-adiamento', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-op', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operacao: 'solicitar_adiamento',
+          tarefa_id: '38cb3c4d-7198-40a3-8815-a8881a9f506b',
+          providencia_texto: 'Aguardar perícia',
+          administrador_core_usuario_id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+          motivo: 'Motivo teste desistência concorrente',
+          prazo_solicitado: '2026-05-25',
+          chave_idempotencia: '11111111-1111-4111-8111-111111111131',
+        }),
+      })
+
+      const res = await handleSolicitacao(req, ctx)
+      expect(res.status).toBe(409)
+      const data = await res.json()
+      expect(data.success).toBe(false)
+      expect(data.solicitacao_registrada).toBe(true)
+      expect(data.email_status).toBe('enviando')
+      expect(data.notificacao_aceita_smtp).toBe(false)
+      expect(data.solicitacao_id).toBe('sol-desistencia-concorrente-1')
+      expect(data.chave_idempotencia).toBe('11111111-1111-4111-8111-111111111131')
+      expect(data.message).toBe(
+        'Solicitação registrada, porém não foi possível confirmar o estado do envio (outra requisição assumiu o envio ou houve falha de persistência). Nenhum e-mail foi enviado por esta requisição.',
+      )
+
+      // Verificação: update em evento foi tentado (mas retornou 0 linhas), e solicitação NÃO foi alterada para cancelado/falhou
+      expect(eventoUpdateChamado).toBe(true)
+      expect(solicitacaoUpdateTentado).toBe(false)
+      expect(ctx.transporter.sendMail).not.toHaveBeenCalled()
+    })
+  })
 })

@@ -1180,6 +1180,63 @@ export async function processSolicitacaoAdiamento(
 
     const eventoId = acquiredEvent.id
 
+    // Auxiliar atômico para desistência sem envio
+    const encerrarEventoSemEnvio = async (
+      erro: string,
+      statusSolicitacao: 'falhou' | 'cancelado',
+    ): Promise<boolean> => {
+      try {
+        const { data: updatedEvtRows, error: evtErr } = await supabase
+          .from('task_email_eventos')
+          .update({
+            status: 'error',
+            erro,
+          })
+          .eq('id', eventoId)
+          .eq('owner_token', callOwnerToken)
+          .eq('status', 'pending')
+          .select('id')
+
+        if (evtErr || !updatedEvtRows || updatedEvtRows.length === 0) {
+          return false
+        }
+
+        const { data: updatedSolRows, error: solErr } = await supabase
+          .from('task_solicitacoes_adiamento')
+          .update({ email_status: statusSolicitacao })
+          .eq('id', solicitacaoId)
+          .select('id')
+
+        if (solErr || !updatedSolRows || updatedSolRows.length === 0) {
+          return false
+        }
+
+        return true
+      } catch (err: any) {
+        console.error('[solicitacao-adiamento] Exceção em encerrarEventoSemEnvio:', err)
+        return false
+      }
+    }
+
+    const respostaConflitoDesistencia = (): Response => {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          solicitacao_registrada: true,
+          email_status: 'enviando',
+          notificacao_aceita_smtp: false,
+          solicitacao_id: solicitacaoId,
+          chave_idempotencia,
+          message:
+            'Solicitação registrada, porém não foi possível confirmar o estado do envio (outra requisição assumiu o envio ou houve falha de persistência). Nenhum e-mail foi enviado por esta requisição.',
+        }),
+        {
+          status: 409,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
+    }
+
     // Atualiza estado da solicitação para 'enviando'
     await supabase
       .from('task_solicitacoes_adiamento')
@@ -1201,20 +1258,13 @@ export async function processSolicitacaoAdiamento(
 
       if (settingError || !setting) {
         // Falha ao obter configuração/senha SMTP deve preservar o ID da solicitação e informar que já foi registrada
-        await supabase
-          .from('task_email_eventos')
-          .update({
-            status: 'error',
-            erro: 'Nenhuma configuração de e-mail ativa encontrada.',
-          })
-          .eq('id', eventoId)
-          .eq('owner_token', callOwnerToken)
-          .eq('status', 'pending')
-
-        await supabase
-          .from('task_solicitacoes_adiamento')
-          .update({ email_status: 'falhou' })
-          .eq('id', solicitacaoId)
+        const ok = await encerrarEventoSemEnvio(
+          'Nenhuma configuração de e-mail ativa encontrada.',
+          'falhou',
+        )
+        if (!ok) {
+          return respostaConflitoDesistencia()
+        }
 
         return new Response(
           JSON.stringify({
@@ -1247,20 +1297,13 @@ export async function processSolicitacaoAdiamento(
       const secret = secretData?.secret_value
       if (secretErr || !secret) {
         // Falha ao obter senha SMTP deve preservar o ID da solicitação e informar que já foi registrada
-        await supabase
-          .from('task_email_eventos')
-          .update({
-            status: 'error',
-            erro: 'A senha do transporte SMTP não foi configurada.',
-          })
-          .eq('id', eventoId)
-          .eq('owner_token', callOwnerToken)
-          .eq('status', 'pending')
-
-        await supabase
-          .from('task_solicitacoes_adiamento')
-          .update({ email_status: 'falhou' })
-          .eq('id', solicitacaoId)
+        const ok = await encerrarEventoSemEnvio(
+          'A senha do transporte SMTP não foi configurada.',
+          'falhou',
+        )
+        if (!ok) {
+          return respostaConflitoDesistencia()
+        }
 
         return new Response(
           JSON.stringify({
@@ -1307,20 +1350,13 @@ export async function processSolicitacaoAdiamento(
     // 13.1 Solicitante ativo e autorizado
     const recheckCaller = await verifyRicciTaskCaller(supabase, user.id)
     if (!recheckCaller.allowed || !recheckCaller.coreUser) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Solicitante perdeu autorização antes do despacho SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'cancelado' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Solicitante perdeu autorização antes do despacho SMTP.',
+        'cancelado',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1344,20 +1380,13 @@ export async function processSolicitacaoAdiamento(
     // 13.2 Administrador elegível + e-mail atualizado
     const recheckAdmin = await getValidatedEligibleAdmin(supabase, destinatarioAdmin.id)
     if (!recheckAdmin.valid || !recheckAdmin.admin) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Administrador perdeu a elegibilidade antes do disparo SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'cancelado' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Administrador perdeu a elegibilidade antes do disparo SMTP.',
+        'cancelado',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1380,20 +1409,13 @@ export async function processSolicitacaoAdiamento(
 
     // Validação de formato do e-mail de destino (apenas um e-mail válido aceito)
     if (!isValidEmail(adminAtualizado.email)) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: `Endereço de e-mail do destinatário inválido: ${adminAtualizado.email}`,
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'falhou' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        `Endereço de e-mail do destinatário inválido: ${adminAtualizado.email}`,
+        'falhou',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1436,20 +1458,13 @@ export async function processSolicitacaoAdiamento(
       .maybeSingle()
 
     if (preSmtpErr) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: `Falha técnica na reconsulta pré-SMTP: ${preSmtpErr.message}`,
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'falhou' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        `Falha técnica na reconsulta pré-SMTP: ${preSmtpErr.message}`,
+        'falhou',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1468,20 +1483,13 @@ export async function processSolicitacaoAdiamento(
     }
 
     if (!preSmtpTarefa) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Caso não encontrado na verificação pré-SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'falhou' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Caso não encontrado na verificação pré-SMTP.',
+        'falhou',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1505,20 +1513,13 @@ export async function processSolicitacaoAdiamento(
 
     if (!preSmtpStatusObj) {
       // Status ausente bloqueia envio
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Status ausente do caso na verificação pré-SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'falhou' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Status ausente do caso na verificação pré-SMTP.',
+        'falhou',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1540,20 +1541,13 @@ export async function processSolicitacaoAdiamento(
 
     if (preSmtpTarefa.deleted_at || preSmtpTarefa.arquivado_at || isPreFinaliza) {
       // Regra 6: preservar os eventos no cancelamento, sem apagá-los
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Envio cancelado: o caso não está mais aberto (excluído, arquivado ou finalizado).',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'cancelado' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Envio cancelado: o caso não está mais aberto (excluído, arquivado ou finalizado).',
+        'cancelado',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1585,20 +1579,13 @@ export async function processSolicitacaoAdiamento(
       preSmtpTarefa,
     )
     if (!preScopeCheck.allowed) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Solicitante perdeu escopo de acesso ao caso antes do disparo SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'cancelado' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Solicitante perdeu escopo de acesso ao caso antes do disparo SMTP.',
+        'cancelado',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1619,20 +1606,13 @@ export async function processSolicitacaoAdiamento(
 
     // 13.5 Revalidar prazo vigente do caso
     if (!preSmtpTarefa.prazo_conclusao) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Caso sem prazo de conclusão definido na revalidação pré-SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'cancelado' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Caso sem prazo de conclusão definido na revalidação pré-SMTP.',
+        'cancelado',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1654,20 +1634,13 @@ export async function processSolicitacaoAdiamento(
 
     const recheckPrazoAtualStr = String(preSmtpTarefa.prazo_conclusao).split('T')[0]
     if (prazoSolicitadoTrimmed <= recheckPrazoAtualStr) {
-      await supabase
-        .from('task_email_eventos')
-        .update({
-          status: 'error',
-          erro: 'Prazo solicitado não é mais posterior ao prazo do caso na revalidação pré-SMTP.',
-        })
-        .eq('id', eventoId)
-        .eq('owner_token', callOwnerToken)
-        .eq('status', 'pending')
-
-      await supabase
-        .from('task_solicitacoes_adiamento')
-        .update({ email_status: 'cancelado' })
-        .eq('id', solicitacaoId)
+      const ok = await encerrarEventoSemEnvio(
+        'Prazo solicitado não é mais posterior ao prazo do caso na revalidação pré-SMTP.',
+        'cancelado',
+      )
+      if (!ok) {
+        return respostaConflitoDesistencia()
+      }
 
       return new Response(
         JSON.stringify({
@@ -1701,20 +1674,13 @@ export async function processSolicitacaoAdiamento(
         recheckProv.tarefa_id !== preSmtpTarefa.id ||
         recheckProv.deleted_at
       ) {
-        await supabase
-          .from('task_email_eventos')
-          .update({
-            status: 'error',
-            erro: 'Providência foi alterada, excluída ou desvinculada antes do despacho SMTP.',
-          })
-          .eq('id', eventoId)
-          .eq('owner_token', callOwnerToken)
-          .eq('status', 'pending')
-
-        await supabase
-          .from('task_solicitacoes_adiamento')
-          .update({ email_status: 'cancelado' })
-          .eq('id', solicitacaoId)
+        const ok = await encerrarEventoSemEnvio(
+          'Providência foi alterada, excluída ou desvinculada antes do despacho SMTP.',
+          'cancelado',
+        )
+        if (!ok) {
+          return respostaConflitoDesistencia()
+        }
 
         return new Response(
           JSON.stringify({
