@@ -165,7 +165,7 @@ export default function Layout({ children }: LayoutProps) {
                 Ricci Task
               </span>
               <span className="text-[10px] text-muted-foreground/70 font-normal leading-tight mt-0.5 truncate">
-                v1.0.1
+                v1.0.2
               </span>
             </div>
           </div>
