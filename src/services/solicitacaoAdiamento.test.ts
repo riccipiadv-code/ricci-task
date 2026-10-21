@@ -481,29 +481,26 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
           }
         }
         if (table === 'core_usuario_sistemas') {
-          return {
-            select: () => ({
-              eq: () => ({
-                in: () => ({
-                  eq: () => ({
-                    then: (resolve: any) =>
-                      resolve({
-                        data: [
-                          {
-                            id: 'cus-op',
-                            ativo: true,
-                            core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                            core_perfis: { codigo: 'OPERACIONAL', ativo: true },
-                          },
-                        ],
-                        error: null,
-                      }),
-                  }),
-                }),
+          const chain: any = {
+            eq: () => chain,
+            in: () => chain,
+            then: (resolve: any) =>
+              resolve({
+                data: [
+                  {
+                    id: 'cus-op',
+                    ativo: true,
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                  },
+                ],
+                error: null,
               }),
-            }),
           }
-        }
+          return {
+            select: () => chain,
+          }
+        }        }
         if (table === 'task_tarefas') {
           return {
             select: () => ({
@@ -662,27 +659,24 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
             }
           }
           if (table === 'core_usuario_sistemas') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  in: () => ({
-                    eq: () => ({
-                      then: (resolve: any) =>
-                        resolve({
-                          data: [
-                            {
-                              id: 'cus-op',
-                              ativo: true,
-                              core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                              core_perfis: { codigo: 'OPERACIONAL', ativo: true },
-                            },
-                          ],
-                          error: null,
-                        }),
-                    }),
-                  }),
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
                 }),
-              }),
+            }
+            return {
+              select: () => chain,
             }
           }
           if (table === 'task_tarefas') {
@@ -1401,44 +1395,41 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
             }
           }
           if (table === 'core_usuario_sistemas') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  in: () => ({
-                    eq: () => ({
-                      maybeSingle: () =>
-                        Promise.resolve({
-                          data: {
-                            id: 'cus-admin-elegivel',
-                            ativo: true,
-                            core_usuarios: {
-                              id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
-                              nome: 'Daniel Adensohn',
-                              email: 'daniel.adensohn@riccipi.com.br',
-                              ativo: true,
-                              adiamento: true,
-                            },
-                            core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                            core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
-                          },
-                          error: null,
-                        }),
-                      then: (resolve: any) =>
-                        resolve({
-                          data: [
-                            {
-                              id: 'cus-op',
-                              ativo: true,
-                              core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                              core_perfis: { codigo: 'OPERACIONAL', ativo: true },
-                            },
-                          ],
-                          error: null,
-                        }),
-                    }),
-                  }),
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
                 }),
-              }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
             }
           }
           if (table === 'task_tarefas') {
@@ -1837,44 +1828,41 @@ describe('Backend de Solicitação de Adiamento (Edge Function & Módulo Core)',
             }
           }
           if (table === 'core_usuario_sistemas') {
-            return {
-              select: () => ({
-                eq: () => ({
-                  in: () => ({
-                    eq: () => ({
-                      maybeSingle: () =>
-                        Promise.resolve({
-                          data: {
-                            id: 'cus-admin-elegivel',
-                            ativo: true,
-                            core_usuarios: {
-                              id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
-                              nome: 'Daniel Adensohn',
-                              email: 'daniel.adensohn@riccipi.com.br',
-                              ativo: true,
-                              adiamento: true,
-                            },
-                            core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                            core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
-                          },
-                          error: null,
-                        }),
-                      then: (resolve: any) =>
-                        resolve({
-                          data: [
-                            {
-                              id: 'cus-op',
-                              ativo: true,
-                              core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
-                              core_perfis: { codigo: 'OPERACIONAL', ativo: true },
-                            },
-                          ],
-                          error: null,
-                        }),
-                    }),
-                  }),
+            const chain: any = {
+              eq: () => chain,
+              in: () => chain,
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'cus-admin-elegivel',
+                    ativo: true,
+                    core_usuarios: {
+                      id: '402b0f6f-3aff-4548-b4f7-3d96d35a134f',
+                      nome: 'Daniel Adensohn',
+                      email: 'daniel.adensohn@riccipi.com.br',
+                      ativo: true,
+                      adiamento: true,
+                    },
+                    core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                    core_perfis: { codigo: 'ADMINISTRADOR', ativo: true },
+                  },
+                  error: null,
                 }),
-              }),
+              then: (resolve: any) =>
+                resolve({
+                  data: [
+                    {
+                      id: 'cus-op',
+                      ativo: true,
+                      core_sistemas: { codigo: 'RICCI_TASK', ativo: true },
+                      core_perfis: { codigo: 'OPERACIONAL', ativo: true },
+                    },
+                  ],
+                  error: null,
+                }),
+            }
+            return {
+              select: () => chain,
             }
           }
           if (table === 'task_tarefas') {
