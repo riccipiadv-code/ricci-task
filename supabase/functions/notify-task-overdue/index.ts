@@ -8,6 +8,8 @@ import {
   escapeHtml,
 } from '../_shared/core-auth.ts'
 
+// Dono desta função: Ricci Task.
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
