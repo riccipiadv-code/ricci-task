@@ -827,8 +827,12 @@ Deno.serve(async (req: Request) => {
       if (identificacaoCasoStr) bodyLines.push(`Identificação do Caso: ${identificacaoCasoStr}`)
       if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
       bodyLines.push('')
+      const statusProvidenciaNome =
+        (prov.status as { nome?: string | null } | null)?.nome?.trim() || ''
+
       if (provDescricao) bodyLines.push(`Providência: ${provDescricao}`)
       if (prazoFormatado) bodyLines.push(`Prazo Vencido: ${prazoFormatado}`)
+      if (statusProvidenciaNome) bodyLines.push(`Status da Providência: ${statusProvidenciaNome}`)
       bodyLines.push('')
       bodyLines.push('Acesse o Ricci Task para consultar e atualizar a providência.')
       bodyLines.push('https://ricci-task.goskip.app/')
