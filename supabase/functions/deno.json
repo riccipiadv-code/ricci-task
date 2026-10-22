@@ -12,6 +12,7 @@
     "notify-task-assignment": 101,
     "notify-task-overdue": 104,
     "manage-core-user": 73,
-    "solicitacao-adiamento": 14
+    "solicitacao-adiamento": 14,
+    "zz-teste-remocao": 1
   }
 }
