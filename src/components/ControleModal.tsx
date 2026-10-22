@@ -204,34 +204,74 @@ export function ControleModal({
     })
   }, [])
 
+  // Ref para controlar promise em curso do carregamento de administradores
+  const loadingAdminsPromiseRef = useRef<Promise<
+    Array<{ id: string; nome: string; email: string }>
+  > | null>(null)
+  // Ref para indicar se os administradores foram carregados com sucesso nesta abertura do modal
+  const adminsLoadedSuccessfullyRef = useRef<boolean>(false)
+
   // Carrega administradores elegíveis para o modal de solicitação
-  // Requisito 5: mantém o administrador selecionado se continuar elegível.
-  // Caso contrário, seleciona o primeiro da lista, ou nenhum se vazia.
-  const carregarAdministradoresAdiamento = useCallback(async () => {
+  // Requisito: se já carregado com SUCESSO nesta abertura, reaproveita sem chamar o servidor.
+  // Se estiver em andamento, aguarda a mesma promise.
+  // Se falhou ou force=true, tenta novamente.
+  // Mantém a regra de seleção: selecionado preservado se continuar na lista, senão primeiro da lista (ou vazio).
+  const carregarAdministradoresAdiamento = useCallback(async (options?: { force?: boolean }) => {
+    // Se já carregou com sucesso e não foi solicitado force, reaproveita
+    if (adminsLoadedSuccessfullyRef.current && !options?.force) {
+      return
+    }
+
+    // Se já há um carregamento em andamento, apenas aguarda sua conclusão
+    if (loadingAdminsPromiseRef.current) {
+      try {
+        await loadingAdminsPromiseRef.current
+      } catch {
+        // Erro já tratado no ciclo original
+      }
+      return
+    }
+
     setLoadingAdminsElegiveis(true)
-    try {
-      const res = await controleService.listarAdministradoresAdiamento()
-      if (res.success && res.administradores) {
-        const admins = res.administradores
-        setAdministradoresElegiveis(admins)
-        setAdminSelecionadoId((prevId) => {
-          if (prevId && admins.some((a) => a.id === prevId)) {
-            return prevId
-          }
-          return admins.length > 0 ? admins[0].id : ''
-        })
-      } else {
+    const promise = (async () => {
+      try {
+        const res = await controleService.listarAdministradoresAdiamento()
+        if (res.success && res.administradores) {
+          const admins = res.administradores
+          setAdministradoresElegiveis(admins)
+          adminsLoadedSuccessfullyRef.current = true
+          setAdminSelecionadoId((prevId) => {
+            if (prevId && admins.some((a) => a.id === prevId)) {
+              return prevId
+            }
+            return admins.length > 0 ? admins[0].id : ''
+          })
+          return admins
+        } else {
+          adminsLoadedSuccessfullyRef.current = false
+          setAdministradoresElegiveis([])
+          setAdminSelecionadoId('')
+          setErroAdiamento(res.error || 'Não foi possível carregar os administradores elegíveis.')
+          throw new Error(res.error || 'Não foi possível carregar os administradores elegíveis.')
+        }
+      } catch (err: any) {
+        adminsLoadedSuccessfullyRef.current = false
+        console.error('Erro ao listar administradores para adiamento:', err)
         setAdministradoresElegiveis([])
         setAdminSelecionadoId('')
-        setErroAdiamento(res.error || 'Não foi possível carregar os administradores elegíveis.')
+        setErroAdiamento(err?.message || 'Falha ao carregar administradores elegíveis.')
+        throw err
+      } finally {
+        setLoadingAdminsElegiveis(false)
+        loadingAdminsPromiseRef.current = null
       }
-    } catch (err: any) {
-      console.error('Erro ao listar administradores para adiamento:', err)
-      setAdministradoresElegiveis([])
-      setAdminSelecionadoId('')
-      setErroAdiamento(err?.message || 'Falha ao carregar administradores elegíveis.')
-    } finally {
-      setLoadingAdminsElegiveis(false)
+    })()
+
+    loadingAdminsPromiseRef.current = promise
+    try {
+      await promise
+    } catch {
+      // Ignora erro aqui; estados já foram atualizados no corpo da promise
     }
   }, [])
 
@@ -241,7 +281,7 @@ export function ControleModal({
     setConfirmarAdiamentoDialogOpen(false)
   }, [])
 
-  const handleEscolhaSimAdiamento = useCallback(() => {
+  const handleEscolhaSimAdiamento = useCallback(async () => {
     // "Sim": abre a janela de solicitação, sem gravar o caso ou a providência.
     setConfirmarAdiamentoDialogOpen(false)
 
@@ -276,7 +316,10 @@ export function ControleModal({
     }
 
     setModalAdiamentoOpen(true)
-    carregarAdministradoresAdiamento()
+    // Item 2: se a lista já tiver sido carregada com SUCESSO nesta abertura do modal,
+    // reaproveite-a sem chamar o servidor de novo. Se ainda estiver carregando, apenas aguarde.
+    // Se tiver falhado, tente novamente.
+    await carregarAdministradoresAdiamento()
   }, [
     controleToEdit,
     providenciaParaAdiamento,
@@ -716,8 +759,16 @@ export function ControleModal({
     // Ao fechar, abrir ou trocar de caso/identidade: invalida qualquer autorização anterior
     setAuthorizedContext(null)
 
+    // Item 3: Ao fechar o modal do caso, descarte a lista guardada (e o estado de carregamento/erro dela),
+    // para que a próxima abertura do caso busque dados atualizados do servidor.
     if (!open) {
       setVerificandoAcesso(false)
+      adminsLoadedSuccessfullyRef.current = false
+      loadingAdminsPromiseRef.current = null
+      setAdministradoresElegiveis([])
+      setLoadingAdminsElegiveis(false)
+      setAdminSelecionadoId('')
+      setErroAdiamento(null)
       return () => {
         accessRequestIdRef.current++
       }
@@ -1309,6 +1360,9 @@ export function ControleModal({
           providenciaItem: provComPrazoMaior,
           prazoPretendido: prazoExcedente,
         })
+        // Item 1: Comece a carregar a lista de administradores assim que a pergunta "Deseja solicitar adiamento?" abrir,
+        // no mesmo ponto onde está setConfirmarAdiamentoDialogOpen(true) — enquanto o usuário decide entre Sim e Não.
+        carregarAdministradoresAdiamento()
         setConfirmarAdiamentoDialogOpen(true)
         return
       }
