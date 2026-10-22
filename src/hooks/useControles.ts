@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   TaskControleRecord,
   TaskStatusRecord,
@@ -29,6 +29,9 @@ export function useControles() {
   const [tiposPrazoList, setTiposPrazoList] = useState<TaskTipoPrazoRecord[]>([])
   const [nomesControle, setNomesControle] = useState<TaskNomeControleRecord[]>([])
   const [usuariosAtivos, setUsuariosAtivos] = useState<TaskUsuarioAtivoRecord[]>([])
+
+  const controlesRef = useRef<TaskControleRecord[]>([])
+  controlesRef.current = controles
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -72,7 +75,9 @@ export function useControles() {
       return
     }
 
-    setLoading(true)
+    if (controlesRef.current.length === 0) {
+      setLoading(true)
+    }
     setError(null)
     try {
       // 1. Busca usuários e tabelas auxiliares de forma independente e tolerante a falhas
@@ -152,18 +157,20 @@ export function useControles() {
   }, [usuariosAtivos, hasSystemAccess, corePerfil, coreUserId])
 
   // Monitora autenticação e autorização
+  const userId = user?.id
+
   useEffect(() => {
-    if (!user || (!loadingAccess && !hasSystemAccess)) {
+    if (!userId || (!loadingAccess && !hasSystemAccess)) {
       resetState()
       setLoading(false)
       return
     }
 
-    if (user && hasSystemAccess && corePerfil && coreUserId) {
+    if (userId && hasSystemAccess && corePerfil && coreUserId) {
       carregarDadosCompletos()
     }
   }, [
-    user,
+    userId,
     hasSystemAccess,
     corePerfil,
     coreUserId,
