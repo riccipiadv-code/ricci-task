@@ -2755,7 +2755,7 @@ export function ControleModal({
                   verificandoAcesso ||
                   saving ||
                   loadingListas ||
-                  validacaoUsuariosStatus !== 'válida'
+                  (!controleToEdit && validacaoUsuariosStatus !== 'válida')
                 }
                 onClick={() => handleSubmitControle()}
                 className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary text-primary-foreground shadow-sm hover:bg-[#4A4AC2]"
