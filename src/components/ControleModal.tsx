@@ -831,10 +831,10 @@ export function ControleModal({
             status_id: statusProvPadraoIdRef.current,
             ordem: maiorOrdem + 1,
             data_conclusao: null,
-            email_alertas: false,
-            email_alerta_inclusao: false,
-            email_alerta_atraso: false,
-            email_alerta_atualizacao: false,
+            email_alertas: true,
+            email_alerta_inclusao: true,
+            email_alerta_atraso: true,
+            email_alerta_atualizacao: true,
             isPersisted: false,
           })
           setFocusNewProvId(autoTempId)
@@ -979,10 +979,10 @@ export function ControleModal({
       status_id: statusProvPadraoId,
       ordem: proximaOrdem,
       data_conclusao: null,
-      email_alertas: false,
-      email_alerta_inclusao: false,
-      email_alerta_atraso: false,
-      email_alerta_atualizacao: false,
+      email_alertas: true,
+      email_alerta_inclusao: true,
+      email_alerta_atraso: true,
+      email_alerta_atualizacao: true,
       isPersisted: false,
     }
 

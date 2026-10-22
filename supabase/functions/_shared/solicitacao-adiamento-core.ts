@@ -1340,6 +1340,9 @@ export async function processSolicitacaoAdiamento(
           user: setting.smtp_user,
           pass: secret,
         },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 20000,
       }
 
       if (setting.smtp_host === 'smtp.office365.com') {
@@ -1347,6 +1350,9 @@ export async function processSolicitacaoAdiamento(
         transporterOptions.secure = false
         transporterOptions.requireTLS = true
         transporterOptions.tls = { ciphers: 'SSLv3' }
+        transporterOptions.connectionTimeout = 10000
+        transporterOptions.greetingTimeout = 10000
+        transporterOptions.socketTimeout = 20000
       }
 
       const transporter = nodemailer.createTransport(transporterOptions)
