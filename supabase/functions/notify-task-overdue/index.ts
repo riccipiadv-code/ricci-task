@@ -601,7 +601,7 @@ Deno.serve(async (req: Request) => {
         continue
       }
 
-      const toEmail = validatedExec.email.trim().toLowerCase()
+      const execEmailRaw = validatedExec.email.trim().toLowerCase()
 
       // Obter dados do Responsável validados centralmente
       // Autoridade central: usa exclusivamente o responsavel_core_usuario_id gravado na tarefa.
@@ -623,7 +623,7 @@ Deno.serve(async (req: Request) => {
             providencia_id: prov.id,
             tipo_evento: 'providencia_atraso',
             event_key: eventKey,
-            to_email: toEmail,
+            to_email: execEmailRaw,
             cc_email: null,
             status: 'error',
             erro: 'falha_consulta_central',
@@ -653,9 +653,30 @@ Deno.serve(async (req: Request) => {
 
       const validatedResp = respResolution.recipient
       const respEmailRaw = validatedResp?.email?.trim().toLowerCase() || ''
+
+      // Regra especial: quando a providência está "Aguardando aprovação",
+      // o executor já fez a parte dele e quem precisa agir é o responsável.
+      // Se validatedResp tiver e-mail válido, invertem-se os destinatários:
+      // to = e-mail do responsável e cc = e-mail do executor (sem cc se forem iguais).
+      // Se não tiver e-mail válido, mantém modelo e destinatários normais (to = executor).
+      const provStatusCode = (prov.status as { codigo?: string | null } | null)?.codigo
+      const isAguardandoAprovacao = provStatusCode === 'aguardando_aprovacao'
+      const hasValidRespEmail = isValidEmail(respEmailRaw)
+      const useAguardandoAprovacaoModel = isAguardandoAprovacao && hasValidRespEmail
+
+      let toEmail: string
       let ccEmail: string | null = null
-      if (isValidEmail(respEmailRaw) && respEmailRaw !== toEmail) {
-        ccEmail = respEmailRaw
+
+      if (useAguardandoAprovacaoModel) {
+        toEmail = respEmailRaw
+        if (execEmailRaw !== toEmail) {
+          ccEmail = execEmailRaw
+        }
+      } else {
+        toEmail = execEmailRaw
+        if (hasValidRespEmail && respEmailRaw !== toEmail) {
+          ccEmail = respEmailRaw
+        }
       }
 
       // PONTOS 5 E 6: Aquisição atômica com token de posse (owner_token)
@@ -808,6 +829,7 @@ Deno.serve(async (req: Request) => {
       const execNomeFull = (validatedExec.nome || '').trim()
       const execFirstName = execNomeFull ? execNomeFull.split(/\s+/)[0] : 'Executor'
       const respNomeFull = (validatedResp?.nome || '').trim()
+      const respFirstName = respNomeFull ? respNomeFull.split(/\s+/)[0] : 'Responsável'
       const numeroCasoStr = tarefa.numero_caso != null ? String(tarefa.numero_caso) : ''
       const identificacaoCasoStr = (tarefa.identificacao_caso || '').trim()
       const provDescricao = (prov.providencia || '').trim()
@@ -816,16 +838,27 @@ Deno.serve(async (req: Request) => {
       const subject = `Providência atrasada Ricci Task [Caso ${numeroCasoStr}]`
 
       const bodyLines: string[] = []
-      bodyLines.push(`Olá, ${execFirstName}.`)
-      bodyLines.push('')
-      bodyLines.push(
-        'Constatamos que uma providência sob sua execução está com o prazo vencido no Ricci Task.',
-      )
-      bodyLines.push('')
-      if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
-      if (numeroCasoStr) bodyLines.push(`Caso nº: ${numeroCasoStr}`)
-      if (identificacaoCasoStr) bodyLines.push(`Identificação do Caso: ${identificacaoCasoStr}`)
-      if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+      if (useAguardandoAprovacaoModel) {
+        bodyLines.push(`Olá, ${respFirstName},`)
+        bodyLines.push('')
+        bodyLines.push('Constatamos que uma providência está com o prazo vencido no Ricci Task.')
+        bodyLines.push('')
+        if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+        if (numeroCasoStr) bodyLines.push(`Caso nº: ${numeroCasoStr}`)
+        if (identificacaoCasoStr) bodyLines.push(`Identificação do Caso: ${identificacaoCasoStr}`)
+        if (execNomeFull) bodyLines.push(`Executor: ${execNomeFull}`)
+      } else {
+        bodyLines.push(`Olá, ${execFirstName}.`)
+        bodyLines.push('')
+        bodyLines.push(
+          'Constatamos que uma providência sob sua execução está com o prazo vencido no Ricci Task.',
+        )
+        bodyLines.push('')
+        if (nomeControle) bodyLines.push(`Controle: ${nomeControle}`)
+        if (numeroCasoStr) bodyLines.push(`Caso nº: ${numeroCasoStr}`)
+        if (identificacaoCasoStr) bodyLines.push(`Identificação do Caso: ${identificacaoCasoStr}`)
+        if (respNomeFull) bodyLines.push(`Responsável: ${respNomeFull}`)
+      }
       bodyLines.push('')
       const statusProvidenciaNome =
         (prov.status as { nome?: string | null } | null)?.nome?.trim() || ''
